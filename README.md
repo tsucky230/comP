@@ -2,75 +2,100 @@
   <img src="resources/comp-icon.png" width="128" height="128" alt="comP Logo">
 </p>
 
-# comP — Your AI Assistant's Memory System
+# comP — The Memory System for Your AI Coding Assistant
 
-**Open-source, local-first code indexing engine for AI coding assistants. Works with Claude Code, Cursor, Cline, Antigravity, and more.**
+**Open-source, 100% local code analysis engine. Works with Claude Code, Cursor, Cline, and Antigravity.**
 
 🌐 **[Official Website](https://tsucky230.github.io/comP/)**
 
 ---
 
-## The Problem AI Assistants Face
+## Why comP Exists
 
-Claude Code, Cursor, and other AI coding assistants are powerful, but they have **one critical limitation**:
+Claude Code, Cursor, and other AI coding assistants share **one critical limitation**:
 
-**Your AI reads the entire codebase every time you ask a question.**
+**Every time you ask a question, the AI re-reads your entire project.**
 
-```
-Traditional workflow:
-  Question → AI reads entire project → answers (5,000 tokens)
-  Question → AI reads entire project again → answers (5,000 tokens)
+1. You ask "how does this function behave?"
+2. The AI reads **the whole project** to understand context
+3. DB connections, config, type definitions, dependencies—everything—before it can answer
 
-Cost: $0.10 per question. Context forgotten between sessions.
-```
+This "read everything, every time" pattern causes three problems:
+
+| Problem | Impact |
+| --- | --- |
+| **Massive token spend** | $0.10 per question. 10 questions = $1 |
+| **Slow responses** | 5,000 tokens read before answering. 15s first response |
+| **Context lost between sessions** | Past decisions vanish; you re-explain the same thing tomorrow |
+
+And there's a **fourth problem** that's easy to overlook:
+
+| Problem | Impact |
+| --- | --- |
+| **Getting lost while exploring → failed retries** | The AI greps around, reads the wrong file, implements on a wrong assumption, then redoes it. **One failed loop like this burns thousands to tens of thousands of tokens** |
 
 ---
 
 ## How comP Solves It
 
-**comP creates a "project map + index"** so your AI understands "this file does X, that directory handles Y" **instantly—without reading every file.**
+comP automatically builds a **"project map + index"** so the AI can grasp "this file does X" **instantly, without searching around.**
 
 ```
 With comP:
-  Question → comP extracts relevant files (300 tokens) → AI answers fast
-  Question → comP finds related code → AI answers instantly
-
-Cost: $0.006 per question (94% reduction). Session history auto-restored.
+  Question → comP extracts only the relevant files → AI answers via the shortest path
+  Next day → session_recall restores yesterday's decisions → no re-explaining
 ```
 
 ---
 
-## What Actually Changes
+## How Much Does It Actually Help? An Honest Estimate
 
-| Metric | Before | After |
+comP's impact **depends heavily on your use case**. Here's an honest breakdown:
+
+| Use case | Estimated input token reduction | Why |
 | --- | --- | --- |
-| **Input tokens per question** | 5,000 | 300 |
-| **Cost per question** | $0.10 | $0.006 |
-| **Time to first response** | 15 seconds | 3 seconds |
-| **Session memory** | Lost when IDE closes | Auto-preserved & searchable |
-| **Data sent to cloud** | All files | None (100% local) |
+| **Investigating/fixing code in medium-to-large repos** | **60–94%** | "Read everything or grep blindly" is replaced by "pull only the relevant spots from the index." The 94% figure up top comes from this category |
+| **Impact analysis ("what breaks if I change this function?")** | **Large** | `get_impact_graph` mechanically enumerates downstream effects from the dependency graph. No more AI guesswork exploration |
+| **Cross-session continued development** | **Large** | Re-explaining and re-investigating context collapses into one `session_recall` call |
+| **Small repos (a few dozen files)** | ~20–40% | Reading everything was already cheap, so there's less room to save |
+| **Non-code work (writing, planning, etc.)** | Near zero | Nothing to index |
+
+### The Biggest Effect the Numbers Don't Show: Fewer Failed Retries
+
+Looking only at the token-reduction percentage understates the real impact. Here's the actual cost structure:
+
+```
+Traditional failure pattern (especially common with cheaper models):
+  explore → read the wrong file → implement on a wrong assumption → test fails
+  → re-explore → re-implement → ... (thousands of tokens per loop × N)
+
+With comP:
+  run_pipeline surfaces the right related code up front
+  → less room for wrong assumptions → retries become rare in the first place
+```
+
+In other words, comP doesn't just reduce "tokens per call"—it reduces **the number of calls itself**. Cheaper models get lost while exploring more easily, so **the cheaper the model, the bigger comP's benefit**. Tasks that used to require a top-tier model now fall within reach of a cheap one—that's arguably comP's biggest real-world effect.
 
 ---
 
 ## Installation & Setup (3 Steps)
 
-### 1. Install from VS Code Marketplace
+### 1. Install in VS Code
 
 1. Open VS Code
-2. Go to **Extensions** (`Ctrl+Shift+X`)
-3. Search for **"comP - Code Context Engine"**
-4. Click **Install**
+2. Go to **Extensions** (`Ctrl+Shift+X`) and search for **"comP - Code Context Engine"**
+3. Click **Install**
 
-### 2. Open Your Project
+### 2. Open Your Folder
 
-Open any folder in VS Code (Git repository recommended).
+Open the project you're working on in VS Code (a Git repository works best).
 
 ### 3. Start comP
 
 - Click the **comP icon** in the Activity Bar (left sidebar)
-- Click **"▶ Start"** button
+- Click **"▶ Start"**
 - Indexing begins in the background
-- Watch the status bar at the bottom for progress
+- Watch the **status bar** (bottom of VS Code) for progress
 
 ```text
 ◈ comP: 12,534 symbols | ✓ Ready
@@ -80,23 +105,18 @@ Open any folder in VS Code (Git repository recommended).
 
 ## Connect Your AI Agent (One-Time Setup)
 
-After installing comP, run this command to connect your AI assistant:
-
 ```text
 Ctrl+Shift+P → "comP: Setup Agents"
 ```
 
-Select your agent (Claude Code, Cursor, Cline, etc.), and comP generates the connection instructions.
-
 | Agent | What to Do |
 | --- | --- |
-| **Claude Code** | Copy-paste the generated `claude mcp add` command in terminal |
-| **GitHub Copilot** | Auto-configured (no manual steps) |
-| **Cursor** | Copy generated config to `~/.cursor/mcp.json` |
+| **Claude Code** | Copy the generated `claude mcp add` command and run it in your terminal |
+| **GitHub Copilot** | Auto-written to `.vscode/mcp.json` |
+| **Cursor** | Copy the generated config into `~/.cursor/mcp.json` |
 | **Cline** | Paste into Cline's MCP settings |
-| **Antigravity** | Auto-configured |
-| **Aider** | Auto-configured in `.aider.conf.yml` |
-| **Windsurf** | Copy to `~/.codeium/windsurf/mcp_config.json` |
+| **Antigravity / Aider** | Auto-configured |
+| **Windsurf** | Copy into `~/.codeium/windsurf/mcp_config.json` |
 | **Continue.dev** | Add to `~/.continue/config.py` |
 
 Details: [docs/user/MCP_SETUP.md](docs/user/MCP_SETUP.md)
@@ -105,55 +125,122 @@ Details: [docs/user/MCP_SETUP.md](docs/user/MCP_SETUP.md)
 
 ## How to Use It
 
-### With Claude Code (Simplest)
+### Claude Code (Simplest)
 
 ```markdown
-# In Claude Code chat:
 @comP run_pipeline
-Analyze what happens if I change the authenticate() function
+Analyze every function affected if I change the authenticate() function
 ```
 
-comP finds all related files and Claude answers with minimal context.
-
-### With VS Code Native Chat
+### VS Code Native Chat (@comp)
 
 ```markdown
-@comp #file:src/main.rs
-Explain what this function does
+@comp #file:src/main.rs Explain what this function does
 ```
 
-The file is automatically compressed before being sent to the LLM.
+Attached files are automatically compressed (comments stripped, skeletonized) before being sent to the LLM.
 
-### Available Commands
+---
 
-Press `Ctrl+Shift+P`:
+## A Prompt Kit for Growing CLAUDE.md into a "comP-first" Constitution
 
-| Command | What It Does |
-| --- | --- |
-| **comP: Setup Agents** | Configure Claude Code, Cursor, etc. |
-| **comP: Force Re-index** | Scan entire project again (after adding files) |
-| **comP: Show Impact Graph** | See what code breaks if you change a symbol |
-| **comP: Copy Active File Compressed** | Copy current file in compressed form to clipboard |
-| **comP: Export Debug Log** | Save session history for debugging |
+Installing comP isn't enough—**if you don't update the AI's own behavioral rules, you leave half the benefit on the table.** When instructions are ambiguous, the AI defaults to "it's easier to just read the file directly." Feed the prompts below to Claude and it will rewrite your CLAUDE.md (or `.github/copilot-instructions.md` for Copilot) to be comP-first.
 
-### Status Bar (Bottom of VS Code)
+### Prompt 1: Initial rollout (add comP rules)
 
-```text
-◈ comP: 12,534 nodes | ✓ Ready | 60% saved
+```markdown
+Update CLAUDE.md. Add the following as MUST/NEVER rules:
+
+MUST:
+- For code investigation/search, call comP's run_pipeline first instead of grep/find/Bash
+- Before changing existing code, check downstream impact with get_impact_graph
+- At the start of a session, restore relevant past decisions with session_recall
+
+NEVER:
+- Reading the entire codebase without going through comP
+- Implementing based on guesses about files not present in run_pipeline's results
+
+Add a one-line reason for each rule, and flag any conflicts with existing rules.
 ```
 
-Click it to see:
+### Prompt 2: When direct file-reading creeps back in (learning from violations)
 
-- Files indexed
-- Total symbols found
-- Tokens saved this session
-- Last agent connection time
+```markdown
+In the current task, you read src/ directly instead of using run_pipeline.
+State in one line why that happened, and propose a one-line addition
+to CLAUDE.md's NEVER section to prevent it from happening again.
+```
+
+> 💡 Think of CLAUDE.md as something that "grows one line per failure." Loop through violation → root cause → new rule, and direct-reading tends to disappear within a few cycles.
+
+### Prompt 3: comP-optimizing your entire workflow
+
+```markdown
+My dev workflow has three stages: design → implementation → review.
+For each stage, write a draft to add to CLAUDE.md titled "Stage-by-stage comP usage"
+describing which comP tool (run_pipeline / get_context / get_impact_graph / session_recall)
+should be used and how. Prioritize minimizing token usage above all else.
+```
+
+### Prompt 4: Making session handoff a habit
+
+```markdown
+Add the following to CLAUDE.md:
+"Before ending a session, summarize this session's decisions and open issues
+in 3 lines or fewer. Since the next session will search for this via
+session_recall, always include proper nouns (function names, file names)
+that are likely search keywords."
+```
+
+---
+
+## Session Memory: How It Differs from Claude's Built-in Memory
+
+"Claude already has a memory feature—do I still need comP's session memory?" The answer: **they operate at different layers, so you need both.**
+
+| | Claude's Built-in Memory | comP session_recall |
+| --- | --- | --- |
+| **Granularity** | Conversation summaries, people, preferences | Index of code, symbols, and technical decisions |
+| **Storage** | Cloud (Anthropic-side) | **100% local** (`.comp/`) |
+| **Good at** | "You prefer QA-focused, diff-only output" | "We set the JWT expiry to 30 minutes last week, because of the refresh-token spec" |
+| **Weak at** | Code details (lost during summarization) | The user's personality, non-code context |
+| **Scope** | Across all conversations | All sessions within the same project |
+
+### Where It Really Shines (Real Examples)
+
+**Case 1: "Wait, why did we do it this way?" a week later**
+```
+@comP session_recall
+Check why we limited retries to 3 last week
+```
+Claude's built-in memory keeps a summary, so "we discussed retry limits" might survive, but the technical rationale ("why 3") tends to get lost. comP's BM25 index pulls up that exact conversation.
+
+**Case 2: Handoff to a cheaper model**
+When design work happens on a top-tier model and implementation on a cheap one, the cheap model tends to get lost in long context explanations. `session_recall` injects **only the decisions that matter**, drastically cutting handoff cost.
+
+**Case 3: Environments where cloud memory is disabled for confidentiality**
+Even when corporate policy disables cloud-side memory, comP is 100% local, so you can **keep session memory while staying compliant.**
+
+### The Rule of Thumb (worth one line in your CLAUDE.md)
+
+```markdown
+comP (in-repo) is the source of truth for technical decisions;
+Claude's memory is the source of truth for personal/preference context.
+```
+
+Recording the same decision in both risks drift when only one gets updated—**fixing the division of responsibility** is the key.
+
+### How It Works
+
+1. **Auto-logging**: Every conversation is BM25-indexed when the chat ends
+2. **Persistence**: Saved to `~/.claude/projects/comP/memory/session/`
+3. **Retrieval**: Keyword search instantly restores relevant past conversations
 
 ---
 
 ## Excluding Files & Folders
 
-Create `.comp/ignore` in your project root (like `.gitignore`):
+Create `.comp/ignore` in your project root (same syntax as `.gitignore`):
 
 ```gitignore
 node_modules/
@@ -165,83 +252,69 @@ __pycache__/
 *.min.js
 ```
 
-These are auto-excluded:
+Auto-excluded: hidden directories starting with `.`, anything matching `.gitignore`, `node_modules`, `venv`, `__pycache__`, `coverage`, `vendor`, `out`
 
-- `.venv`, `.pytest_cache` (hidden directories)
-- Anything in `.gitignore`
-- `node_modules`, `venv`, `__pycache__`, `coverage`, `vendor`, `out`
+You can also exclude paths from VS Code settings:
+
+```json
+{ "comp.exclude": ["env", "data", "logs"] }
+```
 
 ---
 
-## Fine-Tuning Compression & Budget
+## Controlling Token Budget & Compression Level
 
-Create `.comp/config.json` for large projects:
+Customize via `.comp/config.json`:
 
 ```json
 {
   "max_nodes": 100000,
   "on_limit_exceeded": "warn",
   "default_budget_tokens": 8000,
-  "compression_rules": {
-    "*.md": 0,
-    "*.rs": 2,
-    "*.ts": 1
-  }
+  "compression_rules": { "*.md": 0, "*.rs": 2, "*.ts": 1 }
 }
 ```
 
-| Setting | Meaning |
+| Option | Description |
 | --- | --- |
-| `max_nodes` | Upper limit for symbols (default: 200,000) |
-| `on_limit_exceeded` | `"warn"` = notify but continue / `"stop"` = halt |
-| `default_budget_tokens` | Token budget—auto-picks compression level |
-| `compression_rules` | Override compression per file type (0=full, 1=compact, 2=skeleton) |
+| `max_nodes` | Upper limit on indexed node count |
+| `on_limit_exceeded` | `"warn"` = notify and continue / `"stop"` = halt |
+| `default_budget_tokens` | Token budget for `run_pipeline` (auto-selects compression level) |
+| `compression_rules` | Compression level per file extension (0=full / 1=compact / 2=skeleton) |
 
-> **Database size**: ~1–5 MB (1k files), 20–80 MB (10k files), 200 MB–1 GB (100k+ files). Only metadata stored—no raw code.
+> **DB size guide**: small repo (~1k files) 1–5 MB, medium (~10k) 20–80 MB, large (100k+) 200 MB–1 GB. Metadata only.
 
 ---
 
-## How It Works (Technical Overview)
+## How It Works (Technical Details)
 
-### Architecture
+1. **Indexer (Rust daemon)**: Parses 30+ languages with tree-sitter, stores results in SQLite
+2. **Search engine**: BM25 full-text search + graph traversal + semantic scoring
+3. **MCP server**: Exposes `run_pipeline`, `get_context`, `get_impact_graph`, `session_recall`
+4. **VS Code extension**: Manages the daemon, UI, and commands
 
-1. **Indexer (Rust daemon)**: Scans your workspace, parses code with tree-sitter, stores in SQLite
-2. **Search Engine**: BM25 full-text search + graph traversal + semantic scoring
-3. **MCP Server**: Exposes `run_pipeline`, `get_context`, `get_impact_graph` tools
-4. **VS Code Extension**: Manages daemon, UI, commands
-
-### Data Flow
-
-```
+```text
 Code files (30+ languages)
-       ↓
-   [Tree-sitter parsing]
-       ↓
-SQLite graph database (.comp/index.db)
-       ↓
-   [Search engine: BM25 + graph traversal]
-       ↓
-  [MCP server: run_pipeline, get_context]
-       ↓
+   ↓ [tree-sitter parsing]
+SQLite graph DB (.comp/index.db)
+   ↓ [BM25 + graph traversal]
+MCP server
+   ↓
 AI agent (Claude Code, Cursor, Cline, etc.)
-       ↓
-  [Compression: remove unnecessary content]
-       ↓
+   ↓ [context compression]
 LLM API (fewer tokens = lower cost)
 ```
 
-### Supported Languages (30+)
-
-C, C++, C#, Go, Java, JavaScript, TypeScript, Python, Rust, Ruby, Bash, Kotlin, Swift, PHP, Dart, Elixir, Haskell, Lua, R, Zig, SQL, HTML, CSS, YAML, Scala, and more.
+**Supported languages (30+)**: C, C++, C#, Go, Java, JavaScript, TypeScript, Python, Rust, Ruby, Bash, Kotlin, Swift, PHP, Dart, Elixir, Haskell, Lua, R, Zig, SQL, HTML, CSS, YAML, Scala, and more.
 
 ---
 
 ## Security & Privacy
 
-- **🔐 100% Local**: Code and chat history stay on your machine—never sent to the cloud
-- **🛡️ Auto-Excluded**: `.comp/` folder auto-added to `.gitignore`
-- **📋 Auditable**: Everything runs locally—no external APIs, no telemetry
-- **🏢 Enterprise-Safe**: Secure for proprietary code, compliant environments, sensitive data
+- **🔐 100% local execution**: code and session history are never sent to the cloud
+- **🛡️ Auto-excluded**: `.comp/` is automatically added to `.gitignore`
+- **📋 Auditable**: no external APIs, no telemetry
+- **🏢 Enterprise-ready**: fully isolated on-prem operation, safe for confidential code
 
 ---
 
@@ -249,94 +322,36 @@ C, C++, C#, Go, Java, JavaScript, TypeScript, Python, Rust, Ruby, Bash, Kotlin, 
 
 ### "comP isn't indexing"
 
-1. Check the status bar (bottom of VS Code) for progress
+1. Check progress in the status bar
 2. If stuck: `Ctrl+Shift+P` → **"comP: Force Re-index"**
-3. Verify `.comp/` folder exists and is in `.gitignore`
+3. Verify `.comp/` exists and is listed in `.gitignore`
 
 ### "MCP connection failed"
 
-1. Re-run `Ctrl+Shift+P` → **"comP: Setup Agents"**
-2. Check that the config file was created
-3. View logs in VS Code **Output** panel (View → Output → "comP")
+1. Re-run **"comP: Setup Agents"**
+2. Verify the config file was generated
+3. Check the Output panel (View → Output → "comP") for logs
+
+### "The AI reads files directly instead of using comP"
+
+→ See the "**A Prompt Kit for Growing CLAUDE.md into a comP-first Constitution**" section above. Prompt 1 resolves this in most cases.
 
 ### "Indexing is slow"
 
-- First-time indexing of large repos (>100k files) takes time
-- Subsequent runs are incremental (fast)
-- comP uses <500MB RAM typically
-
-### "Some languages not recognized"
-
-- comP supports 30+ languages; unsupported files are skipped
-- Office documents (Word / PowerPoint / Excel) and PDF are already supported (since v0.2–v0.3)
+- Large repos (>100k files) take time on first run only. Subsequent runs are incremental (fast)
+- The comP daemon typically uses <500MB RAM
 
 ---
 
-## FAQ: "My AI reads files directly even with comP installed"
+## Agent Compatibility
 
-**A:** AI assistants work best when you're explicit. Try these:
+| Agent | Status |
+| --- | --- |
+| Claude Code / GitHub Copilot | ✅ Supported & verified |
+| Cursor / Cline / Windsurf / Antigravity / Aider / Continue.dev | ✅ Supported |
+| Gemini | ❌ Not supported |
 
-### 1. Use `@comP` in your prompt
-
-```markdown
-# Good:
-@comP run_pipeline
-Analyze the JWT authentication flow
-
-# Avoids:
-Look at src/auth/middleware.ts and explain it
-```
-
-### 2. Strengthen agent instructions
-
-Add this to `.github/copilot-instructions.md`:
-
-```markdown
-## comP Usage is Mandatory
-
-- Call `run_pipeline` FIRST on every coding task
-- Never use grep/find/Bash for searches—use comP instead
-- Why: comP saves 94% tokens vs full codebase reads
-```
-
-### 3. Use session memory
-
-At the start of a new session:
-
-```markdown
-@comP session_recall
-Remind me what we decided about JWT token expiry
-```
-
-Session history is auto-restored—your AI remembers past decisions.
-
----
-
-## Contributing
-
-Bug reports, feature requests, and PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-### Development Setup
-
-```bash
-git clone https://github.com/tsucky230/comP.git
-cd comP
-npm install
-
-# Tests
-npm test
-cargo test --manifest-path daemon/Cargo.toml
-
-# Watch mode
-npm run watch
-npm run daemon:build -- --watch
-```
-
----
-
-## License
-
-MIT — [LICENSE](LICENSE)
+Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](https://github.com/tsucky230/comP/issues/new) if you hit a problem.
 
 ---
 
@@ -344,41 +359,18 @@ MIT — [LICENSE](LICENSE)
 
 | Version | Features | Status |
 | --- | --- | --- |
-| **v0.1** | Core indexing, MCP, 30 languages | ✅ Released |
-| **v0.2** | Office formats (Word/Excel), BM25 search | ✅ Released |
-| **v0.3** | PDF support, impact analysis | ✅ Released |
-| **v0.4** | Content mode, git diff context | ✅ Released |
-| **v0.5** | Code compression, @comp chat participant | ✅ Released |
-| **v0.6** | Dynamic token budget | ✅ Released |
-| **v0.7** | File-type compression rules | ✅ Released |
-| **v0.8** | Large repo optimization | ✅ Released |
-| **v0.9** | **Session history & persistent memory** | ✅ Released |
-| **v1.0** | API stabilization, community tools | ⚪ Planned |
+| v0.1–v0.8 | Core indexing, MCP, Office/PDF support, compression, large-repo optimization | ✅ Released |
+| **v0.9** | **Session history, persistent memory, session_log / session_recall** | ✅ Released |
+| v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---
 
-## Links
+## License, Contributing & Support
 
-- **GitHub**: <https://github.com/tsucky230/comP>
-- **Issues**: <https://github.com/tsucky230/comP/issues>
-- **Discussions**: <https://github.com/tsucky230/comP/discussions>
-- **Architecture Docs**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- **MCP Tools Ref**: [docs/user/MCP_TOOLS.md](docs/user/MCP_TOOLS.md)
+- **MIT License** — [LICENSE](LICENSE)
+- Contributions welcome — [CONTRIBUTING.md](CONTRIBUTING.md)
+- ☕ **[GitHub Sponsors](https://github.com/sponsors/tsucky230)** / 💖 **Star this repo**
 
----
+## Questions & Bug Reports
 
-## Support This Project
-
-comP is free and open-source. If it helps you, consider supporting development:
-
-- ☕ **[GitHub Sponsors](https://github.com/sponsors/tsucky230)** — Fund development
-- 💖 **Star this repo** — Help others discover it
-
----
-
-## Questions & Feedback
-
-- 📖 **Docs**: [docs/](docs/)
-- 🐛 **Report a bug**: [Create an Issue](https://github.com/tsucky230/comP/issues/new)
-- 💬 **Discuss**: [Start a Discussion](https://github.com/tsucky230/comP/discussions/new)
-- 👥 **Contribute**: [CONTRIBUTING.md](CONTRIBUTING.md)
+- 📖 [docs/](docs/) / 🐛 [Issue](https://github.com/tsucky230/comP/issues/new) / 💬 [Discussions](https://github.com/tsucky230/comP/discussions/new)

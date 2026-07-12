@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>comP — Ultra-lightweight Local Code Context Indexer Extension</title>
-  <meta name="description" content="comP is a local-first code context indexing engine for VSCode that provides AI agents with optimal semantic symbols and code graph traversal.">
+  <meta name="description" content="comP is the memory system for your AI coding assistant — an open-source, 100% local code analysis engine that replaces full-codebase re-reads with instant indexed lookups, cutting tokens and failed retries.">
+
   
   <!-- Auto-redirect to Japanese if preferred or if browser language is Japanese -->
   <script>
@@ -34,6 +35,7 @@
       </div>
       <ul class="nav-links">
         <li><a href="#features">Features</a></li>
+        <li><a href="#impact">Impact</a></li>
         <li><a href="#roadmap">Roadmap</a></li>
         <li><a href="#install">Installation</a></li>
         <li><a href="https://github.com/tsucky230/comP" class="nav-btn-github" target="_blank" rel="noopener noreferrer">GitHub</a></li>
@@ -47,8 +49,8 @@
     <div class="container hero-container">
       <div class="hero-content">
         <div class="badge animate-fade-in">v0.9.2 — Session Memory & Smarter Context</div>
-        <h1 class="animate-fade-in">Your AI Coding Agent That <br><span class="gradient-text">Never Forgets</span></h1>
-        <p class="hero-desc animate-fade-in">comP transforms your codebase into intelligent memory for AI agents. 94% input token reduction + cross-session persistent chat history. 100% local, zero cloud data—enterprises love it.</p>
+        <h1 class="animate-fade-in">Your AI re-reads the<br>whole project <span class="gradient-text">every single question.</span></h1>
+        <p class="hero-desc animate-fade-in">comP is the memory system for your AI coding assistant. It automatically builds a project map and index so your AI finds the relevant code instantly—without searching around. Open-source, 100% local.</p>
         <div class="hero-cta animate-fade-in">
           <a href="#install" class="btn btn-primary">Get Started</a>
           <a href="https://github.com/tsucky230/comP" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">
@@ -68,7 +70,7 @@
     <div class="container">
       <div class="section-header">
         <h2>Core Features & Technology</h2>
-        <p>Runs 100% locally on your machine, saving up to 94% on input token costs + persistent cross-session memory.</p>
+        <p>Runs 100% locally on your machine, cutting input tokens by 60–94% on code investigation and fix tasks.</p>
       </div>
       <div class="features-grid">
         <div class="feature-card">
@@ -114,6 +116,46 @@
         </div>
         <div class="detail-image-wrapper">
           <img src="comp_banner.png" alt="comP AST Compression Detail" class="detail-image">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Impact Estimate Section -->
+  <section id="impact" class="features section section-alt">
+    <div class="container">
+      <div class="section-header">
+        <h2>How Much Does It Actually Help? An Honest Estimate</h2>
+        <p>comP's impact depends heavily on your use case. Here's an honest breakdown, no exaggeration.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🔎</div>
+          <h3>Investigating/Fixing Medium-to-Large Repos</h3>
+          <p><strong>60–94% reduction.</strong> "Read everything or grep blindly" is replaced by "pull only the relevant spots from the index."</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🕸️</div>
+          <h3>Impact Analysis</h3>
+          <p><strong>Large reduction.</strong> <code>get_impact_graph</code> mechanically enumerates downstream effects from the dependency graph—no more AI guesswork.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔁</div>
+          <h3>Cross-Session Continued Development</h3>
+          <p><strong>Large reduction.</strong> Re-explaining and re-investigating context collapses into one <code>session_recall</code> call.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📦</div>
+          <h3>Small Repos</h3>
+          <p><strong>~20–40%.</strong> Reading everything was already cheap, so there's less room to save.</p>
+        </div>
+      </div>
+
+      <div class="feature-detail">
+        <div class="detail-content">
+          <h3>The Biggest Effect the Numbers Don't Show: Fewer Failed Retries</h3>
+          <p>Looking only at the token-reduction percentage understates the real impact. Traditionally: explore → read the wrong file → implement on a wrong assumption → test fails → re-explore → re-implement—each failed loop burns thousands of tokens.</p>
+          <p>With comP, <code>run_pipeline</code> surfaces the right related code up front, leaving less room for wrong assumptions—so retries become rare in the first place. comP doesn't just reduce tokens per call, it reduces <strong>the number of calls itself.</strong> Cheaper models get lost while exploring more easily, so the cheaper the model, the bigger comP's benefit.</p>
         </div>
       </div>
     </div>

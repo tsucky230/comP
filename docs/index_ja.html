@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>comP — 超軽量ローカルコンテキストインデクサー拡張機能</title>
-  <meta name="description" content="comPはVSCode上で動作する、ローカルLLMおよび外部AIエージェント向けの超軽量・高性能なシンボルグラフ・コンテキストインデクサーです。">
+  <meta name="description" content="comPはAIコーディングアシスタントの「記憶」になる、完全ローカル動作のオープンソースコード分析エンジンです。毎回の全読みを索引検索に置き換え、トークン消費と失敗リトライを削減します。">
   
   <!-- Auto-redirect to English if preferred or if browser language is not Japanese -->
   <script>
@@ -34,6 +34,7 @@
       </div>
       <ul class="nav-links">
         <li><a href="#features">機能・特徴</a></li>
+        <li><a href="#impact">効果</a></li>
         <li><a href="#roadmap">ロードマップ</a></li>
         <li><a href="#install">導入方法</a></li>
         <li><a href="https://github.com/tsucky230/comP" class="nav-btn-github" target="_blank" rel="noopener noreferrer">GitHub</a></li>
@@ -47,8 +48,8 @@
     <div class="container hero-container">
       <div class="hero-content">
         <div class="badge animate-fade-in">v0.9.2 — セッション記憶＆スマートコンテキスト</div>
-        <h1 class="animate-fade-in">あなたのAIエージェントに、<br><span class="gradient-text">完璧なローカルコード文脈</span>を。</h1>
-        <p class="hero-desc animate-fade-in">comP（コンプ）は、AIエージェントがコードの構造、依存関係、全文情報を完全に把握できるように支援する、VS Code拡張機能およびRust製バックエンドデーモンです。</p>
+        <h1 class="animate-fade-in">AIは、質問のたびに<br>プロジェクト全体を<span class="gradient-text">読み直している。</span></h1>
+        <p class="hero-desc animate-fade-in">comP（コンプ）は、AIコーディングアシスタントの「記憶」になるシステムです。プロジェクトの構成図とインデックスを自動生成し、AIが探し回らずに関連コードへ一瞬でたどり着けるようにします。オープンソース・完全ローカル動作。</p>
         <div class="hero-cta animate-fade-in">
           <a href="#install" class="btn btn-primary">使ってみる</a>
           <a href="https://github.com/tsucky230/comP" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">
@@ -68,7 +69,7 @@
     <div class="container">
       <div class="section-header">
         <h2>主な機能とテクノロジー</h2>
-        <p>100%ローカルで動作し、エージェントへ提供するトークンサイズを最大80%節約します。</p>
+        <p>100%ローカルで動作し、コード調査・修正タスクでは入力トークンを60〜94%削減します。</p>
       </div>
       <div class="features-grid">
         <div class="feature-card">
@@ -114,6 +115,46 @@
         </div>
         <div class="detail-image-wrapper">
           <img src="comp_banner.png" alt="comP AST Compression Detail" class="detail-image">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Impact Estimate Section -->
+  <section id="impact" class="features section section-alt">
+    <div class="container">
+      <div class="section-header">
+        <h2>効果の見積もり：どの用途で、どれだけ効くのか</h2>
+        <p>comP の効果は用途に強く依存します。誇張のない目安を示します。</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🔎</div>
+          <h3>中〜大規模リポジトリの調査・修正</h3>
+          <p><strong>60〜94%削減。</strong>「全読み or 手探りgrep」が「索引から関連箇所のみ抽出」に置き換わります。</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🕸️</div>
+          <h3>影響範囲の分析</h3>
+          <p><strong>大幅削減。</strong><code>get_impact_graph</code> が依存グラフから波及先を機械的に列挙し、AIの推測探索が丸ごと不要になります。</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔁</div>
+          <h3>セッションをまたぐ継続開発</h3>
+          <p><strong>大幅削減。</strong>前提の再説明・再調査が <code>session_recall</code> の1呼び出しに圧縮されます。</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📦</div>
+          <h3>小規模リポジトリ</h3>
+          <p><strong>2〜4割程度。</strong>元々全部読んでも安いため、伸びしろは小さめです。</p>
+        </div>
+      </div>
+
+      <div class="feature-detail">
+        <div class="detail-content">
+          <h3>数字に表れない最大の効果：失敗リトライの消滅</h3>
+          <p>トークン削減率だけでは効果を過小評価してしまいます。従来は「探索 → 違うファイルを読む → 誤った前提で実装 → テスト失敗 → 再探索 → 再実装」という失敗ループが1回あたり数千トークンを消費していました。</p>
+          <p>comP導入後は <code>run_pipeline</code> が正しい関連コードを最初に提示するため、誤った前提が入り込む余地が減り、リトライ自体が起きにくくなります。つまり comP は「1回あたりのトークン」だけでなく、<strong>「回数」そのものを減らします。</strong>安価なモデルほど探索で迷子になりやすいため、モデルが安いほど comP の恩恵は大きくなります。</p>
         </div>
       </div>
     </div>
