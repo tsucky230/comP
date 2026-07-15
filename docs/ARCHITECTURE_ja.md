@@ -127,7 +127,12 @@ graph TD
 { "timestamp": 1751000000000, "request": "ユーザーの依頼テキスト", "outcome": "対応結果の要約" }
 ```
 
-`.comp/` は通常 `FileWalker` のスキップ対象ですが、`.comp/history/` はカーブアウト（`should_skip_relative_path` の allowlist）により除外され、インデックス対象として扱われます。`session_log` 書き込み直後に `index_file` を呼ぶことで BM25 インデックスへ即時反映します。
+`.comp/` は通常 `FileWalker` のスキップ対象ですが、`.comp/history/*.jsonl` は 2 箇所のカーブアウトによりインデックス対象として扱われます（v0.9.3 で修正）。
+
+1. **バッチ走査**: `walk()` が隠しディレクトリ除外の後に `.comp/history/*.jsonl` を補完走査し、初回・全体インデックスおよびデーモン再起動時にも履歴が files テーブルに登録・維持される（以前は `should_skip_relative_path` にしかカーブアウトが無く、全体インデックスのたびに履歴行が「削除」と誤判定・purge されていた）
+2. **単一ファイル更新**: `should_skip_relative_path` の allowlist により、`session_log` 書き込み直後の `index_file` 呼び出しが通り、BM25 インデックスへ即時反映される
+
+BM25 の対象言語フィルタには `jsonl` が含まれ（v0.9.3〜）、`run_pipeline` のクエリ時に履歴 JSONL の本文が全文検索されます（`parse_jsonl` のシンボル抽出は先頭行のキー名のみのため、本文マッチは BM25 が担う）。
 
 ### 4.3 Hook 自動化
 

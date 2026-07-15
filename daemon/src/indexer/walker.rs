@@ -169,6 +169,16 @@ impl FileWalker {
             all_files.push(file_entry);
         }
 
+        // Supplemental scan for interaction history — must run before the
+        // deleted-files diff so history rows registered by session_log's
+        // index_file are not misclassified as deleted and purged.
+        self.scan_history_files(
+            previous_hashes,
+            &mut all_files,
+            &mut changed_files,
+            &mut found_paths,
+        );
+
         let deleted_files = previous_hashes
             .map(|h| {
                 h.keys()
@@ -183,6 +193,60 @@ impl FileWalker {
             changed_files,
             deleted_files,
         })
+    }
+
+    /// Scan `.comp/history/*.jsonl` and append them to the walk result.
+    ///
+    /// WHY: standard_filters(true) prunes every hidden directory, so the main
+    /// walk never descends into .comp/. Interaction logs must still be indexed
+    /// so BM25 recall (run_pipeline) can surface past requests/outcomes — the
+    /// same carve-out should_skip_relative_path applies to single-file updates.
+    fn scan_history_files(
+        &self,
+        previous_hashes: Option<&HashMap<String, String>>,
+        all_files: &mut Vec<FileEntry>,
+        changed_files: &mut Vec<FileEntry>,
+        found_paths: &mut HashSet<String>,
+    ) {
+        let hist_dir = self.workspace_root.join(".comp").join("history");
+        let Ok(entries) = fs::read_dir(&hist_dir) else {
+            return;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if !path.is_file()
+                || path.extension().map(|e| e != "jsonl").unwrap_or(true)
+            {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                if meta.len() > self.config.max_file_bytes {
+                    continue;
+                }
+            }
+            let Ok(relative_path) = self.get_relative_path(&path) else {
+                continue;
+            };
+            if !found_paths.insert(relative_path.clone()) {
+                continue;
+            }
+            let Ok(hash) = self.calculate_file_hash(&path) else {
+                continue;
+            };
+            let file_entry = FileEntry {
+                path: relative_path.clone(),
+                hash: hash.clone(),
+                language: self.detect_language(&relative_path),
+                modified_time: self.get_modified_time(&path).unwrap_or(0),
+            };
+            let file_changed = previous_hashes
+                .map(|h| h.get(&relative_path) != Some(&hash))
+                .unwrap_or(true);
+            if file_changed {
+                changed_files.push(file_entry.clone());
+            }
+            all_files.push(file_entry);
+        }
     }
 
     /// Check if a workspace-relative path should be excluded from indexing.
@@ -481,6 +545,84 @@ mod tests {
         assert!(!walker.should_skip_relative_path(".comp/history/log-2026-06.jsonl"));
         assert!(walker.should_skip_relative_path(".comp/index.db"));
         assert!(walker.should_skip_relative_path(".comp/config.json"));
+    }
+
+    /// 0.8.6 regression: the batch walk must include .comp/history/*.jsonl so
+    /// interaction logs land in the files table at initial/full index time,
+    /// while the rest of .comp/ stays excluded.
+    #[tokio::test]
+    async fn test_walk_includes_comp_history_jsonl() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        let hist_dir = temp_dir.path().join(".comp").join("history");
+        std::fs::create_dir_all(&hist_dir)?;
+        File::create(hist_dir.join("log-2026-07.jsonl"))?
+            .write_all(br#"{"query":"fix jwt bug","outcome":"patched middleware"}"#)?;
+        // Non-jsonl files in history and other .comp files must stay excluded
+        File::create(hist_dir.join("notes.txt"))?.write_all(b"scratch")?;
+        File::create(temp_dir.path().join(".comp").join("config.json"))?.write_all(b"{}")?;
+
+        File::create(temp_dir.path().join("main.rs"))?.write_all(b"fn main() {}")?;
+
+        let walker = FileWalker::new(temp_dir.path().to_str().unwrap(), WalkerConfig::default());
+        let result = walker.walk(None)?;
+
+        let paths: Vec<_> = result.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            paths.contains(&".comp/history/log-2026-07.jsonl"),
+            "history jsonl must be walked, got: {:?}", paths
+        );
+        assert!(paths.contains(&"main.rs"));
+        assert!(!paths.contains(&".comp/config.json"), ".comp root files must stay excluded");
+        assert!(!paths.contains(&".comp/history/notes.txt"), "non-jsonl history files must stay excluded");
+
+        let history_entry = result.files.iter()
+            .find(|f| f.path == ".comp/history/log-2026-07.jsonl")
+            .unwrap();
+        assert_eq!(history_entry.language, "jsonl");
+        Ok(())
+    }
+
+    /// 0.8.6 regression: a history file registered by session_log's index_file
+    /// must not be flagged deleted by the next full walk (which previously
+    /// could not see inside .comp/ and purged the row).
+    #[tokio::test]
+    async fn test_history_file_not_flagged_deleted() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+
+        let hist_dir = temp_dir.path().join(".comp").join("history");
+        std::fs::create_dir_all(&hist_dir)?;
+        File::create(hist_dir.join("log-2026-07.jsonl"))?
+            .write_all(br#"{"query":"add feature","outcome":"done"}"#)?;
+
+        let walker = FileWalker::new(temp_dir.path().to_str().unwrap(), WalkerConfig::default());
+
+        // Simulate DB state after session_log + index_file
+        let first = walker.walk(None)?;
+        let mut previous_hashes = HashMap::new();
+        for fe in &first.files {
+            previous_hashes.insert(fe.path.clone(), fe.hash.clone());
+        }
+
+        // Unchanged file: not deleted, not re-indexed
+        let second = walker.walk(Some(&previous_hashes))?;
+        assert!(
+            second.deleted_files.is_empty(),
+            "history file must not be flagged deleted: {:?}", second.deleted_files
+        );
+        assert_eq!(second.changed_files.len(), 0);
+
+        // Appended line (Stop hook behavior): detected as changed on next walk
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(hist_dir.join("log-2026-07.jsonl"))?;
+        writeln!(f, r#"{{"query":"second task","outcome":"done"}}"#)?;
+
+        let third = walker.walk(Some(&previous_hashes))?;
+        assert_eq!(third.changed_files.len(), 1, "appended history must be re-indexed");
+        assert!(third.deleted_files.is_empty());
+        Ok(())
     }
 
     /// §4-2: files larger than max_file_bytes are skipped before hash calculation

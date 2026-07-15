@@ -421,13 +421,15 @@ impl MCPServer {
         let symbol_counts = self.state.graph_db.count_symbols_per_file()?;
         let char_counts = self.state.graph_db.get_file_char_counts()?;
         let files_list = self.state.graph_db.list_files()?;
-        // WHY: Save language info before consuming. BM25 requires the list of Markdown and Office files.
+        // WHY: Save language info before consuming. BM25 requires the list of Markdown,
+        //      Office, and interaction-history (jsonl) files — jsonl symbols only carry
+        //      first-line keys, so full-text BM25 is the only way history content matches.
         let doc_paths: Vec<String> = files_list
             .iter()
             .filter(|(_, _, lang)| {
                 matches!(
                     lang.as_str(),
-                    "markdown" | "docx" | "pptx" | "xlsx" | "pdf"
+                    "markdown" | "docx" | "pptx" | "xlsx" | "pdf" | "jsonl"
                 )
             })
             .map(|(_, path, _)| path.clone())
@@ -2126,6 +2128,54 @@ mod tests {
         assert!(response["coverage"]["indexed_doc_files"].is_number());
         assert!(response["coverage"]["bm25_hits"].is_number());
         assert!(response["coverage"]["pivot_file_types"].is_object());
+    }
+
+    /// 0.8.6 regression: an interaction recorded via session_log must surface in
+    /// run_pipeline results (walker carve-out → files table → BM25 over jsonl).
+    #[tokio::test]
+    async fn test_run_pipeline_surfaces_session_history() {
+        let temp_dir = std::env::temp_dir().join("comP_test_history_bm25");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let state = Arc::new(
+            crate::AppState::new(temp_dir.to_str().unwrap())
+                .await
+                .expect("Failed to create AppState"),
+        );
+        let server = MCPServer::new(state);
+
+        server
+            .handle_session_log(json!({
+                "request": "implement zanzibar quota widget",
+                "outcome": "added zanzibar widget module"
+            }))
+            .await
+            .expect("session_log failed");
+
+        let response = server
+            .handle_run_pipeline(json!({
+                "task": "continue zanzibar quota widget work",
+                "max_tokens": 8000
+            }))
+            .await
+            .expect("run_pipeline failed");
+
+        let pivots: Vec<String> = response["pivot_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["path"].as_str().map(String::from))
+            .collect();
+        assert!(
+            pivots
+                .iter()
+                .any(|p| p.starts_with(".comp/history/") && p.ends_with(".jsonl")),
+            "history jsonl must appear in pivot_files, got: {:?}",
+            pivots
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]

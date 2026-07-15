@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
+## [Unreleased] - 0.9.3
+
+### Fixed
+
+- **対話履歴の BM25 インデックス化（0.8.6）が実際には機能していなかった問題を修正**（MAGATAMA 側からの指摘）。3 つの独立した欠陥が重なっていた：
+  1. `.comp/history/` のカーブアウトが `should_skip_relative_path`（単一ファイル更新ガード）にしか無く、バッチ走査 `walk()` は隠しディレクトリ除外で `.comp/` に降りないため、初回・全体インデックスで履歴が files テーブルに登録されない → `walk()` に `.comp/history/*.jsonl` の補完走査を追加（`daemon/src/indexer/walker.rs`）
+  2. `session_log` が `index_file` で登録した履歴行が、次回デーモン起動時の全体インデックスで walk から見えず「削除ファイル」と誤判定され purge されていた（自己消滅） → 1. の補完走査で found 扱いになり解消
+  3. BM25 の対象言語フィルタ（`markdown | docx | pptx | xlsx | pdf`）に `jsonl` が無く、仮に登録されても全文検索対象外だった（`parse_jsonl` は先頭行のキー名しかシンボル化しないため LIKE でも本文にヒットしない） → フィルタに `jsonl` を追加（`daemon/src/mcp/mod.rs`）
+- 回帰テスト追加: walker のバッチ走査取り込み・削除誤判定（`walker.rs`）、session_log → run_pipeline で履歴 JSONL が pivot_files に載る E2E（`mcp/mod.rs`）
+
+### Notes
+
+- comP 自身に「インデックス → 履歴変更 → 再検知」の自己ループは無い: MCP 呼び出しの自動記録は `session-memory.json` 行き（履歴 JSONL には書かない）、VS Code 拡張のウォッチャは `.` 始まりセグメントを除外済みかつ監視パターンに `jsonl` が含まれない。MAGATAMA の patrol には `.comp/` 除外の予防措置を推奨（先方指摘の通り）
+
+---
+
 ## [Unreleased] - 0.9.2
 
 ### Added

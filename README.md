@@ -208,17 +208,21 @@ that are likely search keywords."
 
 ### Where It Really Shines (Real Examples)
 
-**Case 1: "Wait, why did we do it this way?" a week later**
+#### Case 1: "Wait, why did we do it this way?" a week later
+
 ```
 @comP session_recall
 Check why we limited retries to 3 last week
 ```
+
 Claude's built-in memory keeps a summary, so "we discussed retry limits" might survive, but the technical rationale ("why 3") tends to get lost. comP's BM25 index pulls up that exact conversation.
 
-**Case 2: Handoff to a cheaper model**
+#### Case 2: Handoff to a cheaper model
+
 When design work happens on a top-tier model and implementation on a cheap one, the cheap model tends to get lost in long context explanations. `session_recall` injects **only the decisions that matter**, drastically cutting handoff cost.
 
-**Case 3: Environments where cloud memory is disabled for confidentiality**
+#### Case 3: Environments where cloud memory is disabled for confidentiality
+
 Even when corporate policy disables cloud-side memory, comP is 100% local, so you can **keep session memory while staying compliant.**
 
 ### The Rule of Thumb (worth one line in your CLAUDE.md)
