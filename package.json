@@ -2,7 +2,7 @@
   "name": "comp-vscode",
   "displayName": "comP - Code Context Engine",
   "description": "Drastically reduce input tokens and give AI agents persistent memory. A local-first code indexer with MCP support for instant context.",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "publisher": "tsucky230",
   "license": "MIT",
   "icon": "resources/comp-icon.png",
