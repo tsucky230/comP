@@ -80,8 +80,10 @@ let codeLensDisposable: vscode.Disposable | null = null;
  * across the whole VS Code installation, not per workspace. A version gate repairs
  * whichever workspace is opened first after an upgrade and leaves the rest broken.
  * The check is a handful of existsSync calls on files that usually do not exist.
+ *
+ * Exported for unit testing; activate() is the only production caller.
  */
-function repairMcpConfigs(context: vscode.ExtensionContext): void {
+export function repairMcpConfigs(context: vscode.ExtensionContext): void {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!workspaceRoot) return;
 
