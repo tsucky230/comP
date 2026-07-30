@@ -15,7 +15,7 @@
 npm install --save-dev markdownlint-cli2
 ```
 
-## 3. 設定ファイル `.markdownlintrc.json`
+## 3. 設定ファイル `.markdownlint.json`
 
 | ルール | 設定 | 理由 |
 | --- | --- | --- |
@@ -24,12 +24,28 @@ npm install --save-dev markdownlint-cli2
 | MD024（重複見出し） | siblings_only | 兄弟見出しのみチェック |
 | MD034（裸URL） | 無効化 | 内部リンク許容 |
 
+`markdownlint-cli2` v0.12 は `.markdownlintignore` を読まない。除外は
+`package.json` の `lint:md` グロブに `!` 付きで列挙する。
+
 ## 4. 実行コマンド
 
 ```bash
 npm run lint:md          # チェックのみ
 npm run lint:md:fix      # 自動修正
 ```
+
+検査対象は 24 ファイル。git 管理外のディレクトリ（`temp/` `.venv/` `.comp/` `.claude/`）は
+除外グロブで落とし、CI と同じ集合を検査する。git 管理外の `.md` を新設したら
+除外グロブへの追加が必要になる。
+
+### グロブは必ずダブルクォートで囲む
+
+npm スクリプトは Windows では PowerShell ではなく `cmd.exe` 経由で実行される。
+`cmd.exe` はシングルクォートを引用符と見なさないため、`'**/*.md'` はクォート込みの
+リテラル文字列として渡り、**1ファイルもマッチしないまま `Summary: 0 error(s)` を返す**
+（検査済みと誤認する事故になる）。ダブルクォートは `cmd.exe` も bash も剥がすため両対応。
+
+結果を信用する前に出力の `Linting: N file(s)` の N を必ず確認すること。
 
 ## 5. 禁止される警告（必ず修正）
 

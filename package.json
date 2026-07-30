@@ -130,8 +130,8 @@
     "test:unit": "mocha --require ts-node/register --require src/test/setup.ts 'src/**/*.test.ts'",
     "test:coverage": "nyc npm run test:unit",
     "test:integration": "node ./out/test/runTest.js",
-    "lint:md": "markdownlint-cli2 '**/*.md' '!node_modules/**'",
-    "lint:md:fix": "markdownlint-cli2 '**/*.md' '!node_modules/**' --fix",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"!node_modules/**\" \"!temp/**\" \"!.venv/**\" \"!.comp/**\" \"!.claude/**\" \"!docs/conversation_log.md\" \"!docs/work_plan.md\"",
+    "lint:md:fix": "markdownlint-cli2 \"**/*.md\" \"!node_modules/**\" \"!temp/**\" \"!.venv/**\" \"!.comp/**\" \"!.claude/**\" \"!docs/conversation_log.md\" \"!docs/work_plan.md\" --fix",
     "lint:ts": "tsc --noEmit",
     "daemon:build": "cd daemon && cargo build --release",
     "daemon:test": "cd daemon && cargo test --all -- --test-threads=1"
