@@ -90,10 +90,11 @@ jobs:
         with:
           components: clippy
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
       - name: Audit Rust dependencies
-        uses: actions-rust-lang/audit@v1
-        with:
-          workingDirectory: daemon
+        run: cargo audit --manifest-path daemon/Cargo.toml
 
       - name: Run Clippy (Rust linter)
         run: cargo clippy --all --manifest-path daemon/Cargo.toml -- -D warnings
