@@ -48,7 +48,7 @@
   <header class="hero">
     <div class="container hero-container">
       <div class="hero-content">
-        <div class="badge animate-fade-in">v0.9.2 — Session Memory & Smarter Context</div>
+        <div class="badge animate-fade-in">v0.9.4 — Self-Healing MCP Config</div>
         <h1 class="animate-fade-in">Your AI re-reads the<br>whole project <span class="gradient-text">every single question.</span></h1>
         <p class="hero-desc animate-fade-in">comP is the memory system for your AI coding assistant. It automatically builds a project map and index so your AI finds the relevant code instantly—without searching around. Open-source, 100% local.</p>
         <div class="hero-cta animate-fade-in">
@@ -241,12 +241,20 @@
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
-        <div class="roadmap-item">
+        <div class="roadmap-item completed">
           <div class="roadmap-badge">v0.9.2</div>
           <div class="roadmap-content">
             <h4>Related Files, Real-Size Token Estimates & Reliability</h4>
             <p><code>run_pipeline</code> now returns <code>related_files</code> — files one dependency hop from the pivots, ranked by edge count. Token estimates are based on real indexed file sizes instead of symbol-count heuristics. The daemon self-reports its version via <code>get_stats</code> to detect stale binaries, <code>Generate Context</code> / <code>Show Impact Graph</code> commands are fully implemented, and a bug that silently dropped hook-recorded history from <code>session_recall</code> is fixed.</p>
-            <span class="status-tag">🔜 Upcoming</span>
+            <span class="status-tag">✅ Released</span>
+          </div>
+        </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.9.4</div>
+          <div class="roadmap-content">
+            <h4>Self-Healing MCP Config</h4>
+            <p>Upgrading the extension used to break MCP. VS Code installs extensions into a version-stamped directory and deletes the old one, so the absolute <code>comp-daemon</code> path written into <code>.vscode/mcp.json</code> and friends pointed at an executable that no longer existed — the sidebar kept working while MCP tools silently vanished. comP now inspects those files on every activation and re-points any command that no longer resolves, refreshing a stale <code>COMP_WORKSPACE_ROOT</code> in the same pass. Relative paths, <code>${...}</code> variables and healthy entries are left untouched. v0.9.3 fixed the conversation-history BM25 indexing that had never actually worked.</p>
+            <span class="status-tag">✅ Released</span>
           </div>
         </div>
       </div>
@@ -265,7 +273,7 @@
           <span class="step-num">1</span>
           <h4>Install the Extension</h4>
           <p>Download the release <code>.vsix</code> file and drag-and-drop it into VSCode, or install via command line:</p>
-          <pre><code>code --install-extension comP-0.9.2.vsix</code></pre>
+          <pre><code>code --install-extension comP-0.9.4.vsix</code></pre>
         </div>
         <div class="step">
           <span class="step-num">2</span>

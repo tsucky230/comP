@@ -17,6 +17,7 @@ import { DependencyCodeLensProvider } from "./ui/CodeLens";
 import { registerCommands } from "./ui/commands";
 import { SessionMemoryManager } from "./mcp/sessionMemory";
 import { registerChatParticipant } from "./mcp/chatParticipant";
+import { AgentSetupManager } from "./mcp/AgentSetup";
 
 /** Global context */
 let daemonManager: DaemonManager | null = null;
@@ -66,6 +67,45 @@ function hasCompDirectory(): boolean {
 
 let watcherDisposable: vscode.Disposable | null = null;
 let codeLensDisposable: vscode.Disposable | null = null;
+
+/**
+ * Re-point MCP config files whose recorded daemon path no longer exists.
+ *
+ * WHY: VS Code installs extensions into `<publisher>.<name>-<version>` and removes
+ * the previous directory on upgrade. Config files written by "comP: Setup Agents"
+ * keep the old absolute path, so MCP clients fail to spawn the daemon while the
+ * extension itself keeps working — it resolves its own binary at runtime.
+ *
+ * WHY unconditional rather than gated on a stored version: globalState is shared
+ * across the whole VS Code installation, not per workspace. A version gate repairs
+ * whichever workspace is opened first after an upgrade and leaves the rest broken.
+ * The check is a handful of existsSync calls on files that usually do not exist.
+ */
+function repairMcpConfigs(context: vscode.ExtensionContext): void {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) return;
+
+  try {
+    // daemonManager is unused by AgentSetupManager (reserved for future expansion)
+    const agentSetup = new AgentSetupManager(
+      null as unknown as DaemonManager,
+      workspaceRoot,
+      context.extensionPath
+    );
+    const repaired = agentSetup.repairStaleConfigs().filter((entry) => entry.status === "repaired");
+
+    if (repaired.length === 0) return;
+
+    for (const entry of repaired) {
+      console.log(`[comP] Repaired MCP config: ${entry.file}${entry.to ? ` -> ${entry.to}` : " (workspace root)"}`);
+    }
+    vscode.window.showInformationMessage(
+      `comP: ${repaired.length} 件の MCP 設定を現在の daemon パスへ修復しました。エージェントを再起動してください。`
+    );
+  } catch (error) {
+    console.warn("[comP] MCP config repair failed:", error);
+  }
+}
 
 /**
  * Sync `comp.exclude` VS Code setting into `.comp/config.json`.
@@ -127,6 +167,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   console.log("[comP] Extension activating...");
 
   try {
+    // Before anything else: an upgrade may have left MCP configs pointing at a
+    // binary that no longer exists. Runs in both auto and manual mode.
+    repairMcpConfigs(context);
+
     const autoStartDaemon = hasCompDirectory();
     console.log(`[comP] .comp directory exists: ${autoStartDaemon}`);
 

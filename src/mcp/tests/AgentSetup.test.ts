@@ -5,11 +5,13 @@
 // - File path resolution
 // - Error handling for unsupported agents
 // - Directory creation for config files
+// - Repair of daemon paths left stale by an extension upgrade
 
 import { expect } from "chai";
 import * as path from "path";
 import * as fs from "fs";
-import { AgentSetupManager } from "../AgentSetup";
+import * as os from "os";
+import { AgentSetupManager, RepairEntry } from "../AgentSetup";
 import { DaemonManager } from "../../daemon/DaemonManager";
 
 // Mock DaemonManager
@@ -214,6 +216,304 @@ describe("AgentSetupManager", () => {
       const content = fs.readFileSync(result.configPath, "utf-8");
       expect(content).to.include("WARNING");
       expect(content).to.include("existing config below");
+    });
+  });
+
+  describe("repairStaleConfigs", () => {
+    const tmpRoot = path.join(os.tmpdir(), `comp-repair-${process.pid}`);
+    const devBinaryName = process.platform === "win32" ? "comp-daemon.exe" : "comp-daemon";
+    const bundledBinaryName =
+      process.platform === "win32"
+        ? "comp-daemon-win.exe"
+        : process.platform === "darwin"
+          ? "comp-daemon-macos"
+          : "comp-daemon-linux";
+
+    let caseIndex = 0;
+    let ws: string;
+    let extDir: string;
+    let globalConfig: string;
+    let devBinary: string;
+    let bundledBinary: string;
+    let stalePath: string;
+    let repairManager: AgentSetupManager;
+
+    const writeJson = (file: string, value: unknown): void => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf-8");
+    };
+    const readJson = (file: string): any => JSON.parse(fs.readFileSync(file, "utf-8"));
+    const entryFor = (entries: RepairEntry[], file: string): RepairEntry | undefined =>
+      entries.find((e) => e.file === file);
+
+    beforeEach(() => {
+      // Each case gets a private tree so repairs in one test cannot leak into another
+      const caseDir = path.join(tmpRoot, `case-${caseIndex++}`);
+      ws = path.join(caseDir, "workspace");
+      extDir = path.join(caseDir, "extension");
+      globalConfig = path.join(caseDir, "global", "mcp_config.json");
+      devBinary = path.join(ws, "daemon", "target", "release", devBinaryName);
+      bundledBinary = path.join(extDir, "daemon", "target", "release", bundledBinaryName);
+      stalePath = path.join(caseDir, "comp-vscode-0.9.2", "daemon", "target", "release", bundledBinaryName);
+
+      fs.mkdirSync(path.dirname(devBinary), { recursive: true });
+      fs.writeFileSync(devBinary, "");
+      fs.mkdirSync(path.dirname(bundledBinary), { recursive: true });
+      fs.writeFileSync(bundledBinary, "");
+      fs.mkdirSync(path.dirname(globalConfig), { recursive: true });
+
+      repairManager = new AgentSetupManager(mockDaemon as any, ws, extDir);
+      // WHY: the global target defaults to the real ~/.gemini config. Redirect it so
+      // running the suite never edits the developer's own machine-wide MCP setup.
+      (repairManager as any).antigravityConfigPath = () => globalConfig;
+    });
+
+    after(() => {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it("B1: rewrites a .vscode/mcp.json command that no longer exists", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, {
+        servers: { comp: { command: stalePath, args: [], env: { COMP_WORKSPACE_ROOT: ws, RUST_LOG: "info" } } },
+      });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      const entry = entryFor(entries, cfg);
+      expect(entry?.status).to.equal("repaired");
+      expect(entry?.from).to.equal(stalePath);
+      expect(entry?.to).to.equal(devBinary);
+      expect(readJson(cfg).servers.comp.command).to.equal(devBinary);
+    });
+
+    it("B2: leaves a command that resolves to an existing file untouched", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, { servers: { comp: { command: devBinary, env: { COMP_WORKSPACE_ROOT: ws } } } });
+      const before = fs.readFileSync(cfg, "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("healthy");
+      expect(fs.readFileSync(cfg, "utf-8")).to.equal(before);
+    });
+
+    it("B3: leaves a relative command untouched", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      const relative = path.join("daemon", "target", "release", devBinaryName);
+      writeJson(cfg, { servers: { comp: { command: relative, env: { COMP_WORKSPACE_ROOT: "." } } } });
+      const before = fs.readFileSync(cfg, "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("skipped");
+      expect(fs.readFileSync(cfg, "utf-8")).to.equal(before);
+    });
+
+    it("B4: leaves a command containing a ${...} variable untouched", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, {
+        servers: { comp: { command: "${workspaceFolder}/daemon/target/release/comp-daemon", env: { COMP_WORKSPACE_ROOT: "${workspaceFolder}" } } },
+      });
+      const before = fs.readFileSync(cfg, "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("skipped");
+      expect(fs.readFileSync(cfg, "utf-8")).to.equal(before);
+    });
+
+    it("B5: reports missing files without throwing", () => {
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entries.length).to.be.greaterThan(0);
+      expect(entries.every((e) => e.status === "missing")).to.be.true;
+    });
+
+    it("B6: reports unparseable JSON as failed and leaves the file alone", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      fs.mkdirSync(path.dirname(cfg), { recursive: true });
+      fs.writeFileSync(cfg, "{ this is not json", "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("failed");
+      expect(fs.readFileSync(cfg, "utf-8")).to.equal("{ this is not json");
+    });
+
+    it("B7: preserves other MCP server entries while repairing comp", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, {
+        servers: {
+          comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } },
+          other: { command: "/usr/bin/other-server", args: ["--flag"] },
+        },
+      });
+
+      repairManager.repairStaleConfigs();
+
+      const written = readJson(cfg);
+      expect(written.servers.comp.command).to.equal(devBinary);
+      expect(written.servers.other.command).to.equal("/usr/bin/other-server");
+      expect(written.servers.other.args).to.deep.equal(["--flag"]);
+    });
+
+    it("B8: preserves unknown top-level keys while repairing comp", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, {
+        inputs: [{ id: "api-key", type: "promptString" }],
+        servers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } } },
+      });
+
+      repairManager.repairStaleConfigs();
+
+      const written = readJson(cfg);
+      expect(written.inputs).to.deep.equal([{ id: "api-key", type: "promptString" }]);
+      expect(written.servers.comp.command).to.equal(devBinary);
+    });
+
+    it("B9: does not rewrite when no replacement binary exists", () => {
+      fs.rmSync(devBinary);
+      fs.rmSync(bundledBinary);
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, { servers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } } } });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("skipped");
+      expect(readJson(cfg).servers.comp.command).to.equal(stalePath);
+    });
+
+    it("B10: repairs .mcp.json under the mcpServers key", () => {
+      const cfg = path.join(ws, ".mcp.json");
+      writeJson(cfg, { mcpServers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } } } });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("repaired");
+      expect(readJson(cfg).mcpServers.comp.command).to.equal(devBinary);
+    });
+
+    it("repairs the Cursor config whose comp entry sits at the document root", () => {
+      const cfg = path.join(ws, ".comp", "config", "cursor_config.json");
+      writeJson(cfg, { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } } });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("repaired");
+      expect(readJson(cfg).comp.command).to.equal(devBinary);
+    });
+
+    it("refreshes a stale COMP_WORKSPACE_ROOT even when the command is healthy", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      const otherMachineRoot = path.join(tmpRoot, "c-home-project");
+      writeJson(cfg, {
+        servers: { comp: { command: devBinary, env: { COMP_WORKSPACE_ROOT: otherMachineRoot, RUST_LOG: "info" } } },
+      });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      const entry = entryFor(entries, cfg);
+      expect(entry?.status).to.equal("repaired");
+      expect(entry?.envRepaired).to.be.true;
+      const written = readJson(cfg);
+      expect(written.servers.comp.env.COMP_WORKSPACE_ROOT).to.equal(ws);
+      expect(written.servers.comp.env.RUST_LOG).to.equal("info");
+    });
+
+    it("repairs the global config with the bundled binary, never the dev build", () => {
+      writeJson(globalConfig, {
+        mcpServers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: path.join(tmpRoot, "other-project") } } },
+      });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, globalConfig)?.status).to.equal("repaired");
+      const written = readJson(globalConfig);
+      expect(written.mcpServers.comp.command).to.equal(bundledBinary);
+      expect(written.mcpServers.comp.command).to.not.equal(devBinary);
+    });
+
+    it("never rewrites COMP_WORKSPACE_ROOT in the global config", () => {
+      const otherProject = path.join(tmpRoot, "other-project");
+      writeJson(globalConfig, {
+        mcpServers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: otherProject } } },
+      });
+
+      repairManager.repairStaleConfigs();
+
+      expect(readJson(globalConfig).mcpServers.comp.env.COMP_WORKSPACE_ROOT).to.equal(otherProject);
+    });
+
+    it("skips a file that has no comp server entry", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, { servers: { other: { command: "/usr/bin/other-server" } } });
+      const before = fs.readFileSync(cfg, "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("skipped");
+      expect(fs.readFileSync(cfg, "utf-8")).to.equal(before);
+    });
+
+    it("leaves a ${...} COMP_WORKSPACE_ROOT alone when the command is healthy", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, {
+        servers: { comp: { command: devBinary, env: { COMP_WORKSPACE_ROOT: "${workspaceFolder}" } } },
+      });
+      const before = fs.readFileSync(cfg, "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("healthy");
+      expect(fs.readFileSync(cfg, "utf-8")).to.equal(before);
+    });
+
+    it("skips a comp entry that carries no command key", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, { servers: { comp: { args: [], env: { COMP_WORKSPACE_ROOT: ws } } } });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("skipped");
+    });
+
+    it("treats a comp entry without an env object as healthy", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, { servers: { comp: { command: devBinary, args: [] } } });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("healthy");
+    });
+
+    it("treats an env without COMP_WORKSPACE_ROOT as healthy", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, { servers: { comp: { command: devBinary, env: { RUST_LOG: "info" } } } });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("healthy");
+    });
+
+    it("skips a config whose document root is not an object", () => {
+      const cfg = path.join(ws, ".vscode", "mcp.json");
+      writeJson(cfg, ["not", "an", "object"]);
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("skipped");
+    });
+
+    it("cannot repair a global config when the extension path is unknown", () => {
+      const noExtManager = new AgentSetupManager(mockDaemon as any, ws, undefined);
+      (noExtManager as any).antigravityConfigPath = () => globalConfig;
+      writeJson(globalConfig, { mcpServers: { comp: { command: stalePath } } });
+
+      const entries = noExtManager.repairStaleConfigs();
+
+      expect(entryFor(entries, globalConfig)?.status).to.equal("skipped");
+      expect(readJson(globalConfig).mcpServers.comp.command).to.equal(stalePath);
     });
   });
 });

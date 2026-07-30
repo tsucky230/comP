@@ -47,7 +47,7 @@
   <header class="hero">
     <div class="container hero-container">
       <div class="hero-content">
-        <div class="badge animate-fade-in">v0.9.2 — セッション記憶＆スマートコンテキスト</div>
+        <div class="badge animate-fade-in">v0.9.4 — MCP設定の自己修復</div>
         <h1 class="animate-fade-in">AIは、質問のたびに<br>プロジェクト全体を<span class="gradient-text">読み直している。</span></h1>
         <p class="hero-desc animate-fade-in">comP（コンプ）は、AIコーディングアシスタントの「記憶」になるシステムです。プロジェクトの構成図とインデックスを自動生成し、AIが探し回らずに関連コードへ一瞬でたどり着けるようにします。オープンソース・完全ローカル動作。</p>
         <div class="hero-cta animate-fade-in">
@@ -240,12 +240,20 @@
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
-        <div class="roadmap-item">
+        <div class="roadmap-item completed">
           <div class="roadmap-badge">v0.9.2</div>
           <div class="roadmap-content">
             <h4>関連ファイル返却・実サイズトークン推定・信頼性向上</h4>
             <p><code>run_pipeline</code> が <code>related_files</code>（ピボットファイルから依存エッジ1ホップで繋がるファイルをエッジ数順に返却）を実装。トークン推定をシンボル数ヒューリスティックから実ファイルサイズベースに刷新。<code>get_stats</code> でデーモンがバージョンを自己申告し旧バイナリ稼働を検知可能に。<code>Generate Context</code> / <code>Show Impact Graph</code> コマンドを本実装。フック記録が <code>session_recall</code> から漏れるバグも修正。</p>
-            <span class="status-tag">🔜 リリース予定</span>
+            <span class="status-tag">✅ リリース済み</span>
+          </div>
+        </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.9.4</div>
+          <div class="roadmap-content">
+            <h4>MCP設定の自己修復</h4>
+            <p>これまで拡張機能をバージョンアップすると MCP が使えなくなることがありました。VS Code は拡張をバージョン番号入りのディレクトリに展開して更新時に旧ディレクトリを削除するため、<code>.vscode/mcp.json</code> などに焼き込まれた <code>comp-daemon</code> の絶対パスが存在しない実行ファイルを指してしまう — サイドバーは動くのに MCP ツールだけ消える、という分かりにくい症状です。comP は起動のたびにこれらの設定を検査し、解決できなくなった <code>command</code> を現在のパスへ書き戻すようになりました。陳腐化した <code>COMP_WORKSPACE_ROOT</code> も同時に修復します。相対パス・<code>${...}</code> 変数・正常なエントリには手を触れません。v0.9.3 では、実際には機能していなかった対話履歴の BM25 インデックス化を修正しました。</p>
+            <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
       </div>
@@ -264,7 +272,7 @@
           <span class="step-num">1</span>
           <h4>拡張機能のインストール</h4>
           <p>リリースされた<code>.vsix</code>ファイルをダウンロードし、VS Codeにドラッグ＆ドロップするか、次のコマンドでインストールします：</p>
-          <pre><code>code --install-extension comP-0.9.2.vsix</code></pre>
+          <pre><code>code --install-extension comP-0.9.4.vsix</code></pre>
         </div>
         <div class="step">
           <span class="step-num">2</span>

@@ -6,9 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
-## [Unreleased]
+## [0.9.4] - 2026-07-30
 
-(No unreleased changes yet)
+### Fixed
+
+- **拡張のアップグレード後に MCP 設定が壊れる問題を修正**。VS Code は拡張を `<publisher>.<name>-<version>` に展開し、更新時に旧ディレクトリを削除する。`comP: Setup Agents` が生成した設定には `comp-daemon` の絶対パスが焼き込まれるため、バージョンが上がるたびに存在しない実行ファイルを指したまま残り、MCP クライアントが起動に失敗していた（拡張本体は自分のバイナリを実行時に解決するため動き続け、「サイドバーは動くが MCP ツールだけ出ない」症状になる）
+  - `AgentSetupManager.repairStaleConfigs()` を追加し、`activate()` のたびに `.vscode/mcp.json` / `.mcp.json` / `.comp/config/{cursor,cline,windsurf}_config.json` / Antigravity のグローバル設定を検査。`command` が実在しない絶対パスなら現在の daemon パスへ書き戻す（`src/mcp/AgentSetup.ts`、`src/extension.ts`）
+  - 変数参照（`${...}`）を含む値・相対パス・実在するパスは書き換えない。置換先バイナリが見つからない場合も書き換えず、壊れたパスを別の壊れたパスに差し替えない
+  - グローバル設定（`~/.gemini/antigravity-ide/mcp_config.json`）にはバンドル版バイナリのみを書き込む。全プロジェクト共有の設定に、たまたま開いていたワークスペースの cargo ビルドを書き込まないため
+  - バージョン変化ではなく毎回検査する。`globalState` は VS Code 全体で共有されるため、バージョンで判定すると最初に開いたワークスペースだけ修復され、残りが取り残される
+- **`COMP_WORKSPACE_ROOT` の陳腐化も同時に修復**。ワークスペース配下の設定に限り、現在開いているワークスペースルートと不一致なら書き戻す。プロジェクトを移動した場合やマシンをまたいだ場合に、デーモンが存在しないディレクトリをインデックスしようとする問題を解消。グローバル設定の値は他プロジェクトを指している可能性があるため触らない
+  - なお `${workspaceFolder}` への置き換えは採用していない。VS Code 公式ドキュメントは `mcp.json` での変数展開に対応と記載しているが、[microsoft/vscode#297794](https://github.com/microsoft/vscode/issues/297794)（未解決）で `Variable workspaceFolder can not be resolved` が報告されており、`env` フィールドへの適用も明記されていないため
 
 ---
 

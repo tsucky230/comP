@@ -36,6 +36,63 @@ export interface GenerateConfigResult {
 }
 
 /**
+ * Outcome of inspecting one MCP config file.
+ *
+ * - `missing`  — file does not exist
+ * - `failed`   — file exists but could not be parsed or written
+ * - `skipped`  — no comp entry, or the recorded command must not be touched
+ *                (variable reference, relative path, unresolvable replacement)
+ * - `healthy`  — recorded command points at an existing file, nothing to do
+ * - `repaired` — command and/or COMP_WORKSPACE_ROOT was rewritten
+ */
+export type RepairStatus = "repaired" | "healthy" | "skipped" | "missing" | "failed";
+
+export interface RepairEntry {
+  file: string;
+  status: RepairStatus;
+  /** Previous command value, present only when the command itself was rewritten */
+  from?: string;
+  /** Replacement command value, present only when the command itself was rewritten */
+  to?: string;
+  /** True when env.COMP_WORKSPACE_ROOT was rewritten */
+  envRepaired?: boolean;
+  /** Why the file was skipped or failed */
+  reason?: string;
+}
+
+/**
+ * One MCP config file that may carry a stale daemon path.
+ *
+ * `scope` decides two things: which binary a repair is allowed to write, and
+ * whether COMP_WORKSPACE_ROOT may be touched. A global file is shared by every
+ * project, so it must never receive this workspace's dev build or its root path.
+ */
+interface McpConfigTarget {
+  path: string;
+  /** Key chain from the document root down to the comp server object */
+  serverKeys: string[];
+  scope: "workspace" | "global";
+}
+
+/**
+ * Walk a key chain and return the object at the end, or null if any hop is
+ * missing or is not a plain object.
+ */
+function readObjectPath(doc: unknown, keys: string[]): Record<string, unknown> | null {
+  let node: unknown = doc;
+  for (const key of keys) {
+    if (node === null || typeof node !== "object" || Array.isArray(node)) {
+      return null;
+    }
+    node = (node as Record<string, unknown>)[key];
+  }
+  if (node === null || typeof node !== "object" || Array.isArray(node)) {
+    return null;
+  }
+  return node as Record<string, unknown>;
+}
+
+/**
  * AgentSetup - Generate MCP configuration files for various AI agents
  *
  * # Supported Agents
@@ -365,6 +422,199 @@ export class AgentSetupManager {
 
     // Production: bundled binary in workspace .comp/bin
     return path.join(this.workspaceRoot, ".comp", "bin", binaryName);
+  }
+
+  /**
+   * Path of the binary shipped inside the installed extension, if it is there.
+   *
+   * WHY separate from getDaemonPath(): global config files are shared by every
+   * project on the machine. getDaemonPath() prefers this workspace's cargo build,
+   * which would point other projects at a dev binary that moves or disappears.
+   */
+  private bundledDaemonPath(): string | null {
+    if (!this.extensionPath) {
+      return null;
+    }
+    const bundledBinaryName = process.platform === "win32" ? "comp-daemon-win.exe"
+      : process.platform === "darwin" ? "comp-daemon-macos"
+      : "comp-daemon-linux";
+    const candidate = path.join(this.extensionPath, "daemon", "target", "release", bundledBinaryName);
+    return fs.existsSync(candidate) ? candidate : null;
+  }
+
+  /**
+   * Binary a repair is allowed to write for the given scope, or null when none exists.
+   *
+   * Returning null means "leave the file alone" — replacing a broken path with
+   * another broken path only hides the problem from the user.
+   */
+  private resolveRepairPath(scope: "workspace" | "global"): string | null {
+    if (scope === "global") {
+      return this.bundledDaemonPath();
+    }
+    const candidate = this.getDaemonPath();
+    return fs.existsSync(candidate) ? candidate : null;
+  }
+
+  /** Every MCP config file comP is known to have written, in a fixed order. */
+  private repairTargets(): McpConfigTarget[] {
+    const ws = (...segments: string[]) => path.join(this.workspaceRoot, ...segments);
+    return [
+      { path: ws(".vscode", "mcp.json"), serverKeys: ["servers", "comp"], scope: "workspace" },
+      { path: ws(".mcp.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
+      { path: ws(".comp", "config", "cursor_config.json"), serverKeys: ["comp"], scope: "workspace" },
+      { path: ws(".comp", "config", "cline_config.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
+      { path: ws(".comp", "config", "windsurf_config.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
+      { path: this.antigravityConfigPath(), serverKeys: ["mcpServers", "comp"], scope: "global" },
+    ];
+  }
+
+  /**
+   * Rewrite MCP config files whose daemon path no longer resolves.
+   *
+   * WHY this exists: VS Code installs extensions into
+   * `<publisher>.<name>-<version>` and deletes the old directory on upgrade.
+   * Config files generated earlier keep pointing at the removed executable, so
+   * MCP clients fail to start while the extension itself keeps working — the
+   * daemon it spawns is resolved at runtime, the config files are not.
+   *
+   * WHY it runs unconditionally instead of on version change: globalState is
+   * shared across the whole VS Code installation, not per workspace. Guarding on
+   * a stored version repairs whichever workspace is opened first and silently
+   * leaves every other one broken.
+   *
+   * Never throws — a failure here must not block activation.
+   */
+  repairStaleConfigs(): RepairEntry[] {
+    return this.repairTargets().map((target) => {
+      try {
+        return this.repairTarget(target);
+      } catch (error) {
+        return {
+          file: target.path,
+          status: "failed" as const,
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+  }
+
+  /**
+   * Inspect and, if needed, repair a single config file.
+   *
+   * Checks run in this order, each one a reason to stop:
+   * 1. file absent
+   * 2. unparseable JSON
+   * 3. no comp server object, or command absent/empty/non-string
+   * 4. command contains `${...}` — a variable the host expands, not our business
+   * 5. command is relative — deliberately made portable by the user
+   * 6. command resolves to an existing file — nothing to rewrite there
+   * 7. otherwise rewrite, but only if a replacement binary actually exists
+   *
+   * COMP_WORKSPACE_ROOT is refreshed in the same pass for workspace-scoped files
+   * only, since a global file legitimately points at a different project. Steps 4
+   * and 5 stop before that refresh: a config deliberately made portable should be
+   * left portable in both fields.
+   */
+  private repairTarget(target: McpConfigTarget): RepairEntry {
+    const file = target.path;
+
+    if (!fs.existsSync(file)) {
+      return { file, status: "missing" };
+    }
+
+    let doc: unknown;
+    try {
+      doc = JSON.parse(fs.readFileSync(file, "utf-8"));
+    } catch (error) {
+      return {
+        file,
+        status: "failed",
+        reason: `invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+
+    const server = readObjectPath(doc, target.serverKeys);
+    if (!server) {
+      return { file, status: "skipped", reason: "no comp server entry" };
+    }
+
+    const command = server["command"];
+    if (typeof command !== "string" || command.length === 0) {
+      return { file, status: "skipped", reason: "no command value" };
+    }
+    // The host expands these. Resolving one here would freeze in the path of
+    // whichever machine happened to run the repair.
+    if (command.includes("${")) {
+      return { file, status: "skipped", reason: "command uses a variable reference" };
+    }
+    // A relative command was made portable on purpose; overwriting undoes that intent.
+    if (!path.isAbsolute(command)) {
+      return { file, status: "skipped", reason: "command is relative" };
+    }
+
+    const commandBroken = !fs.existsSync(command);
+    let replacement: string | null = null;
+    if (commandBroken) {
+      replacement = this.resolveRepairPath(target.scope);
+      if (!replacement) {
+        // Swapping one broken path for another would only hide the failure.
+        return { file, status: "skipped", reason: "no replacement binary available" };
+      }
+    }
+
+    const envRepaired = target.scope === "workspace" && this.refreshWorkspaceRootEnv(server);
+
+    if (!commandBroken && !envRepaired) {
+      return { file, status: "healthy" };
+    }
+
+    if (replacement) {
+      server["command"] = replacement;
+    }
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2), "utf-8");
+
+    const entry: RepairEntry = { file, status: "repaired" };
+    if (replacement) {
+      entry.from = command;
+      entry.to = replacement;
+    }
+    if (envRepaired) {
+      entry.envRepaired = true;
+    }
+    return entry;
+  }
+
+  /**
+   * Point COMP_WORKSPACE_ROOT at the workspace that is actually open.
+   *
+   * WHY: the value is written as an absolute path at generation time, so moving
+   * the project — or opening the same checkout from a different machine — leaves
+   * the daemon indexing a directory that is no longer there.
+   *
+   * Returns true when the value changed. Callers must only invoke this for
+   * workspace-scoped files.
+   */
+  private refreshWorkspaceRootEnv(server: Record<string, unknown>): boolean {
+    const env = server["env"];
+    if (env === null || typeof env !== "object" || Array.isArray(env)) {
+      return false;
+    }
+
+    const envRecord = env as Record<string, unknown>;
+    const current = envRecord["COMP_WORKSPACE_ROOT"];
+    if (typeof current !== "string" || current.length === 0) {
+      return false;
+    }
+    if (current.includes("${") || !path.isAbsolute(current)) {
+      return false;
+    }
+    if (path.resolve(current) === path.resolve(this.workspaceRoot)) {
+      return false;
+    }
+
+    envRecord["COMP_WORKSPACE_ROOT"] = this.workspaceRoot;
+    return true;
   }
 
   /**

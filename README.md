@@ -330,6 +330,17 @@ LLM API (fewer tokens = lower cost)
 2. If stuck: `Ctrl+Shift+P` → **"comP: Force Re-index"**
 3. Verify `.comp/` exists and is listed in `.gitignore`
 
+### "MCP stopped working after upgrading comP"
+
+VS Code installs extensions into a directory that carries the version number, and
+deletes the old one on upgrade. Config files record the absolute path of
+`comp-daemon`, so before v0.9.4 an upgrade left them pointing at an executable that
+no longer existed — the sidebar kept working, but MCP tools disappeared.
+
+Since **v0.9.4 comP repairs this automatically** on every activation. Restart your
+agent when you see the repair notification. On older versions, re-run
+**"comP: Setup Agents"** once.
+
 ### "MCP connection failed"
 
 1. Re-run **"comP: Setup Agents"**
@@ -365,6 +376,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | --- | --- | --- |
 | v0.1–v0.8 | Core indexing, MCP, Office/PDF support, compression, large-repo optimization | ✅ Released |
 | **v0.9** | **Session history, persistent memory, session_log / session_recall** | ✅ Released |
+| **v0.9.4** | **Self-healing MCP config — daemon paths survive extension upgrades** | ✅ Released |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---
