@@ -109,15 +109,25 @@ Open the project you're working on in VS Code (a Git repository works best).
 Ctrl+Shift+P → "comP: Setup Agents"
 ```
 
-| Agent | What to Do |
+Pick your agents from the list — the ones already on your machine are
+preselected. comP writes itself into the config files they actually read,
+merging with any MCP servers you already have. Nothing is copied by hand.
+
+| Agent | Written to |
 | --- | --- |
-| **Claude Code** | Copy the generated `claude mcp add` command and run it in your terminal |
-| **GitHub Copilot** | Auto-written to `.vscode/mcp.json` |
-| **Cursor** | Copy the generated config into `~/.cursor/mcp.json` |
-| **Cline** | Paste into Cline's MCP settings |
-| **Antigravity / Aider** | Auto-configured |
-| **Windsurf** | Copy into `~/.codeium/windsurf/mcp_config.json` |
-| **Continue.dev** | Add to `~/.continue/config.py` |
+| **Claude Code** | `.mcp.json` (plus optional `claude mcp add --scope user`) |
+| **GitHub Copilot** | `.vscode/mcp.json` |
+| **Cursor** | `.cursor/mcp.json` and `~/.cursor/mcp.json` |
+| **Cline** | VS Code globalStorage MCP settings |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
+| **Continue.dev** | `.continue/mcpServers/comp.yaml` (project and home) |
+| **Antigravity** | `~/.gemini/antigravity-ide/mcp_config.json` |
+| **Aider** | `.aider.conf.yml` |
+
+**Then restart the agent.** None of these tools re-read their MCP configuration
+while running — in VS Code-based editors, Command Palette →
+**Developer: Reload Window** is enough. The per-agent steps are printed to the
+"comP Setup" output panel after setup.
 
 Details: [docs/user/MCP_SETUP.md](docs/user/MCP_SETUP.md)
 

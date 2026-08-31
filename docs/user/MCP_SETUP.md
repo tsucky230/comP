@@ -1,146 +1,133 @@
 # MCP Server Setup for Multiple Agents
 
-comP runs as an MCP server, making it compatible with any MCP-capable AI agent. This guide covers setup for:
+comP runs as an MCP server, so any MCP-capable AI agent can use it.
 
-- **Claude Code** (local CLI)
-- **GitHub Copilot** (VS Code extension)
-- **Cursor** (editor)
-- **Cline** (VS Code extension)
-- **Antigravity**
+Setup is automatic. **comP: Setup Agents** writes comP into the config files each
+agent actually reads — merging with the servers you already have — and appends the
+comP usage rules to your instruction files. Nothing has to be copied by hand.
+
+The one manual step left is restarting the agent, because none of these tools
+re-read their MCP configuration while running. See
+[Applying the configuration](#applying-the-configuration).
 
 ---
 
-## Prerequisites
+## Setup
 
-1. Install comP from the VS Code Marketplace or build locally
-2. Run the setup command from VS Code:
+1. Install comP from the VS Code Marketplace, or build it locally
+2. Open the Command Palette and run:
 
-   ```
+   ```text
    Ctrl+Shift+P → "comP: Setup Agents"
    ```
 
-3. This generates configuration files in `.comp/config/`
+3. Pick the agents you want. Agents already present on your machine are
+   preselected — you can add or remove any of them
+4. Read the report in the output panel (**View → Output → "comP Setup"**), then
+   restart each agent you configured
+
+If you selected Claude Code, comP also offers to register itself for **every**
+project by running `claude mcp add --scope user`. Answering "今はしない" leaves
+the project-level registration in place.
 
 ---
 
-## Agent-Specific Setup
+## What gets written where
 
-### Claude Code (Recommended)
+| Agent | Project config | Machine-wide config |
+| --- | --- | --- |
+| Claude Code | `.mcp.json` | `claude mcp add --scope user` (optional) |
+| Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` |
+| Cline | — | VS Code `globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+| Windsurf | — | `~/.codeium/windsurf/mcp_config.json` |
+| Continue | `.continue/mcpServers/comp.yaml` | `~/.continue/mcpServers/comp.yaml` |
+| Antigravity | — | `~/.gemini/antigravity-ide/mcp_config.json` |
+| GitHub Copilot | `.vscode/mcp.json` | — |
+| Aider | `.aider.conf.yml` | — |
 
-**Windows (PowerShell)**:
+Two rules govern these writes:
 
-```powershell
-$configPath = "$env:APPDATA\Claude\claude_desktop_config.json"
-```
+- **Existing files are backed up.** Before any file is rewritten, comP copies it
+  to `<file>.bak`. If the backup cannot be taken, the file is left alone.
+- **Machine-wide configs omit `COMP_WORKSPACE_ROOT`.** That variable names one
+  project, so writing it into a config shared by every project would make your
+  other projects index this one. Without it the daemon falls back to its working
+  directory, which the MCP client sets per project.
 
-**macOS/Linux**:
+Other MCP servers already listed in these files are preserved. If a file cannot
+be parsed, comP does not overwrite it — it reports the failure and opens a
+document with the entry for you to merge by hand.
+
+---
+
+## Applying the configuration
+
+None of these agents reload MCP configuration while they are running. After
+setup, do the following for each agent you configured.
+
+### Claude Code
+
+- **CLI**: quit the running session (`/exit` or Ctrl+C), then start `claude`
+  again from the project directory
+- **VS Code / JetBrains extension**: Command Palette →
+  **Developer: Reload Window**
+
+On first start after setup, Claude Code asks whether to trust this project's MCP
+servers. Approve it — this prompt is a security check and comP cannot skip it.
+
+Verify with:
 
 ```bash
-$configPath = ~/.claude/claude_desktop_config.json
+claude mcp list
 ```
 
-Copy the contents of `.comp/config/claude_desktop_config.json` into the `mcpServers` section:
-
-```json
-{
-  "mcpServers": {
-    "comp": {
-      "command": "/path/to/comp-daemon",
-      "env": {
-        "COMP_WORKSPACE_ROOT": "/path/to/workspace"
-      }
-    }
-  }
-}
-```
-
-Restart Claude Code. Run `@comp` in the chat to verify.
-
----
-
-### GitHub Copilot (VS Code Extension)
-
-GitHub Copilot in VS Code uses MCP via extension-level configuration. Run:
-
-```
-Ctrl+Shift+P → "comP: Setup Agents" → Select "GitHub Copilot"
-```
-
-This registers comP in VS Code settings. Copilot will automatically discover `run_pipeline` and related tools.
-
----
+`comp` should be listed as `✔ Connected`.
 
 ### Cursor
 
-Cursor uses MCP similarly to Claude Code:
+- Command Palette (`Ctrl/Cmd+Shift+P`) → **Developer: Reload Window**
+- If the server does not appear, quit Cursor completely and start it again
 
-1. Open Cursor settings (`Cmd+,` or `Ctrl+,`)
-2. Search for **"MCP"**
-3. Paste the MCP server config from `.comp/config/claude_desktop_config.json`
-4. Restart Cursor
+Verify in **Settings → MCP**: `comp` should be listed and enabled.
 
----
+### Cline
 
-### Cline (VS Code)
+- Command Palette (`Ctrl/Cmd+Shift+P`) → **Developer: Reload Window**
 
-Cline discovers MCP servers from VS Code settings. No additional config needed after install.
+Verify from the MCP icon at the top of the Cline chat panel: `comp` should appear
+in the server list.
 
-To verify, check Cline's settings UI:
+### Windsurf
 
-- Look for **"MCP Servers"** section
-- comP should appear in the list
+- Command Palette (`Ctrl/Cmd+Shift+P`) → **Developer: Reload Window**
+- Or open the MCP icon at the top right of the Cascade panel and choose
+  **Refresh**
 
----
+### Continue
+
+- Command Palette (`Ctrl/Cmd+Shift+P`) → **Developer: Reload Window**
+
+Continue does not pick up config changes on its own, so the reload is required.
+MCP tools are only available in **Agent** mode — switch modes before testing.
 
 ### Antigravity
 
-Antigravity uses the Anthropic MCP manifest system. Setup:
+Quit Antigravity completely and start it again. Reloading the window is not
+enough for a global config change.
 
-1. Create `~/.claude/mcp-servers-manifest.json` (or update existing):
+### GitHub Copilot
 
-```json
-{
-  "servers": {
-    "comp": {
-      "command": "comp-daemon",
-      "args": [],
-      "env": {
-        "COMP_WORKSPACE_ROOT": "/path/to/workspace"
-      }
-    }
-  }
-}
-```
+- Command Palette (`Ctrl/Cmd+Shift+P`) → **Developer: Reload Window**
 
-1. Ensure `comp-daemon` is in `$PATH`:
-
-**Windows**:
-
-```powershell
-$env:PATH = "$env:PATH;C:\Users\YourName\AppData\Local\Programs\comp"
-[Environment]::SetEnvironmentVariable("PATH", $env:PATH, "User")
-```
-
-**macOS/Linux**:
-
-```bash
-# Add to ~/.zshrc or ~/.bashrc
-export PATH="/usr/local/bin/comp:$PATH"
-```
-
-1. Restart Antigravity. Run `@comp` to verify.
-
----
+Switch Copilot Chat to **Agent** mode; `comp` should appear in the tool list.
 
 ### Aider
 
-Run:
+Quit the running Aider session and start it again.
 
-```
-Ctrl+Shift+P → "comP: Setup Agents" → Select "Aider"
-```
-
-comP writes the MCP server block directly to `.aider.conf.yml` in your workspace root. Restart Aider to pick up the new server.
+Aider's MCP support differs between releases. If the block comP wrote to
+`.aider.conf.yml` is ignored, check your version with `aider --version` against
+the [Aider configuration docs](https://aider.chat/docs/config/aider_conf.html).
 
 ---
 
@@ -150,10 +137,10 @@ comP writes the MCP server block directly to `.aider.conf.yml` in your workspace
 
 VS Code installs extensions into a directory that carries the version number
 (`~/.vscode/extensions/<publisher>.comp-vscode-<version>`) and deletes the old one
-on upgrade. Config files generated by **comP: Setup Agents** record the absolute
-path of `comp-daemon`, so an upgrade leaves them pointing at an executable that no
-longer exists. The VS Code sidebar keeps working — it resolves its binary at
-runtime — but MCP clients fail to start the server.
+on upgrade. Config files record the absolute path of `comp-daemon`, so an upgrade
+leaves them pointing at an executable that no longer exists. The VS Code sidebar
+keeps working — it resolves its binary at runtime — but MCP clients fail to start
+the server.
 
 comP repairs this automatically: every time the extension activates it checks the
 known config files and rewrites any `command` that no longer resolves. **Restart
@@ -165,52 +152,69 @@ Files that are checked:
 | --- | --- |
 | `.vscode/mcp.json` | workspace |
 | `.mcp.json` | workspace |
-| `.comp/config/cursor_config.json` | workspace |
-| `.comp/config/cline_config.json` | workspace |
-| `.comp/config/windsurf_config.json` | workspace |
+| `.cursor/mcp.json` | workspace |
+| `~/.cursor/mcp.json` | global |
+| `~/.codeium/windsurf/mcp_config.json` | global |
+| Cline `cline_mcp_settings.json` | global |
 | `~/.gemini/antigravity-ide/mcp_config.json` | global |
+| `.comp/config/*.json` (legacy) | workspace |
 
 A value is deliberately left alone when it is a relative path, when it contains a
-`${...}` variable, or when no replacement binary can be found. `.comp/config/continue_config.py`
-and `.aider.conf.yml` are not JSON and are not repaired — re-run **comP: Setup Agents**
-for those.
+`${...}` variable, or when no replacement binary can be found. The YAML configs
+(`.continue/mcpServers/comp.yaml`, `.aider.conf.yml`) are not repaired — re-run
+**comP: Setup Agents** for those.
 
 `COMP_WORKSPACE_ROOT` is refreshed in the same pass for workspace-scoped files, so
 moving a project or opening the same checkout on another machine no longer breaks
-indexing. The value inside the global config is never touched, since it belongs to
-whichever project registered it.
+indexing. The value inside a global config is never touched.
+
+### A file was reported as failed
+
+The report names the file and the reason. The usual cause is that the existing
+config is not valid JSON, in which case comP refuses to overwrite it rather than
+discard the servers it cannot read. Fix the JSON and run setup again, or merge
+the entry from the document comP opened.
+
+### Restoring a config
+
+Every rewritten file has a `<file>.bak` sibling holding the version from just
+before the last setup run. The report lists the backup path for each file.
 
 ### "MCP server not found"
 
-- Verify `comp-daemon` binary exists at the configured path
-- Check `COMP_WORKSPACE_ROOT` environment variable is set correctly
-- Restart the agent application
+- Verify the `comp-daemon` binary exists at the configured path
+- Confirm you restarted the agent after setup
+- Restart the agent application rather than just reloading, if a reload did not
+  take effect
 
 ### No tools appear in chat
 
+- Check that the agent is in **Agent** mode — several clients hide MCP tools in
+  other modes
 - Run `comP: Force Re-index` to rebuild the index
-- Check VS Code output panel (`View → Output → "comP"`) for errors
+- Check the VS Code output panel (`View → Output → "comP"`) for errors
 - Verify `.comp/index.db` exists in the workspace
 
 ### Token compression not working
 
 - Update `comp.maxContextTokens` in VS Code settings (default: 8000)
-- Run `run_pipeline` with increased `max_tokens` parameter
+- Run `run_pipeline` with an increased `max_tokens` parameter
 
 ---
 
-## Multi-Workspace Setup
+## Multi-workspace setup
 
-To use comP in multiple workspaces:
+Open each workspace in VS Code and run **comP: Setup Agents** in each. Every
+workspace gets its own `.comp/index.db` and its own project-level config with the
+right `COMP_WORKSPACE_ROOT`.
 
-1. Open each workspace in VS Code separately
-2. Run `comP: Force Re-index` in each
-3. Each workspace gets its own `.comp/index.db`
-4. In Claude Code / Cursor, set different `COMP_WORKSPACE_ROOT` values per workspace
+The machine-wide configs written for Cursor, Windsurf, Cline and Continue carry no
+`COMP_WORKSPACE_ROOT`, so a single registration follows whichever project the
+agent has open.
 
 ---
 
-## What's Next?
+## What's next?
 
 - See [CONFIGURATION.md](./CONFIGURATION.md) for VS Code settings
 - See [MCP_TOOLS.md](./MCP_TOOLS.md) for available MCP tools
