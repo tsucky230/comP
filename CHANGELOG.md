@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **`comP: Setup Agents` からコピペ作業を廃止**。従来は Cursor / Cline / Windsurf / Continue の設定を `.comp/config/` 配下に生成しており、そこは**どのツールも読まない場所**だったため、生成された文字列を手で正しい場所へ貼り付けないと設定が一切効かなかった。各エージェントが実際に読む設定ファイルへ直接マージ書き込みするよう変更（`src/mcp/AgentSetup.ts`、`src/ui/commands.ts`）
+  - Cursor → `.cursor/mcp.json` と `~/.cursor/mcp.json`
+  - Cline → VS Code globalStorage 配下の `saoudrizwan.claude-dev/settings/cline_mcp_settings.json`（拡張自身の globalStorage の兄弟ディレクトリとして解決するため、Insiders / VSCodium と OS 差を吸収する）
+  - Windsurf → `~/.codeium/windsurf/mcp_config.json`
+  - Continue → `.continue/mcpServers/comp.yaml` と `~/.continue/mcpServers/comp.yaml`（Python 辞書ではなく、現行仕様の YAML ブロックファイル形式）
+  - グローバル設定には `COMP_WORKSPACE_ROOT` を書き込まない。1プロジェクトを指す値を全プロジェクト共有の設定に焼き込むと、他プロジェクトを開いたときにこのプロジェクトをインデックスしてしまうため。デーモンは未設定時に作業ディレクトリへフォールバックする
+  - 既存ファイルは書き換え前に `<file>.bak` へ退避する。バックアップに失敗した場合は本体を書き換えない
+  - 書き込みは同一ディレクトリの一時ファイル経由の rename（アトミック）。中断しても設定が半端な状態にならない
+  - 解析できない設定ファイルは上書きせず失敗として報告する。ユーザーが設定した他の MCP サーバーを黙って捨てないため
+- **`run_pipeline` 優先ルールの `CLAUDE.md` 追記を自動化**。従来は「このプロンプトを貼り付けてください」という指示を出すだけだった。Session Continuity 節と同じ仕組みで自動追記し、マーカーで重複を防ぐ
+- **エージェント選択を複数選択に変更**。インストール済みのエージェントを検出して初期選択にする。検出は初期選択のみに使い、未検出でも一覧から外さない
+- **設定結果を出力パネル「comP Setup」に表示**。書き込んだファイル・スコープ・バックアップ先・失敗理由と、エージェントごとの再起動手順を出す。ホームディレクトリや VS Code の globalStorage へも書き込むため、何がどこに変わったかを確認する手段が他にないため
+- コピペ用の文字列は**書き込みに失敗した項目についてのみ**提示する（権限エラーや JSON 破損で自動化が止まったときにユーザーが詰まないようにするため）
+
+### Fixed
+
+- **`claude mcp add` の生成コマンドが 2 箇所間違っていた**問題を修正（`src/mcp/AgentSetup.ts`）
+  - `--scope user` が無く、説明文は「ユーザーレベルで登録」と書いてあるのに実際は `local` スコープに登録されていた
+  - `--` セパレータが無く、デーモンのパスが CLI の位置引数として解釈されていた
+- Claude Code のユーザースコープ登録を拡張から実行できるようにした。stdin を閉じ、15秒のタイムアウトと `windowsHide` を付けて起動する（CLI が初回同意や再ログインのプロンプトで待ち状態に入っても拡張ホストがハングしないようにするため）
+- **Windows で `claude` CLI をまったく起動できなかった問題を修正**。npm 版の Claude Code は `claude.cmd` であり、`child_process.execFile` は Windows で `.cmd` を解決できず ENOENT になる（Node の CVE-2024-27980 対応が入ったバージョンでは EINVAL）。ネイティブの `.exe` を併せて入れていない環境では CLI 連携が常に失敗していた。`spawn` + `shell`（Windows のみ）へ変更
+  - `shell: true` は引数をエスケープせず連結する（Node DEP0190）ため、コマンドラインは自前でクォートして組み立てる。`C:\Users\John Smith\` のように空白を含むパスが途中で切れないようにするため
+  - daemon のパスに cmd.exe のメタ文字（`" & | < > ^ %`）が含まれる場合は自動登録を見送り、コマンド文字列の提示に切り替える
+- `repairStaleConfigs()` の対象に新しい設定パスを追加。旧 `.comp/config/*.json` も後方互換のため残す
+
+### Docs
+
+- `docs/user/MCP_SETUP.md` を全面改稿。エージェントごとの再起動・ウィンドウリロード手順と確認方法を追加
+
+---
+
 ## [0.9.4] - 2026-07-30
 
 ### Fixed

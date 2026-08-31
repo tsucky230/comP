@@ -40,28 +40,21 @@ For agents running inside VS Code (Copilot, Cline), configure MCP servers in `.v
 
 External agents use their own MCP configuration files. Run:
 
-```
+```text
 Ctrl+Shift+P → "comP: Setup Agents"
 ```
 
-This generates agent-specific configs in `.comp/config/`:
-
-- `claude_desktop_config.json` (Claude Code)
-- `cursor_config.json` (Cursor)
-- `cline_config.json` (Cline)
-- `antigravity-settings.json` (Antigravity)
-
-Copy these configs to each agent's configuration directory (see [docs/user/MCP_SETUP.md](./MCP_SETUP.md) for per-agent paths).
+comP writes itself into each agent's real config file and merges with any MCP
+servers already listed there. Nothing needs to be copied by hand. See
+[MCP_SETUP.md](./MCP_SETUP.md) for the full path table, the backup behaviour, and
+the restart step each agent needs afterwards.
 
 ### Using Multiple Agents in One Workspace
 
-You can use Claude Code + Cursor + Copilot simultaneously:
-
-1. **Setup Claude Code**: Copy `claude_desktop_config.json` to `~/.claude/claude_desktop_config.json`
-2. **Setup Cursor**: Copy `cursor_config.json` to `~/.cursor/mcp.json` or `.cursor/mcp.json`
-3. **Setup Copilot**: Already configured in `.vscode/mcp.json` (automatic)
-
-All three agents will use the same `.comp/index.db` for shared indexing.
+You can use Claude Code + Cursor + Copilot simultaneously: select all of them in
+**comP: Setup Agents**, then restart each one. They share the same
+`.comp/index.db`, so the workspace is indexed once regardless of how many agents
+read it.
 
 ---
 
@@ -118,7 +111,10 @@ Relative paths are resolved from the workspace root.
 
 When you run `comP: Setup Agents`, comP automatically creates or updates local constitution files
 (`.claude/CLAUDE.md`, `CLAUDE.md`, and agent-specific files like `.github/copilot-instructions.md`)
-with **Session Continuity** instructions that prompt the LLM to call `session_recall()` when resuming work.
+with the **comP MCP Tool Usage** rules (call `run_pipeline` first) and the
+**Session Continuity** instructions that prompt the LLM to call `session_recall()`
+when resuming work. Each section is tracked by its own marker, so a repeat run
+never appends a second copy and never overwrites your own edits.
 
 To **disable** this auto-generation (if you prefer to manage constitution files manually),
 add this to `.comp/config.json`:
@@ -133,8 +129,9 @@ add this to `.comp/config.json`:
 | --- | --- | --- | --- |
 | `autoGenerateConstitution` | boolean | `true` | When `true`, Setup Agents auto-creates/updates CLAUDE.md files with session_recall instructions. When `false`, skips auto-generation (manual control). |
 
-**Note**: Setting this to `false` does NOT prevent MCP configuration files (e.g., `claude_desktop_config.json`)
-from being generated — only the LLM instruction files are affected.
+**Note**: Setting this to `false` does NOT prevent the MCP configuration files
+(`.mcp.json`, `.cursor/mcp.json`, and the rest) from being written — only the LLM
+instruction files are affected.
 
 ---
 

@@ -11,7 +11,12 @@ import * as fs from "fs";
 import * as path from "path";
 import { DaemonManager } from "../daemon/DaemonManager";
 import { StatusBar } from "./StatusBar";
-import { AgentSetupManager } from "../mcp/AgentSetup";
+import {
+  AgentSetupManager,
+  GenerateConfigResult,
+  ManualFallback,
+  UserScopeResult,
+} from "../mcp/AgentSetup";
 
 export function registerCommands(
   context: vscode.ExtensionContext,
@@ -22,59 +27,82 @@ export function registerCommands(
 ): void {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ".";
   // _daemonManager is unused in AgentSetupManager (reserved for future expansion)
-  const agentSetup = new AgentSetupManager(null as unknown as DaemonManager, workspaceRoot, context.extensionPath);
+  const agentSetup = new AgentSetupManager(
+    null as unknown as DaemonManager,
+    workspaceRoot,
+    context.extensionPath,
+    { globalStorageDir: context.globalStorageUri?.fsPath }
+  );
+
+  // WHY a channel rather than a notification: setup writes outside the
+  // workspace — into the home directory and VS Code's global storage — and the
+  // list of touched files plus their backups is the only record the user gets.
+  let setupChannel: vscode.OutputChannel | undefined;
+  const reportChannel = (): vscode.OutputChannel => {
+    if (!setupChannel) {
+      setupChannel = vscode.window.createOutputChannel("comP Setup");
+      context.subscriptions.push(setupChannel);
+    }
+    return setupChannel;
+  };
 
   // Command 1: comp.setupAgents
-  // Setup MCP for AI agents (Claude Code, Cursor, Cline, etc.)
+  // Write comP into every config file the chosen agents actually read
   context.subscriptions.push(
     vscode.commands.registerCommand("comp.setupAgents", async () => {
-      const agents = ["Claude Code", "Cursor", "Cline", "Windsurf", "Continue", "Antigravity", "GitHub Copilot", "Aider"];
-      const selected = await vscode.window.showQuickPick(agents, {
-        placeHolder: "Select an AI agent to configure",
-      });
+      const detected = agentSetup.detectInstalledAgents();
+      // Detection only preselects: a false negative must never hide an agent
+      // the user really has, so every supported agent stays on the list.
+      const picked = await vscode.window.showQuickPick(
+        AgentSetupManager.AGENTS.map((name) => ({
+          label: name,
+          description: detected.includes(name) ? "検出済み" : "",
+          picked: detected.includes(name),
+        })),
+        {
+          canPickMany: true,
+          placeHolder: "comP を設定するエージェントを選んでください（検出済みは選択済み）",
+        }
+      );
 
-      if (!selected) return;
+      if (!picked || picked.length === 0) return;
 
       try {
-        const result = await agentSetup.generateConfig(selected);
-
-        if (result.success) {
-          let mdContent = `# comP MCP Setup for ${selected}\n\n`;
-          
-          if (result.llmPrompt || result.command) {
-            mdContent += `## 次の手順 (Next Steps)\n\n`;
-            if (result.llmPrompt) {
-              mdContent += `### LLM に設定を依頼する\n以下のプロンプトをコピーして、エージェントのチャット画面に貼り付けてください。\n\n\`\`\`text\n${result.llmPrompt}\n\`\`\`\n\n`;
-            }
-            if (result.command) {
-              mdContent += `### ターミナルで設定する\n以下のコマンドをご自身のターミナルで実行してください。\n\n\`\`\`bash\n${result.command}\n\`\`\`\n\n`;
-            }
-          } else {
-            mdContent += `設定は自動的に反映されました。\n\n`;
-          }
-
-          mdContent += `### 設定ファイルパス\n設定ファイルは以下の場所に生成されました:\n\`\`\`text\n${result.configPath}\n\`\`\`\n`;
-
-          if (result.constitutionGuide) {
-            const { llmInstruction } = result.constitutionGuide;
-            mdContent += `\n---\n\n## comP を確実に使わせるための設定（推奨）\n\n`;
-            mdContent += `以下のプロンプトをそのままエージェントのチャットに貼り付けてください。\n`;
-            mdContent += `エージェントが設定ファイルへの追記を自動で行います。\n\n`;
-            mdContent += `\`\`\`text\n${llmInstruction}\n\`\`\`\n`;
-          }
-
-          const tempDir = path.join(workspaceRoot, ".comp");
-          if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true });
-          }
-          const tempFile = path.join(tempDir, `setup-${Date.now()}.md`);
-          fs.writeFileSync(tempFile, mdContent, "utf-8");
-          const doc = await vscode.workspace.openTextDocument(tempFile);
-          await vscode.window.showTextDocument(doc, { preview: false });
-          vscode.window.showInformationMessage(`${selected} 向けの設定を生成しました。開かれたタブの手順に従ってください。`);
-        } else {
-          vscode.window.showErrorMessage(result.message);
+        const results: { agent: string; result: GenerateConfigResult }[] = [];
+        for (const item of picked) {
+          results.push({ agent: item.label, result: await agentSetup.generateConfig(item.label) });
         }
+
+        let userScope: UserScopeResult | undefined;
+        if (picked.some((item) => item.label === "Claude Code")) {
+          const answer = await vscode.window.showInformationMessage(
+            "Claude Code に、全プロジェクト共通（ユーザースコープ）でも comP を登録しますか？",
+            "登録する",
+            "今はしない"
+          );
+          if (answer === "登録する") {
+            userScope = await agentSetup.registerClaudeCodeUserScope();
+          }
+        }
+
+        const channel = reportChannel();
+        channel.clear();
+        channel.appendLine(renderSetupReport(results, userScope));
+        channel.show(true);
+
+        const failures = results.flatMap((entry) =>
+          (entry.result.manualFallback ?? []).map((fallback) => ({ agent: entry.agent, fallback }))
+        );
+        if (failures.length > 0) {
+          await openManualFallback(workspaceRoot, failures);
+        }
+
+        const configured = results.filter((entry) => entry.result.success).length;
+        vscode.window.showInformationMessage(
+          failures.length === 0
+            ? `${configured} 件のエージェントを設定しました。エージェントを再起動すると使えます（手順は出力パネルの「comP Setup」）。`
+            : `${configured} 件設定しました。${failures.length} 件は手動設定が必要です。開いたタブを確認してください。`
+        );
       } catch (error) {
         vscode.window.showErrorMessage(
           `Failed to setup MCP: ${error instanceof Error ? error.message : String(error)}`
@@ -310,4 +338,112 @@ export function registerCommands(
       }
     })
   );
+}
+
+/**
+ * The setup report written to the "comP Setup" output channel.
+ *
+ * Every touched path is listed with its scope and its backup, because a setup
+ * run writes into the home directory and VS Code's global storage as well as
+ * the workspace — files the user would otherwise have no way to find or undo.
+ * The restart instructions are part of the report rather than a notification:
+ * none of these agents re-read their config while running, so the run is not
+ * finished until the user acts on them.
+ */
+function renderSetupReport(
+  results: { agent: string; result: GenerateConfigResult }[],
+  userScope?: UserScopeResult
+): string {
+  const lines: string[] = [];
+
+  for (const { agent, result } of results) {
+    lines.push(`=== ${agent} ===`);
+
+    if (result.writes.length === 0) {
+      lines.push(`  [FAIL] ${result.message}`);
+    }
+    for (const write of result.writes) {
+      const mark =
+        write.status === "written" ? "OK  " : write.status === "skipped" ? "SKIP" : "FAIL";
+      const scope = write.scope === "global" ? "  (全プロジェクト共通)" : "";
+      lines.push(`  [${mark}] ${write.path}${scope}`);
+      if (write.backupPath) {
+        lines.push(`         バックアップ: ${write.backupPath}`);
+      }
+      if (write.reason) {
+        lines.push(`         理由: ${write.reason}`);
+      }
+    }
+    for (const file of result.constitutionFiles) {
+      lines.push(`  [RULE] ${file} に comP の利用ルールを追記しました`);
+    }
+    if (result.restartHint) {
+      lines.push("  --- 反映するには ---");
+      for (const line of result.restartHint.split("\n")) {
+        lines.push(`  ${line}`);
+      }
+    }
+    lines.push("");
+  }
+
+  if (userScope) {
+    lines.push("=== Claude Code (ユーザースコープ) ===");
+    if (userScope.registered) {
+      lines.push("  [OK  ] claude mcp add --scope user を実行しました");
+    } else {
+      lines.push(`  [FAIL] ${userScope.reason ?? "登録できませんでした"}`);
+      lines.push("  次のコマンドをターミナルで実行してください:");
+      lines.push(`    ${userScope.command}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Open a document holding the entries that could not be written.
+ *
+ * This is the one path where the user still copies something by hand, so it is
+ * shown only for the files that actually failed — a successful run opens
+ * nothing.
+ */
+async function openManualFallback(
+  workspaceRoot: string,
+  failures: { agent: string; fallback: ManualFallback }[]
+): Promise<void> {
+  const lines = [
+    "# comP: 手動設定が必要な項目",
+    "",
+    "自動書き込みに失敗したファイルです。既存の内容を確認したうえで、",
+    "以下の設定を該当ファイルへマージしてください。",
+    "",
+  ];
+
+  for (const { agent, fallback } of failures) {
+    lines.push(`## ${agent}`);
+    lines.push("");
+    lines.push("対象ファイル:");
+    lines.push("");
+    lines.push("```text");
+    lines.push(fallback.path);
+    lines.push("```");
+    lines.push("");
+    lines.push("追記する内容:");
+    lines.push("");
+    lines.push("```");
+    lines.push(fallback.content.trimEnd());
+    lines.push("```");
+    lines.push("");
+  }
+
+  const dir = path.join(workspaceRoot, ".comp");
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const file = path.join(dir, `setup-manual-${Date.now()}.md`);
+  fs.writeFileSync(file, lines.join("\n"), "utf-8");
+
+  const doc = await vscode.workspace.openTextDocument(file);
+  await vscode.window.showTextDocument(doc, { preview: false });
 }

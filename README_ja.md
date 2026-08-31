@@ -109,15 +109,25 @@ VS Code で作業するプロジェクトを開いてください（Git リポ�
 Ctrl+Shift+P → "comP: Setup Agents"
 ```
 
-| エージェント | やること |
+一覧からエージェントを選ぶだけです（インストール済みのものは選択済み）。
+comP が各ツールの実際の設定ファイルへ直接書き込み、既存の MCP サーバー設定は
+そのまま残します。コピペは不要です。
+
+| エージェント | 書き込み先 |
 | --- | --- |
-| **Claude Code** | 生成された `claude mcp add` コマンドを端末にコピー&実行 |
-| **GitHub Copilot** | `.vscode/mcp.json` に自動書き込み |
-| **Cursor** | 生成された設定を `~/.cursor/mcp.json` にコピー |
-| **Cline** | Cline の MCP 設定にペースト |
-| **Antigravity / Aider** | 自動書き込み |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` にコピー |
-| **Continue.dev** | `~/.continue/config.py` に追加 |
+| **Claude Code** | `.mcp.json`（任意で `claude mcp add --scope user` も実行） |
+| **GitHub Copilot** | `.vscode/mcp.json` |
+| **Cursor** | `.cursor/mcp.json` と `~/.cursor/mcp.json` |
+| **Cline** | VS Code globalStorage 配下の MCP 設定 |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
+| **Continue.dev** | `.continue/mcpServers/comp.yaml`（プロジェクトとホーム） |
+| **Antigravity** | `~/.gemini/antigravity-ide/mcp_config.json` |
+| **Aider** | `.aider.conf.yml` |
+
+**そのあとエージェントを再起動してください。** どのツールも起動中に MCP 設定を
+読み直さないためです。VS Code 系エディタなら、コマンドパレット →
+**Developer: Reload Window** で十分です。エージェントごとの手順は設定後に
+出力パネル「comP Setup」へ表示されます。
 
 詳細: [docs/user/MCP_SETUP.md](docs/user/MCP_SETUP.md)
 

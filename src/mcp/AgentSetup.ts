@@ -1,38 +1,115 @@
-// AgentSetup - Generate MCP configuration for AI agents
+// AgentSetup - Write MCP configuration into the files each AI agent actually reads
 //
 // Responsibilities:
-// 1. Generate config files for Claude Code, Cursor, Cline, Windsurf
-// 2. Write MCP_SERVERS env var or config.json based on agent type
-// 3. Provide UI for selecting agent and copying config
+// 1. Write comP into every config file the selected agent reads, merging with
+//    entries that are already there
+// 2. Append the comP usage rules to the agent's instruction file
+// 3. Report per-file outcomes so a partial failure is visible, and hand back a
+//    manual fallback only for the files that could not be written
 
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { spawn } from "child_process";
 import { DaemonManager } from "../daemon/DaemonManager";
 
-interface AgentConfig {
-  name: string;
-  configPath: string;
-  envVar?: string;
-  template: (daemonPath: string) => string;
-  command?: (daemonPath: string) => string;
-  llmPrompt?: (daemonPath: string, configPath: string) => string;
-  constitutionGuide?: ConstitutionGuide;
+/**
+ * How comP has to be encoded into one particular config file.
+ *
+ * - `json`          — merge a comp server object at the given key chain,
+ *                     preserving every other server already configured
+ * - `continue-block`— a standalone Continue block file that comP owns entirely,
+ *                     so it is rendered whole rather than merged
+ * - `aider`         — YAML appended to .aider.conf.yml
+ */
+type TargetFormat =
+  | { kind: "json"; serverKeys: string[] }
+  | { kind: "continue-block" }
+  | { kind: "aider" };
+
+/**
+ * One config file comP writes, and the rules that apply to it.
+ *
+ * WHY scope matters: a `workspace` file describes this project only, so it
+ * carries COMP_WORKSPACE_ROOT. A `global` file is shared by every project on the
+ * machine — writing this workspace's root into it would make every other project
+ * index this one. Global entries omit the variable and let the daemon fall back
+ * to its working directory, which the MCP client sets per project.
+ */
+interface WriteTarget {
+  path: string;
+  scope: "workspace" | "global";
+  format: TargetFormat;
 }
 
-export interface ConstitutionGuide {
-  filePath: string;
-  snippet: string;
-  llmInstruction: string;
+/** What happened to one config file during a setup run. */
+export interface WriteOutcome {
+  path: string;
+  scope: "workspace" | "global";
+  /**
+   * - `written` — the file now contains comP
+   * - `skipped` — the target does not apply here (e.g. Cline without VS Code global storage)
+   * - `failed`  — the file was left untouched; `reason` says why
+   */
+  status: "written" | "skipped" | "failed";
+  /** Path of the `.bak` copy taken before an existing file was rewritten */
+  backupPath?: string;
+  reason?: string;
+}
+
+/**
+ * Content the user has to place by hand.
+ *
+ * Only produced for targets that failed. On a fully successful run this is
+ * absent — the whole point of the feature is that nothing gets copied by hand.
+ */
+export interface ManualFallback {
+  path: string;
+  content: string;
 }
 
 export interface GenerateConfigResult {
+  /** First successfully written path, kept so existing callers keep working */
   configPath: string;
   success: boolean;
   message: string;
+  /** Per-file outcome, in the order the targets were attempted */
+  writes: WriteOutcome[];
+  /** Instruction files the comP usage rules were appended to */
+  constitutionFiles: string[];
+  /** What the user must do for the agent to pick the config up */
+  restartHint: string;
+  /** `claude mcp add` line for user-scope registration (Claude Code only) */
   command?: string;
-  llmPrompt?: string;
-  constitutionGuide?: ConstitutionGuide;
+  /** Present only when at least one target failed */
+  manualFallback?: ManualFallback[];
+}
+
+/** Runs an external command. Injectable so tests never spawn a real process. */
+export type CommandRunner = (
+  file: string,
+  args: string[]
+) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+
+export interface UserScopeResult {
+  registered: boolean;
+  /** The exact command, shown to the user when we could not run it ourselves */
+  command: string;
+  reason?: string;
+}
+
+/**
+ * Injection points that must not read the real machine during tests.
+ *
+ * `homeDir` in particular: several agents keep their only config under the home
+ * directory, so without an override a test run would rewrite the developer's own
+ * Cursor and Windsurf settings.
+ */
+export interface AgentSetupOptions {
+  /** VS Code's per-extension global storage dir; its parent locates Cline's settings */
+  globalStorageDir?: string;
+  /** Overrides os.homedir() */
+  homeDir?: string;
 }
 
 /**
@@ -93,28 +170,42 @@ function readObjectPath(doc: unknown, keys: string[]): Record<string, unknown> |
 }
 
 /**
- * AgentSetup - Generate MCP configuration files for various AI agents
+ * Writes comP into the config files AI coding agents actually read.
  *
- * # Supported Agents
- * - Claude Code (claude_desktop_config.json)
- * - Cursor (.cursor/rules)
- * - Cline (.cline/config.json)
- * - Windsurf (.windsurf/config.json)
- * - GitHub Copilot (N/A - requires different approach)
- * - Continue.dev (.continue/config.py)
+ * Each agent gets its real config location, merged rather than overwritten, so
+ * a completed setup needs nothing pasted anywhere — only a restart of the agent,
+ * because none of these tools re-read their config while running.
  *
- * # MCP Server Setup
- * - stdio: Spawn daemon as an MCP server subprocess
- * - Init parameters: workspace_root
+ * | Agent          | Workspace                        | Global                                      |
+ * | -------------- | -------------------------------- | ------------------------------------------- |
+ * | Claude Code    | `.mcp.json`                      | `claude mcp add --scope user` (CLI)         |
+ * | Cursor         | `.cursor/mcp.json`               | `~/.cursor/mcp.json`                        |
+ * | Cline          | —                                | VS Code globalStorage/saoudrizwan.claude-dev |
+ * | Windsurf       | —                                | `~/.codeium/windsurf/mcp_config.json`       |
+ * | Continue       | `.continue/mcpServers/comp.yaml` | `~/.continue/mcpServers/comp.yaml`          |
+ * | Antigravity    | —                                | `~/.gemini/antigravity-ide/mcp_config.json` |
+ * | GitHub Copilot | `.vscode/mcp.json`               | —                                           |
+ * | Aider          | `.aider.conf.yml`                | —                                           |
+ *
+ * All servers are registered as stdio: the MCP client spawns the daemon binary.
  */
 export class AgentSetupManager {
   private workspaceRoot: string;
   private extensionPath: string | undefined;
+  private globalStorageDir: string | undefined;
+  private homeDir: string;
 
-  constructor(_daemonManager: DaemonManager, workspaceRoot: string, extensionPath?: string) {
+  constructor(
+    _daemonManager: DaemonManager,
+    workspaceRoot: string,
+    extensionPath?: string,
+    options?: AgentSetupOptions
+  ) {
     // daemonManager reserved for future use (e.g., querying indexing status during config generation)
     this.workspaceRoot = workspaceRoot;
     this.extensionPath = extensionPath;
+    this.globalStorageDir = options?.globalStorageDir;
+    this.homeDir = options?.homeDir ?? os.homedir();
   }
 
   private readCompConfig(): { autoGenerateConstitution?: boolean } {
@@ -153,20 +244,6 @@ export class AgentSetupManager {
     ].join("\n");
   }
 
-  private buildConstitutionGuide(filePath: string): ConstitutionGuide {
-    const snippet = this.compRuleSnippet();
-    const llmInstruction = [
-      `\`${filePath}\` にプロジェクトルート基準で以下を追記してください。`,
-      `ファイルが存在しない場合は新規作成し、既存の場合は末尾に追記してください。`,
-      `すでに "comP MCP Tool Usage" というセクションがある場合は追記不要です。`,
-      ``,
-      "```",
-      snippet,
-      "```",
-    ].join("\n");
-    return { filePath, snippet, llmInstruction };
-  }
-
   private sessionContinuitySnippet(): string {
     return [
       "## Session Continuity (デーモン再起動・セッション切れ対応)",
@@ -186,125 +263,169 @@ export class AgentSetupManager {
     ].join("\n");
   }
 
-  private ensureSessionContinuityInstructions(filePath: string): void {
+  /**
+   * Append a snippet to an instruction file unless it is already there.
+   *
+   * `marker` is the text that proves the snippet is present; it is checked
+   * instead of the whole snippet so that a user who reworded the section keeps
+   * their edit rather than getting a second copy appended on every setup run.
+   *
+   * Best-effort by design: a missing instruction file degrades how well the
+   * agent uses comP, but it must not fail the MCP registration that already
+   * succeeded. Returns true when the file was created or extended.
+   */
+  private ensureSnippet(filePath: string, marker: string, snippet: string): boolean {
     try {
+      // `.cursor/rules` is a file in older Cursor versions and a directory of
+      // .mdc rules in newer ones. Writing a file over the directory would
+      // destroy every rule in it, so drop a rule file inside instead.
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+        filePath = path.join(filePath, "comp.md");
+      }
+
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      const snippet = this.sessionContinuitySnippet();
-      let content = "";
-
-      // Read existing file if it exists
       if (fs.existsSync(filePath)) {
-        content = fs.readFileSync(filePath, "utf-8");
-        // Skip if Session Continuity section already exists
-        if (content.includes("Session Continuity")) {
-          return;
+        const content = fs.readFileSync(filePath, "utf-8");
+        if (content.includes(marker)) {
+          return false;
         }
-        // Append to existing content
-        content = content.trimEnd() + "\n\n---\n\n" + snippet;
-      } else {
-        // Create new file with minimal header (only for .claude/CLAUDE.md)
-        if (filePath.endsWith(".claude/CLAUDE.md")) {
-          content = [
-            "# comP — Context-Aware AI Coding",
-            "",
-            "## MANDATORY: use comP MCP pipeline — do NOT grep or glob the codebase",
-            "",
-            "For every task — bug fixes, features, refactors, debugging:",
-            "**call `run_pipeline` FIRST**. It searches the indexed codebase and returns",
-            "the most relevant files and symbols for your task.",
-            "",
-            "---",
-            "",
-            snippet,
-          ].join("\n");
-        } else {
-          // For CLAUDE.md (project root), just the snippet
-          content = snippet;
-        }
+        this.atomicWrite(filePath, content.trimEnd() + "\n\n---\n\n" + snippet + "\n");
+        return true;
       }
 
-      fs.writeFileSync(filePath, content, "utf-8");
+      this.atomicWrite(filePath, snippet + "\n");
+      return true;
     } catch (error) {
-      // Best-effort: log but don't fail the whole operation
-      console.warn(`Warning: failed to ensure session continuity in ${filePath}: ${error}`);
+      console.warn(`Warning: failed to write ${filePath}: ${error}`);
+      return false;
     }
   }
 
-  getAgentConfig(agentName: string): AgentConfig | null {
+  /**
+   * Write both comP snippets into one agent instruction file.
+   *
+   * The usage rules and the session-continuity notes are tracked by separate
+   * markers so a file that predates one of them still receives the other.
+   */
+  private ensureInstructions(filePath: string): boolean {
+    const rules = this.ensureSnippet(filePath, "comP MCP Tool Usage", this.compRuleSnippet());
+    const continuity = this.ensureSnippet(
+      filePath,
+      "Session Continuity",
+      this.sessionContinuitySnippet()
+    );
+    return rules || continuity;
+  }
+
+  /** Agent names the setup flow offers, in display order. */
+  static readonly AGENTS = [
+    "Claude Code",
+    "Cursor",
+    "Cline",
+    "Windsurf",
+    "Continue",
+    "Antigravity",
+    "GitHub Copilot",
+    "Aider",
+  ];
+
+  /**
+   * Cline keeps its MCP list inside VS Code's global storage, so the path
+   * depends on which VS Code flavour is running.
+   *
+   * WHY derive it from our own globalStorage directory instead of building it
+   * from the OS: the sibling-directory form covers Insiders, VSCodium and every
+   * platform's application-data location without branching on any of them.
+   * Returns null when the extension host did not give us one — a path guessed
+   * from os.homedir() would be wrong more often than right.
+   */
+  private clineSettingsPath(): string | null {
+    if (!this.globalStorageDir) {
+      return null;
+    }
+    return path.join(
+      path.dirname(this.globalStorageDir),
+      "saoudrizwan.claude-dev",
+      "settings",
+      "cline_mcp_settings.json"
+    );
+  }
+
+  /**
+   * Every config file comP writes for one agent, in the order they are attempted.
+   *
+   * Returns null for an agent we do not support, and an empty array for one we
+   * support but whose config location could not be resolved on this machine —
+   * the two need different messages, so they must not collapse into one value.
+   *
+   * `serverKeys` here is the chain down to the *container* of server entries;
+   * `comp` is added inside it. That differs from repairTargets(), which points
+   * at the comp entry itself, because the two walk the document for different
+   * reasons.
+   */
+  private targetsFor(agentName: string): WriteTarget[] | null {
+    const ws = (...segments: string[]) => path.join(this.workspaceRoot, ...segments);
+    const home = (...segments: string[]) => path.join(this.homeDir, ...segments);
+    const json = (serverKeys: string[]): TargetFormat => ({ kind: "json", serverKeys });
 
     switch (agentName) {
       case "Claude Code":
-        return {
-          name: "Claude Code",
-          configPath: this.claudeDesktopConfigPath(),
-          template: (path) => this.generateClaudeCodeConfig(path),
-          command: (path) => this.generateClaudeCodeCommand(path),
-          llmPrompt: (path) => this.generateClaudeCodeLLMPrompt(path),
-          constitutionGuide: this.buildConstitutionGuide("CLAUDE.md"),
-        };
+        // Only the project file is written here; user scope goes through the
+        // official CLI, which owns ~/.claude.json and its format.
+        return [{ path: ws(".mcp.json"), scope: "workspace", format: json(["mcpServers"]) }];
 
       case "Cursor":
-        return {
-          name: "Cursor",
-          configPath: this.cursorConfigPath(),
-          template: (path) => this.generateCursorConfig(path),
-          llmPrompt: (_, configPath) => `以下のMCPサーバー設定ファイルが生成されました。このプロジェクトで comP を MCP サーバーとして利用できるように、あなたの設定を更新してください。\n設定ファイルパス: ${configPath}`,
-          constitutionGuide: this.buildConstitutionGuide(".cursor/rules"),
-        };
+        return [
+          { path: ws(".cursor", "mcp.json"), scope: "workspace", format: json(["mcpServers"]) },
+          { path: home(".cursor", "mcp.json"), scope: "global", format: json(["mcpServers"]) },
+        ];
 
-      case "Cline":
-        return {
-          name: "Cline",
-          configPath: this.clineConfigPath(),
-          template: (path) => this.generateClineConfig(path),
-          llmPrompt: (_, configPath) => `以下のMCPサーバー設定ファイルが生成されました。このプロジェクトで comP を MCP サーバーとして利用できるように、あなたの設定を更新してください。\n設定ファイルパス: ${configPath}`,
-          constitutionGuide: this.buildConstitutionGuide(".clinerules"),
-        };
+      case "Cline": {
+        const settings = this.clineSettingsPath();
+        return settings ? [{ path: settings, scope: "global", format: json(["mcpServers"]) }] : [];
+      }
 
       case "Windsurf":
-        return {
-          name: "Windsurf",
-          configPath: this.windsurfConfigPath(),
-          template: (path) => this.generateWindsurfConfig(path),
-          llmPrompt: (_, configPath) => `以下のMCPサーバー設定ファイルが生成されました。このプロジェクトで comP を MCP サーバーとして利用できるように、あなたの設定を更新してください。\n設定ファイルパス: ${configPath}`,
-          constitutionGuide: this.buildConstitutionGuide(".windsurfrules"),
-        };
+        // Windsurf reads one global file; it has no project-level equivalent.
+        return [
+          {
+            path: home(".codeium", "windsurf", "mcp_config.json"),
+            scope: "global",
+            format: json(["mcpServers"]),
+          },
+        ];
 
       case "Continue":
-        return {
-          name: "Continue",
-          configPath: this.continueConfigPath(),
-          template: (path) => this.generateContinueConfig(path),
-          llmPrompt: (_, configPath) => `以下のMCPサーバー設定ファイルが生成されました。このプロジェクトで comP を MCP サーバーとして利用できるように、あなたの設定を更新してください。\n設定ファイルパス: ${configPath}`
-        };
+        // Continue scans both directories for standalone block files, so comP
+        // owns one file in each and never has to merge into the user's YAML.
+        return [
+          {
+            path: ws(".continue", "mcpServers", "comp.yaml"),
+            scope: "workspace",
+            format: { kind: "continue-block" },
+          },
+          {
+            path: home(".continue", "mcpServers", "comp.yaml"),
+            scope: "global",
+            format: { kind: "continue-block" },
+          },
+        ];
 
       case "Antigravity":
-        return {
-          name: "Antigravity",
-          configPath: this.antigravityConfigPath(),
-          template: (path) => this.generateAntigravityConfig(path),
-        };
+        return [
+          { path: this.antigravityConfigPath(), scope: "global", format: json(["mcpServers"]) },
+        ];
 
       case "GitHub Copilot":
-        return {
-          name: "GitHub Copilot",
-          configPath: this.copilotConfigPath(),
-          template: (path) => this.generateCopilotConfig(path),
-          constitutionGuide: this.buildConstitutionGuide(".github/copilot-instructions.md"),
-        };
+        // VS Code's own MCP file uses `servers`, not `mcpServers`.
+        return [{ path: ws(".vscode", "mcp.json"), scope: "workspace", format: json(["servers"]) }];
 
       case "Aider":
-        return {
-          name: "Aider",
-          configPath: this.aiderConfigPath(),
-          template: (path) => this.generateAiderConfig(path),
-          llmPrompt: (_, configPath) => `以下のMCPサーバー設定ファイルが生成されました。このプロジェクトで comP を MCP サーバーとして利用できるように、あなたの設定を更新してください。\n設定ファイルパス: ${configPath}`,
-          constitutionGuide: this.buildConstitutionGuide("CONVENTIONS.md"),
-        };
+        return [{ path: ws(".aider.conf.yml"), scope: "workspace", format: { kind: "aider" } }];
 
       default:
         return null;
@@ -312,86 +433,505 @@ export class AgentSetupManager {
   }
 
   /**
-   * Generate and write configuration for agent
+   * Instruction files that should carry the comP usage rules for this agent.
    *
-   * # Inputs
-   * - agentName: The name of the agent
+   * CLAUDE.md and .claude/CLAUDE.md are written for every agent, not just
+   * Claude Code: a repository is rarely worked on by one tool only, and the
+   * rules are inert for an agent that does not read them.
+   */
+  private instructionFilesFor(agentName: string): string[] {
+    const ws = (...segments: string[]) => path.join(this.workspaceRoot, ...segments);
+    const shared = [ws("CLAUDE.md"), ws(".claude", "CLAUDE.md")];
+
+    switch (agentName) {
+      case "Cursor":
+        return [...shared, ws(".cursor", "rules")];
+      case "Cline":
+        return [...shared, ws(".clinerules")];
+      case "Windsurf":
+        return [...shared, ws(".windsurfrules")];
+      case "GitHub Copilot":
+        return [...shared, ws(".github", "copilot-instructions.md")];
+      case "Aider":
+        return [...shared, ws("CONVENTIONS.md")];
+      default:
+        return shared;
+    }
+  }
+
+  /** What the user has to do before the agent sees the new config. */
+  private static restartHint(agentName: string): string {
+    switch (agentName) {
+      case "Claude Code":
+        return [
+          "Claude Code を再起動してください。",
+          "- CLI: 実行中のセッションを終了し、プロジェクトディレクトリで `claude` を起動し直す",
+          "- VS Code / JetBrains 拡張: コマンドパレット →「Developer: Reload Window」",
+          "初回起動時に「このプロジェクトの MCP サーバーを使うか」と確認されるので承認してください。",
+          "`claude mcp list` で comp が Connected になっていれば成功です。",
+        ].join("\n");
+      case "Cursor":
+        return [
+          "Cursor をリロードしてください。",
+          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+          "反映されない場合は Cursor を完全に終了して起動し直してください。",
+          "Settings → MCP に comp が有効として表示されれば成功です。",
+        ].join("\n");
+      case "Cline":
+        return [
+          "VS Code をリロードしてください。",
+          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+          "Cline のチャット画面上部の MCP アイコンから comp が有効か確認できます。",
+        ].join("\n");
+      case "Windsurf":
+        return [
+          "Windsurf をリロードしてください。",
+          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+          "- または Cascade パネル右上の MCP アイコン →「Refresh」",
+        ].join("\n");
+      case "Continue":
+        return [
+          "VS Code をリロードしてください。",
+          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+          "Continue は設定変更を自動では読み直しません。また MCP ツールは Agent モードでのみ使えます。",
+        ].join("\n");
+      case "Antigravity":
+        return "Antigravity を完全に終了して起動し直してください。";
+      case "GitHub Copilot":
+        return [
+          "VS Code をリロードしてください。",
+          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+          "Copilot Chat を Agent モードに切り替え、ツール一覧に comp が出れば成功です。",
+        ].join("\n");
+      case "Aider":
+        return [
+          "実行中の Aider を終了し、起動し直してください。",
+          "Aider の MCP 対応はバージョンによって差があります。認識されない場合は `aider --version` を確認してください。",
+        ].join("\n");
+      default:
+        return "エージェントを再起動してください。";
+    }
+  }
+
+  /** The comp server object written into every JSON-shaped MCP config. */
+  private serverEntry(daemonPath: string, scope: "workspace" | "global"): Record<string, unknown> {
+    const env: Record<string, string> = { RUST_LOG: "info" };
+    if (scope === "workspace") {
+      env.COMP_WORKSPACE_ROOT = this.workspaceRoot;
+    }
+    return { command: daemonPath, args: [], env };
+  }
+
+  /**
+   * Quote a value as a YAML single-quoted scalar.
    *
-   * # Outputs
-   * - { configPath, success, message }
+   * WHY single quotes: a Windows daemon path is full of backslashes, and YAML
+   * reads a backslash inside double quotes as an escape character, so a path
+   * like E:\dev would lose the \d. Inside single quotes every character is
+   * literal and only the quote itself needs doubling.
+   */
+  private static yamlQuote(value: string): string {
+    return "'" + value.replace(/'/g, "''") + "'";
+  }
+
+  /**
+   * Render a standalone Continue block file.
    *
-   * # Prerequisites
-   * - The user has file write permissions
+   * comP owns this file outright — Continue discovers every file under
+   * `.continue/mcpServers/` — so it is written whole. Nothing the user wrote is
+   * at risk, which is why this is the one format with no merge step.
+   */
+  private renderContinueBlock(daemonPath: string, scope: "workspace" | "global"): string {
+    const q = AgentSetupManager.yamlQuote;
+    const lines = [
+      "# comP MCP server — generated by the comP VS Code extension",
+      "name: comP",
+      "version: 0.0.1",
+      "schema: v1",
+      "mcpServers:",
+      "  - name: comp",
+      "    type: stdio",
+      `    command: ${q(daemonPath)}`,
+      "    env:",
+      `      RUST_LOG: ${q("info")}`,
+    ];
+    if (scope === "workspace") {
+      lines.push(`      COMP_WORKSPACE_ROOT: ${q(this.workspaceRoot)}`);
+    }
+    return lines.join("\n") + "\n";
+  }
+
+  /**
+   * The comp block for .aider.conf.yml.
+   *
+   * The version note stays in the generated file on purpose: Aider's MCP
+   * support differs between releases, so a user whose Aider ignores the block
+   * needs to find out why from the file itself.
+   */
+  private aiderBlock(daemonPath: string, scope: "workspace" | "global"): string {
+    const q = AgentSetupManager.yamlQuote;
+    const lines = [
+      "# comP MCP server configuration",
+      "# Generated by the comP VS Code extension.",
+      "# NOTE: Aider's MCP support varies by release. If this block is ignored,",
+      "# check `aider --version` against https://aider.chat/docs/config/aider_conf.html",
+      "mcp-servers:",
+      "  comp:",
+      `    command: ${q(daemonPath)}`,
+      "    args: []",
+      "    env:",
+      `      RUST_LOG: ${q("info")}`,
+    ];
+    if (scope === "workspace") {
+      lines.push(`      COMP_WORKSPACE_ROOT: ${q(this.workspaceRoot)}`);
+    }
+    return lines.join("\n") + "\n";
+  }
+
+  /**
+   * Merge the comp entry into an existing JSON config.
+   *
+   * Throws when the file exists but does not parse: overwriting it would
+   * silently discard every other MCP server the user configured, which is far
+   * worse than reporting that the file needs a look.
+   */
+  private mergeJsonConfig(
+    filePath: string,
+    containerKeys: string[],
+    entry: Record<string, unknown>
+  ): string {
+    let doc: Record<string, unknown> = {};
+
+    if (fs.existsSync(filePath)) {
+      const raw = fs.readFileSync(filePath, "utf-8").trim();
+      if (raw.length > 0) {
+        const parsed = JSON.parse(raw);
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("config root is not a JSON object");
+        }
+        doc = parsed as Record<string, unknown>;
+      }
+    }
+
+    let node = doc;
+    for (const key of containerKeys) {
+      const next = node[key];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) {
+        node[key] = {};
+      }
+      node = node[key] as Record<string, unknown>;
+    }
+    node["comp"] = entry;
+
+    return JSON.stringify(doc, null, 2) + "\n";
+  }
+
+  /** Append the comp block to .aider.conf.yml, preserving what is there. */
+  private renderAiderConfig(daemonPath: string, target: WriteTarget): string {
+    const block = this.aiderBlock(daemonPath, target.scope);
+
+    if (!fs.existsSync(target.path)) {
+      return block;
+    }
+    const existing = fs.readFileSync(target.path, "utf-8");
+    if (existing.includes("comP MCP server configuration")) {
+      // Already ours — rewriting the whole file would drop the user's own keys.
+      return existing;
+    }
+    if (existing.includes("mcp-servers:")) {
+      // YAML has no safe merge without a parser, and pulling in a runtime
+      // dependency for this single case is not worth it. Report it instead.
+      throw new Error("mcp-servers block already exists; merge it by hand");
+    }
+    return existing.trimEnd() + "\n\n" + block;
+  }
+
+  /** Build the file content for one target, merging with what is already there. */
+  private renderTarget(target: WriteTarget, daemonPath: string): string {
+    switch (target.format.kind) {
+      case "json":
+        return this.mergeJsonConfig(
+          target.path,
+          target.format.serverKeys,
+          this.serverEntry(daemonPath, target.scope)
+        );
+      case "continue-block":
+        return this.renderContinueBlock(daemonPath, target.scope);
+      case "aider":
+        return this.renderAiderConfig(daemonPath, target);
+    }
+  }
+
+  /**
+   * Content for a file that could not be written, rendered standalone.
+   *
+   * Deliberately ignores what is on disk: the usual reason for landing here is
+   * that the existing file could not be parsed, so there is nothing to merge
+   * into. The user pastes this next to their own entries.
+   */
+  private fallbackContent(target: WriteTarget, daemonPath: string): string {
+    switch (target.format.kind) {
+      case "json": {
+        const doc: Record<string, unknown> = {};
+        let node = doc;
+        for (const key of target.format.serverKeys) {
+          node[key] = {};
+          node = node[key] as Record<string, unknown>;
+        }
+        node["comp"] = this.serverEntry(daemonPath, target.scope);
+        return JSON.stringify(doc, null, 2) + "\n";
+      }
+      case "continue-block":
+        return this.renderContinueBlock(daemonPath, target.scope);
+      case "aider":
+        return this.aiderBlock(daemonPath, target.scope);
+    }
+  }
+
+  /**
+   * Copy a file to `<file>.bak` before it is rewritten.
+   *
+   * One generation only — this exists so the user can undo a setup run, not to
+   * keep a history. Throws on failure so the caller aborts the write: silently
+   * overwriting a global config the user cannot restore is the one outcome
+   * worth refusing outright.
+   */
+  private backupIfExists(filePath: string): string | null {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    const backupPath = filePath + ".bak";
+    fs.copyFileSync(filePath, backupPath);
+    return backupPath;
+  }
+
+  /**
+   * Write through a temp file in the same directory, then rename over the target.
+   *
+   * A rename within one filesystem is atomic, so an interrupted run leaves the
+   * previous config intact rather than a truncated file the agent would fail to
+   * parse — that would break a working setup instead of merely not improving it.
+   */
+  private atomicWrite(filePath: string, content: string): void {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const temp = path.join(dir, `.${path.basename(filePath)}.comp-${process.pid}.tmp`);
+    fs.writeFileSync(temp, content, "utf-8");
+    try {
+      fs.renameSync(temp, filePath);
+    } catch (error) {
+      try {
+        fs.unlinkSync(temp);
+      } catch {
+        // Temp file already gone; the rename error below is what matters.
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Render, back up, then write one config file.
+   *
+   * Never throws: one unwritable file must not abandon the others, and the
+   * caller reports every outcome. Rendering happens first so a config that
+   * cannot be parsed leaves no stray `.bak` behind.
+   */
+  private writeTarget(target: WriteTarget, daemonPath: string): WriteOutcome {
+    const base = { path: target.path, scope: target.scope };
+
+    let content: string;
+    try {
+      content = this.renderTarget(target, daemonPath);
+    } catch (error) {
+      return { ...base, status: "failed", reason: describeError(error) };
+    }
+
+    let backupPath: string | null;
+    try {
+      backupPath = this.backupIfExists(target.path);
+    } catch (error) {
+      return { ...base, status: "failed", reason: `backup failed: ${describeError(error)}` };
+    }
+
+    try {
+      this.atomicWrite(target.path, content);
+    } catch (error) {
+      return {
+        ...base,
+        status: "failed",
+        reason: describeError(error),
+        ...(backupPath ? { backupPath } : {}),
+      };
+    }
+
+    return { ...base, status: "written", ...(backupPath ? { backupPath } : {}) };
+  }
+
+  /**
+   * Write comP into every config file the agent reads, and append the usage
+   * rules to its instruction files.
+   *
+   * Succeeds when at least one config file was written. A manual fallback is
+   * attached only for targets that failed — on a clean run the user has nothing
+   * to copy anywhere, which is the entire point of this method.
    */
   async generateConfig(agentName: string): Promise<GenerateConfigResult> {
-    const config = this.getAgentConfig(agentName);
+    const targets = this.targetsFor(agentName);
 
-    if (!config) {
+    if (targets === null) {
       return {
         configPath: "",
         success: false,
         message: `Agent ${agentName} is not supported`,
+        writes: [],
+        constitutionFiles: [],
+        restartHint: "",
       };
     }
 
-    try {
-      const daemonPath = this.getDaemonPath();
-      const configContent = config.template(daemonPath);
-      // WHY: Global configs like Antigravity return absolute paths so no join is required
-      const fullPath = path.isAbsolute(config.configPath)
-        ? config.configPath
-        : path.join(this.workspaceRoot, config.configPath);
+    const restartHint = AgentSetupManager.restartHint(agentName);
 
-      // Create directories if needed
-      const dir = path.dirname(fullPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-
-      // Write config file
-      fs.writeFileSync(fullPath, configContent, "utf-8");
-
-      const result: GenerateConfigResult = {
-        configPath: fullPath,
-        success: true,
-        message: `MCP configuration created for ${agentName}`,
-      };
-
-      if (config.command) {
-        result.command = config.command(daemonPath);
-      }
-      if (config.llmPrompt) {
-        result.llmPrompt = config.llmPrompt(daemonPath, fullPath);
-      }
-      // Check if auto-generation of constitution files is enabled (default: true)
-      const compConfig = this.readCompConfig();
-      const autoGenerateConstitution = compConfig.autoGenerateConstitution !== false;
-
-      if (autoGenerateConstitution) {
-        if (config.constitutionGuide) {
-          result.constitutionGuide = config.constitutionGuide;
-          // Also append Session Continuity to agent-specific constitution file
-          // (e.g., .github/copilot-instructions.md, .cursor/rules, etc.)
-          const constitutionPath = path.isAbsolute(config.constitutionGuide.filePath)
-            ? config.constitutionGuide.filePath
-            : path.join(this.workspaceRoot, config.constitutionGuide.filePath);
-          this.ensureSessionContinuityInstructions(constitutionPath);
-        }
-
-        // Auto-generate .claude/CLAUDE.md with session_recall instructions
-        this.ensureSessionContinuityInstructions(path.join(this.workspaceRoot, ".claude", "CLAUDE.md"));
-        // Auto-generate CLAUDE.md (project root) with session continuity
-        this.ensureSessionContinuityInstructions(path.join(this.workspaceRoot, "CLAUDE.md"));
-      }
-
-      return result;
-    } catch (error) {
+    if (targets.length === 0) {
       return {
         configPath: "",
         success: false,
-        message: `Failed to generate config: ${error instanceof Error ? error.message : String(error)}`,
+        message: `${agentName} の設定ファイルの場所を特定できませんでした。`,
+        writes: [],
+        constitutionFiles: [],
+        restartHint,
       };
     }
+
+    const daemonPath = this.getDaemonPath();
+    const attempts = targets.map((target) => ({
+      target,
+      outcome: this.writeTarget(target, daemonPath),
+    }));
+    const writes = attempts.map((a) => a.outcome);
+
+    const constitutionFiles: string[] = [];
+    if (this.readCompConfig().autoGenerateConstitution !== false) {
+      for (const file of this.instructionFilesFor(agentName)) {
+        if (this.ensureInstructions(file)) {
+          constitutionFiles.push(file);
+        }
+      }
+    }
+
+    const written = writes.filter((w) => w.status === "written");
+    const failed = attempts.filter((a) => a.outcome.status === "failed");
+    const success = written.length > 0;
+
+    const result: GenerateConfigResult = {
+      configPath: written[0]?.path ?? "",
+      success,
+      message: success
+        ? `MCP configuration created for ${agentName}`
+        : `Failed to write MCP configuration for ${agentName}`,
+      writes,
+      constitutionFiles,
+      restartHint,
+    };
+
+    if (agentName === "Claude Code") {
+      result.command = this.generateClaudeCodeCommand(daemonPath);
+    }
+
+    if (failed.length > 0) {
+      result.manualFallback = failed.map((a) => ({
+        path: a.target.path,
+        content: this.fallbackContent(a.target, daemonPath),
+      }));
+    }
+
+    return result;
+  }
+
+  /**
+   * Agents this machine appears to have installed.
+   *
+   * Used to preselect entries in the setup list. Detection is a hint, never a
+   * gate: a false negative would silently drop an agent the user actually has,
+   * so callers must still offer every entry in AGENTS.
+   */
+  detectInstalledAgents(): string[] {
+    const ws = (...segments: string[]) => path.join(this.workspaceRoot, ...segments);
+    const home = (...segments: string[]) => path.join(this.homeDir, ...segments);
+    const any = (...candidates: (string | null)[]) =>
+      candidates.some((p) => p !== null && fs.existsSync(p));
+
+    const detected: string[] = [];
+    if (any(ws(".mcp.json"), ws("CLAUDE.md"), home(".claude"), home(".claude.json"))) {
+      detected.push("Claude Code");
+    }
+    if (any(ws(".cursor"), home(".cursor"))) detected.push("Cursor");
+    if (any(this.clineSettingsPath())) detected.push("Cline");
+    if (any(home(".codeium", "windsurf"))) detected.push("Windsurf");
+    if (any(ws(".continue"), home(".continue"))) detected.push("Continue");
+    if (any(home(".gemini", "antigravity-ide"))) detected.push("Antigravity");
+    if (any(ws(".vscode"))) detected.push("GitHub Copilot");
+    if (any(ws(".aider.conf.yml"), home(".aider.conf.yml"))) detected.push("Aider");
+    return detected;
+  }
+
+  /**
+   * Register comp at Claude Code's user scope through the official CLI.
+   *
+   * WHY the CLI rather than writing ~/.claude.json directly: that file is
+   * Claude Code's own state, holds settings unrelated to MCP, and its layout is
+   * not a published format. `claude mcp add` is the supported way in.
+   *
+   * The command is returned whether or not it ran, so a caller that could not
+   * execute it still has something to show the user.
+   */
+  async registerClaudeCodeUserScope(runner?: CommandRunner): Promise<UserScopeResult> {
+    const daemonPath = this.getDaemonPath();
+    const command = this.generateClaudeCodeCommand(daemonPath);
+    const run = runner ?? defaultCommandRunner;
+
+    // The Windows runner goes through cmd.exe (see defaultCommandRunner), where
+    // these characters change what the command line means. Rather than try to
+    // quote around them, hand the command to the user and let them run it.
+    if (process.platform === "win32" && SHELL_METACHARACTERS.test(daemonPath)) {
+      return {
+        registered: false,
+        command,
+        reason: "daemon のパスにシェル特殊文字が含まれるため、自動登録を見送りました",
+      };
+    }
+
+    const version = await run("claude", ["--version"]);
+    if (!version.ok) {
+      return { registered: false, command, reason: "claude CLI が見つかりませんでした" };
+    }
+
+    // User scope is shared by every project, so no COMP_WORKSPACE_ROOT here:
+    // the daemon falls back to its working directory, which the client sets per
+    // project. Everything after `--` is the server command, untouched by the CLI.
+    const args = [
+      "mcp",
+      "add",
+      "--scope",
+      "user",
+      "--transport",
+      "stdio",
+      "comp",
+      "-e",
+      "RUST_LOG=info",
+      "--",
+      daemonPath,
+    ];
+    const added = await run("claude", args);
+    if (!added.ok) {
+      return {
+        registered: false,
+        command,
+        reason: (added.stderr || added.stdout || "claude mcp add に失敗しました").trim(),
+      };
+    }
+    return { registered: true, command };
   }
 
   /**
@@ -456,16 +996,35 @@ export class AgentSetupManager {
     return fs.existsSync(candidate) ? candidate : null;
   }
 
-  /** Every MCP config file comP is known to have written, in a fixed order. */
+  /**
+   * Every MCP config file comP is known to have written, in a fixed order.
+   *
+   * The `.comp/config/*.json` entries are kept even though setup no longer
+   * writes there: a user who copied one of those files into place before this
+   * version still has a daemon path that goes stale on every upgrade.
+   */
   private repairTargets(): McpConfigTarget[] {
     const ws = (...segments: string[]) => path.join(this.workspaceRoot, ...segments);
+    const home = (...segments: string[]) => path.join(this.homeDir, ...segments);
+    const cline = this.clineSettingsPath();
     return [
       { path: ws(".vscode", "mcp.json"), serverKeys: ["servers", "comp"], scope: "workspace" },
       { path: ws(".mcp.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
+      { path: ws(".cursor", "mcp.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
+      { path: home(".cursor", "mcp.json"), serverKeys: ["mcpServers", "comp"], scope: "global" },
+      {
+        path: home(".codeium", "windsurf", "mcp_config.json"),
+        serverKeys: ["mcpServers", "comp"],
+        scope: "global",
+      },
+      ...(cline
+        ? [{ path: cline, serverKeys: ["mcpServers", "comp"], scope: "global" as const }]
+        : []),
+      { path: this.antigravityConfigPath(), serverKeys: ["mcpServers", "comp"], scope: "global" },
+      // Legacy locations, still repaired for anyone who copied them by hand.
       { path: ws(".comp", "config", "cursor_config.json"), serverKeys: ["comp"], scope: "workspace" },
       { path: ws(".comp", "config", "cline_config.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
       { path: ws(".comp", "config", "windsurf_config.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
-      { path: this.antigravityConfigPath(), serverKeys: ["mcpServers", "comp"], scope: "global" },
     ];
   }
 
@@ -618,276 +1177,124 @@ export class AgentSetupManager {
   }
 
   /**
-   * Generate Claude Code MCP configuration
+   * The `claude mcp add` line that registers comP for every project.
    *
-   * Writes to .mcp.json at the workspace root — the file Claude Code CLI
-   * reads for project-scoped MCP servers. Merges with any existing entries
-   * so other MCP servers the user has configured are preserved.
+   * `--` matters: without it the CLI parses the daemon path as its own
+   * positional URL argument. `--scope user` matters too — the default is
+   * `local`, which would register comP for the current project only and quietly
+   * contradict what this command is offered for.
    */
-  private generateClaudeCodeConfig(daemonPath: string): string {
-    let existing: { mcpServers: Record<string, unknown> } = { mcpServers: {} };
-
-    const fullPath = path.join(this.workspaceRoot, ".mcp.json");
-    try {
-      if (fs.existsSync(fullPath)) {
-        const raw = fs.readFileSync(fullPath, "utf-8");
-        const parsed = JSON.parse(raw);
-        existing = { mcpServers: {}, ...parsed };
-      }
-    } catch {
-      // File absent or invalid — start from scratch
-    }
-
-    existing.mcpServers["comp"] = {
-      command: daemonPath,
-      args: [],
-      env: {
-        COMP_WORKSPACE_ROOT: this.workspaceRoot,
-        RUST_LOG: "info",
-      },
-    };
-
-    return JSON.stringify(existing, null, 2);
-  }
-
   private generateClaudeCodeCommand(daemonPath: string): string {
-    const escapeQuotes = (value: string) => value.replace(/"/g, '\\"');
-    const escapedPath = escapeQuotes(daemonPath);
-    const escapedWorkspaceRoot = escapeQuotes(this.workspaceRoot);
-
-    return `claude mcp add comp "${escapedPath}" -e COMP_WORKSPACE_ROOT="${escapedWorkspaceRoot}" -e RUST_LOG=info`;
-  }
-
-  private generateClaudeCodeLLMPrompt(daemonPath: string): string {
-    const command = this.generateClaudeCodeCommand(daemonPath);
-    return `プロジェクトルートの .mcp.json に comP MCP サーバーの設定を書き込みました。Claude Code でこのプロジェクトを開くと comP が自動的に利用可能になります。\n\nユーザーレベルで登録したい場合は次のコマンドを実行してください。\n\n${command}`;
-  }
-
-  /**
-   * Generate Cursor MCP configuration
-   */
-  private generateCursorConfig(daemonPath: string): string {
-    // Cursor uses .cursor/rules or environment variables
-    // Format: CURSOR_MCP_SERVERS={"comp":{"command":"...","env":{...}}}
-    const mcpConfig = {
-      comp: {
-        command: daemonPath,
-        args: [],
-        env: {
-          COMP_WORKSPACE_ROOT: this.workspaceRoot,
-          RUST_LOG: "info",
-        },
-      },
-    };
-
-    return JSON.stringify(mcpConfig, null, 2);
-  }
-
-  /**
-   * Generate Cline MCP configuration
-   */
-  private generateClineConfig(daemonPath: string): string {
-    const config = {
-      mcpServers: {
-        comp: {
-          command: daemonPath,
-          args: [],
-          env: {
-            COMP_WORKSPACE_ROOT: this.workspaceRoot,
-            RUST_LOG: "info",
-          },
-        },
-      },
-    };
-
-    return JSON.stringify(config, null, 2);
-  }
-
-  /**
-   * Generate Windsurf MCP configuration
-   */
-  private generateWindsurfConfig(daemonPath: string): string {
-    const config = {
-      mcpServers: {
-        comp: {
-          command: daemonPath,
-          args: [],
-          env: {
-            COMP_WORKSPACE_ROOT: this.workspaceRoot,
-            RUST_LOG: "info",
-          },
-        },
-      },
-    };
-
-    return JSON.stringify(config, null, 2);
-  }
-
-  /**
-   * Generate Continue.dev MCP configuration (Python-based)
-   */
-  private generateContinueConfig(daemonPath: string): string {
-    const escapePy = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    const pythonConfig = `
-# Continue.dev MCP Server Configuration
-# Add this to your continue/config.py
-
-mcp_servers = {
-    "comp": {
-        "command": "${escapePy(daemonPath)}",
-        "args": [],
-        "env": {
-            "COMP_WORKSPACE_ROOT": "${escapePy(this.workspaceRoot)}",
-            "RUST_LOG": "info"
-        }
-    }
-}
-`;
-
-    return pythonConfig;
-  }
-
-  /**
-   * Configuration file paths for each agent
-   */
-  private claudeDesktopConfigPath(): string {
-    return ".mcp.json";
-  }
-
-  private cursorConfigPath(): string {
-    return ".comp/config/cursor_config.json";
-  }
-
-  private clineConfigPath(): string {
-    return ".comp/config/cline_config.json";
-  }
-
-  private windsurfConfigPath(): string {
-    return ".comp/config/windsurf_config.json";
-  }
-
-  private continueConfigPath(): string {
-    return ".comp/config/continue_config.py";
+    const quote = (value: string) => `"${value.replace(/"/g, '\\"')}"`;
+    return [
+      "claude mcp add --scope user --transport stdio comp",
+      "-e RUST_LOG=info",
+      "--",
+      quote(daemonPath),
+    ].join(" ");
   }
 
   /**
    * Antigravity MCP config path
    *
    * Antigravity (Google Gemini-based IDE) stores global MCP config at
-   * ~/.gemini/antigravity-ide/mcp_config.json — absolute path so generateConfig
-   * writes directly without prepending workspaceRoot.
+   * ~/.gemini/antigravity-ide/mcp_config.json.
    */
   private antigravityConfigPath(): string {
-    return path.join(os.homedir(), ".gemini", "antigravity-ide", "mcp_config.json");
-  }
-
-  /**
-   * Generate Antigravity MCP configuration
-   *
-   * Merges comP into the existing mcp_config.json rather than overwriting,
-   * to preserve other MCP servers the user may have configured.
-   */
-  private generateAntigravityConfig(daemonPath: string): string {
-    let existing: { mcpServers: Record<string, unknown> } = { mcpServers: {} };
-
-    try {
-      const raw = fs.readFileSync(this.antigravityConfigPath(), "utf-8");
-      const parsed = JSON.parse(raw);
-      existing = { mcpServers: {}, ...parsed };
-    } catch {
-      // File absent or invalid — start from scratch
-    }
-
-    existing.mcpServers["comp"] = {
-      command: daemonPath,
-      args: [],
-      env: {
-        COMP_WORKSPACE_ROOT: this.workspaceRoot,
-        RUST_LOG: "info",
-      },
-    };
-
-    return JSON.stringify(existing, null, 2);
-  }
-
-  private copilotConfigPath(): string {
-    return ".vscode/mcp.json";
-  }
-
-  private aiderConfigPath(): string {
-    return ".aider.conf.yml";
-  }
-
-  /**
-   * Generate Aider MCP configuration
-   *
-   * Merges the comp MCP server entry into .aider.conf.yml using YAML append.
-   * If the file already contains an mcp-servers block the user must merge manually
-   * (YAML has no safe programmatic merge without a parser dependency).
-   */
-  private generateAiderConfig(daemonPath: string): string {
-    const escapeYaml = (s: string) => s.replace(/\\/g, "\\\\");
-
-    const block = `# comP MCP server configuration
-# Generated by comP VSCode extension
-#
-# NOTE: Aider MCP support requires Aider v0.69.0+.
-# Verify this format against: https://aider.chat/docs/config/aider_conf.html
-# If the key "mcp-servers" is not recognized, check your Aider version and docs.
-mcp-servers:
-  comp:
-    command: "${escapeYaml(daemonPath)}"
-    args: []
-    env:
-      COMP_WORKSPACE_ROOT: "${escapeYaml(this.workspaceRoot)}"
-      RUST_LOG: info
-`;
-
-    const fullPath = path.join(this.workspaceRoot, this.aiderConfigPath());
-    try {
-      if (fs.existsSync(fullPath)) {
-        const existing = fs.readFileSync(fullPath, "utf-8");
-        if (existing.includes("mcp-servers:")) {
-          // Prepend a warning comment rather than silently overwriting
-          return `# WARNING: mcp-servers block already exists. Merge the section below manually.\n\n${block}\n\n# --- existing config below ---\n${existing}`;
-        }
-        return existing.trimEnd() + "\n\n" + block;
-      }
-    } catch {
-      // File absent or unreadable — start fresh
-    }
-
-    return block;
-  }
-
-  /**
-   * Generate GitHub Copilot MCP configuration
-   *
-   * Writes to workspace .vscode/mcp.json, merging with existing config if present.
-   */
-  private generateCopilotConfig(daemonPath: string): string {
-    let existing: { servers: Record<string, unknown> } = { servers: {} };
-
-    const fullPath = path.join(this.workspaceRoot, this.copilotConfigPath());
-    try {
-      if (fs.existsSync(fullPath)) {
-        const raw = fs.readFileSync(fullPath, "utf-8");
-        const parsed = JSON.parse(raw);
-        existing = { servers: {}, ...parsed };
-      }
-    } catch {
-      // File absent or invalid — start from scratch
-    }
-
-    existing.servers["comp"] = {
-      command: daemonPath,
-      args: [],
-      env: {
-        COMP_WORKSPACE_ROOT: this.workspaceRoot,
-        RUST_LOG: "info",
-      },
-    };
-
-    return JSON.stringify(existing, null, 2);
+    return path.join(this.homeDir, ".gemini", "antigravity-ide", "mcp_config.json");
   }
 }
+
+/** Message of an unknown throwable, for reporting into a WriteOutcome. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** How long an external CLI may run before it is killed. */
+const COMMAND_TIMEOUT_MS = 15_000;
+
+/**
+ * Characters that change what a cmd.exe command line means.
+ *
+ * A daemon path containing one of these cannot be handed to the shell safely,
+ * so registration is skipped and the user runs the command themselves.
+ */
+const SHELL_METACHARACTERS = /["&|<>^%]/;
+
+/**
+ * Quote one token for cmd.exe.
+ *
+ * Anything outside the plain path alphabet gets wrapped in double quotes, which
+ * covers the case that actually bites — spaces in a Windows user directory.
+ * Callers reject SHELL_METACHARACTERS first, so no escaping beyond this is
+ * needed.
+ */
+function quoteForShell(value: string): string {
+  return /^[A-Za-z0-9_.:\\/=-]+$/.test(value) ? value : `"${value}"`;
+}
+
+/**
+ * Run a command without ever letting it block the extension host.
+ *
+ * WHY spawn with a shell on Windows: Claude Code installed from npm is
+ * `claude.cmd`, and a `.cmd` cannot be started directly — the spawn fails with
+ * ENOENT, or EINVAL on Node versions carrying the CVE-2024-27980 fix. Without
+ * the shell the CLI path is dead on any Windows machine that does not also have
+ * the native executable.
+ *
+ * WHY stdin is closed: a CLI that stops to ask something — a first-run consent
+ * prompt, an expired login — would otherwise sit there until the timeout fires.
+ * With no stdin it reads EOF and gives up immediately.
+ *
+ * A non-zero exit is a normal result here, not an exception: the caller reports
+ * it and falls back to showing the user the command.
+ */
+const defaultCommandRunner: CommandRunner = (file, args) =>
+  new Promise((resolve) => {
+    // WHY the command line is assembled here: with `shell: true`, Node
+    // concatenates the argument array without escaping it (DEP0190), so a
+    // daemon path under `C:\Users\John Smith\` would break at the space.
+    // Passing one already-quoted string is the safe form of that call.
+    const useShell = process.platform === "win32";
+    const child = useShell
+      ? spawn([file, ...args].map(quoteForShell).join(" "), {
+          windowsHide: true,
+          shell: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        })
+      : spawn(file, args, {
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const finish = (ok: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok, stdout, stderr });
+    };
+
+    const timer = setTimeout(() => {
+      child.kill();
+      stderr += `\ntimed out after ${COMMAND_TIMEOUT_MS}ms`;
+      finish(false);
+    }, COMMAND_TIMEOUT_MS);
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", (error) => {
+      stderr += describeError(error);
+      finish(false);
+    });
+    child.on("close", (code) => finish(code === 0));
+  });

@@ -11,7 +11,7 @@ import { expect } from "chai";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { AgentSetupManager, RepairEntry } from "../AgentSetup";
+import { AgentSetupManager, GenerateConfigResult, RepairEntry } from "../AgentSetup";
 import { DaemonManager } from "../../daemon/DaemonManager";
 
 // Mock DaemonManager
@@ -24,198 +24,534 @@ class MockDaemonManager implements Partial<DaemonManager> {
 describe("AgentSetupManager", () => {
   let manager: AgentSetupManager;
   let mockDaemon: MockDaemonManager;
-  const testWorkspace = "/tmp/test-workspace";
+
+  const tmpRoot = path.join(os.tmpdir(), `comp-agentsetup-${process.pid}`);
+  let caseIndex = 0;
+  let caseDir: string;
+  let testWorkspace: string;
+  let fakeHome: string;
+  let globalStorageDir: string;
 
   beforeEach(() => {
     mockDaemon = new MockDaemonManager();
-    manager = new AgentSetupManager(mockDaemon as any, testWorkspace);
-  });
+    // Every case gets a private tree. fakeHome matters most: several agents keep
+    // their only config under the home directory, so a real os.homedir() here
+    // would rewrite the developer's own Cursor and Windsurf settings.
+    caseDir = path.join(tmpRoot, `case-${caseIndex++}`);
+    testWorkspace = path.join(caseDir, "workspace");
+    fakeHome = path.join(caseDir, "home");
+    // Mirrors VS Code's layout: <...>/User/globalStorage/<publisher>.<extension>
+    globalStorageDir = path.join(caseDir, "globalStorage", "tsucky230.comp-vscode");
 
-  describe("getAgentConfig", () => {
-    it("should return Claude Code config", () => {
-      const config = manager.getAgentConfig("Claude Code");
+    fs.mkdirSync(testWorkspace, { recursive: true });
+    fs.mkdirSync(fakeHome, { recursive: true });
+    fs.mkdirSync(globalStorageDir, { recursive: true });
 
-      expect(config).to.exist;
-      expect(config?.name).to.equal("Claude Code");
-      expect(config?.configPath).to.equal(".mcp.json");
-    });
-
-    it("should return Cursor config", () => {
-      const config = manager.getAgentConfig("Cursor");
-
-      expect(config).to.exist;
-      expect(config?.name).to.equal("Cursor");
-      expect(config?.configPath).to.include("cursor_config.json");
-    });
-
-    it("should return Cline config", () => {
-      const config = manager.getAgentConfig("Cline");
-
-      expect(config).to.exist;
-      expect(config?.name).to.equal("Cline");
-      expect(config?.configPath).to.include("cline_config.json");
-    });
-
-    it("should return Windsurf config", () => {
-      const config = manager.getAgentConfig("Windsurf");
-
-      expect(config).to.exist;
-      expect(config?.name).to.equal("Windsurf");
-      expect(config?.configPath).to.include("windsurf_config.json");
-    });
-
-    it("should return Continue config", () => {
-      const config = manager.getAgentConfig("Continue");
-
-      expect(config).to.exist;
-      expect(config?.name).to.equal("Continue");
-      expect(config?.configPath).to.include("continue_config.py");
-    });
-
-    it("should return GitHub Copilot config", () => {
-      const config = manager.getAgentConfig("GitHub Copilot");
-
-      expect(config).to.exist;
-      expect(config?.name).to.equal("GitHub Copilot");
-      expect(config?.configPath).to.include("mcp.json");
-    });
-
-    it("should return Aider config", () => {
-      const config = manager.getAgentConfig("Aider");
-
-      expect(config).to.exist;
-      expect(config?.name).to.equal("Aider");
-      expect(config?.configPath).to.include(".aider.conf.yml");
-    });
-
-    it("should return null for unsupported agent", () => {
-      const config = manager.getAgentConfig("UnsupportedAgent");
-
-      expect(config).to.be.null;
+    manager = new AgentSetupManager(mockDaemon as any, testWorkspace, undefined, {
+      homeDir: fakeHome,
+      globalStorageDir,
     });
   });
 
-  describe("generateConfig", () => {
-    it("should generate Claude Code MCP configuration", async () => {
+  after(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  const readJson = (file: string): any => JSON.parse(fs.readFileSync(file, "utf-8"));
+  const writeJson = (file: string, value: unknown): void => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf-8");
+  };
+  const writtenPaths = (result: GenerateConfigResult): string[] =>
+    result.writes.filter((w) => w.status === "written").map((w) => w.path);
+
+  describe("target paths", () => {
+    it("Claude Code writes only the project .mcp.json", async () => {
       const result = await manager.generateConfig("Claude Code");
 
       expect(result.success).to.be.true;
-      expect(result.configPath).to.include(".mcp.json");
-      expect(result.message).to.include("Claude Code");
-      expect(result.command).to.exist;
-      expect(result.command).to.include("claude mcp add comp");
-      expect(result.command).to.include(`COMP_WORKSPACE_ROOT="${testWorkspace}"`);
-      expect(result.llmPrompt).to.exist;
-      expect(result.llmPrompt).to.include(".mcp.json");
-
-      // Verify content is valid JSON
-      const content = fs.readFileSync(result.configPath, "utf-8");
-      const config = JSON.parse(content);
-      expect(config.mcpServers).to.exist;
-      expect(config.mcpServers.comp).to.exist;
+      expect(writtenPaths(result)).to.deep.equal([path.join(testWorkspace, ".mcp.json")]);
+      expect(readJson(result.configPath).mcpServers.comp).to.exist;
     });
 
-    it("should generate Cursor MCP configuration", async () => {
+    it("Cursor writes both the project and the global mcp.json", async () => {
       const result = await manager.generateConfig("Cursor");
 
       expect(result.success).to.be.true;
-      expect(result.configPath).to.include("cursor_config.json");
+      expect(writtenPaths(result)).to.deep.equal([
+        path.join(testWorkspace, ".cursor", "mcp.json"),
+        path.join(fakeHome, ".cursor", "mcp.json"),
+      ]);
     });
 
-    it("should generate Cline MCP configuration", async () => {
+    it("Windsurf writes the global codeium config", async () => {
+      const result = await manager.generateConfig("Windsurf");
+
+      expect(writtenPaths(result)).to.deep.equal([
+        path.join(fakeHome, ".codeium", "windsurf", "mcp_config.json"),
+      ]);
+    });
+
+    it("Cline writes into the VS Code globalStorage sibling directory", async () => {
       const result = await manager.generateConfig("Cline");
 
       expect(result.success).to.be.true;
-      expect(result.configPath).to.include("cline_config.json");
+      expect(result.configPath).to.equal(
+        path.join(
+          path.dirname(globalStorageDir),
+          "saoudrizwan.claude-dev",
+          "settings",
+          "cline_mcp_settings.json"
+        )
+      );
+      expect(readJson(result.configPath).mcpServers.comp).to.exist;
     });
 
-    it("should generate Windsurf MCP configuration", async () => {
-      const result = await manager.generateConfig("Windsurf");
+    it("Cline fails cleanly when the globalStorage location is unknown", async () => {
+      const blind = new AgentSetupManager(mockDaemon as any, testWorkspace, undefined, {
+        homeDir: fakeHome,
+      });
 
-      expect(result.success).to.be.true;
-      expect(result.configPath).to.include("windsurf_config.json");
+      const result = await blind.generateConfig("Cline");
+
+      expect(result.success).to.be.false;
+      expect(result.writes).to.be.empty;
+      expect(result.message).to.include("Cline");
     });
 
-    it("should generate GitHub Copilot MCP configuration", async () => {
+    it("Continue writes a block file in both the project and the home directory", async () => {
+      const result = await manager.generateConfig("Continue");
+
+      expect(writtenPaths(result)).to.deep.equal([
+        path.join(testWorkspace, ".continue", "mcpServers", "comp.yaml"),
+        path.join(fakeHome, ".continue", "mcpServers", "comp.yaml"),
+      ]);
+    });
+
+    it("GitHub Copilot writes .vscode/mcp.json under the servers key", async () => {
       const result = await manager.generateConfig("GitHub Copilot");
 
-      expect(result.success).to.be.true;
-      expect(result.configPath).to.include("mcp.json");
-
-      // Verify content
-      const content = fs.readFileSync(result.configPath, "utf-8");
-      const config = JSON.parse(content);
-      expect(config.servers).to.exist;
-      expect(config.servers.comp).to.exist;
+      expect(result.configPath).to.equal(path.join(testWorkspace, ".vscode", "mcp.json"));
+      expect(readJson(result.configPath).servers.comp).to.exist;
     });
 
-    it("should fail for unsupported agent", async () => {
+    it("Antigravity writes the global gemini config", async () => {
+      const result = await manager.generateConfig("Antigravity");
+
+      expect(writtenPaths(result)).to.deep.equal([
+        path.join(fakeHome, ".gemini", "antigravity-ide", "mcp_config.json"),
+      ]);
+    });
+
+    it("Aider writes .aider.conf.yml", async () => {
+      const result = await manager.generateConfig("Aider");
+
+      expect(result.configPath).to.equal(path.join(testWorkspace, ".aider.conf.yml"));
+      const content = fs.readFileSync(result.configPath, "utf-8");
+      expect(content).to.include("mcp-servers:");
+      expect(content).to.include("aider --version");
+    });
+
+    it("reports an unsupported agent instead of writing anything", async () => {
       const result = await manager.generateConfig("UnsupportedAgent");
 
       expect(result.success).to.be.false;
       expect(result.message).to.include("not supported");
-    });
-
-    it("should create directory if it does not exist", async () => {
-      const result = await manager.generateConfig("Claude Code");
-
-      expect(result.success).to.be.true;
-      const dir = path.dirname(result.configPath);
-      expect(fs.existsSync(dir)).to.be.true;
+      expect(result.writes).to.be.empty;
     });
   });
 
-  describe("config content validation", () => {
-    it("Claude Code config should contain MCP servers object", async () => {
+  describe("workspace root scoping", () => {
+    it("workspace-scoped entries carry COMP_WORKSPACE_ROOT", async () => {
+      await manager.generateConfig("Cursor");
+
+      const project = readJson(path.join(testWorkspace, ".cursor", "mcp.json"));
+      expect(project.mcpServers.comp.env.COMP_WORKSPACE_ROOT).to.equal(testWorkspace);
+    });
+
+    it("global entries omit COMP_WORKSPACE_ROOT so other projects are not hijacked", async () => {
+      await manager.generateConfig("Cursor");
+      await manager.generateConfig("Windsurf");
+      await manager.generateConfig("Cline");
+
+      const cursorGlobal = readJson(path.join(fakeHome, ".cursor", "mcp.json"));
+      const windsurf = readJson(path.join(fakeHome, ".codeium", "windsurf", "mcp_config.json"));
+      const cline = readJson(
+        path.join(
+          path.dirname(globalStorageDir),
+          "saoudrizwan.claude-dev",
+          "settings",
+          "cline_mcp_settings.json"
+        )
+      );
+
+      expect(cursorGlobal.mcpServers.comp.env).to.not.have.property("COMP_WORKSPACE_ROOT");
+      expect(windsurf.mcpServers.comp.env).to.not.have.property("COMP_WORKSPACE_ROOT");
+      expect(cline.mcpServers.comp.env).to.not.have.property("COMP_WORKSPACE_ROOT");
+    });
+
+    it("the global Continue block omits COMP_WORKSPACE_ROOT but the project one keeps it", async () => {
+      await manager.generateConfig("Continue");
+
+      const project = fs.readFileSync(
+        path.join(testWorkspace, ".continue", "mcpServers", "comp.yaml"),
+        "utf-8"
+      );
+      const global = fs.readFileSync(
+        path.join(fakeHome, ".continue", "mcpServers", "comp.yaml"),
+        "utf-8"
+      );
+
+      expect(project).to.include("COMP_WORKSPACE_ROOT");
+      expect(global).to.not.include("COMP_WORKSPACE_ROOT");
+    });
+  });
+
+  describe("merging with existing configuration", () => {
+    it("preserves other MCP servers in .mcp.json", async () => {
+      const file = path.join(testWorkspace, ".mcp.json");
+      writeJson(file, { mcpServers: { other: { command: "/usr/bin/other" } } });
+
+      await manager.generateConfig("Claude Code");
+
+      const merged = readJson(file);
+      expect(merged.mcpServers.other.command).to.equal("/usr/bin/other");
+      expect(merged.mcpServers.comp).to.exist;
+    });
+
+    it("preserves unrelated top-level keys and other servers in .vscode/mcp.json", async () => {
+      const file = path.join(testWorkspace, ".vscode", "mcp.json");
+      writeJson(file, { inputs: [{ id: "token" }], servers: { other: { command: "x" } } });
+
+      await manager.generateConfig("GitHub Copilot");
+
+      const merged = readJson(file);
+      expect(merged.inputs).to.deep.equal([{ id: "token" }]);
+      expect(merged.servers.other.command).to.equal("x");
+      expect(merged.servers.comp).to.exist;
+    });
+
+    it("preserves other servers in the global Cursor config", async () => {
+      const file = path.join(fakeHome, ".cursor", "mcp.json");
+      writeJson(file, { mcpServers: { other: { command: "x" } } });
+
+      await manager.generateConfig("Cursor");
+
+      expect(readJson(file).mcpServers.other.command).to.equal("x");
+      expect(readJson(file).mcpServers.comp).to.exist;
+    });
+
+    it("preserves other servers in the Windsurf config", async () => {
+      const file = path.join(fakeHome, ".codeium", "windsurf", "mcp_config.json");
+      writeJson(file, { mcpServers: { other: { command: "x" } } });
+
+      await manager.generateConfig("Windsurf");
+
+      expect(readJson(file).mcpServers.other.command).to.equal("x");
+    });
+
+    it("preserves other servers in the Cline settings", async () => {
+      const file = path.join(
+        path.dirname(globalStorageDir),
+        "saoudrizwan.claude-dev",
+        "settings",
+        "cline_mcp_settings.json"
+      );
+      writeJson(file, { mcpServers: { other: { command: "x" } } });
+
+      await manager.generateConfig("Cline");
+
+      expect(readJson(file).mcpServers.other.command).to.equal("x");
+    });
+
+    it("replaces its own entry instead of appending a second one", async () => {
+      await manager.generateConfig("Claude Code");
+      await manager.generateConfig("Claude Code");
+
+      const merged = readJson(path.join(testWorkspace, ".mcp.json"));
+      expect(Object.keys(merged.mcpServers)).to.deep.equal(["comp"]);
+    });
+  });
+
+  describe("backup and failure handling", () => {
+    it("writes a .bak whose bytes match the file before the run", async () => {
+      const file = path.join(testWorkspace, ".mcp.json");
+      writeJson(file, { mcpServers: { other: { command: "x" } } });
+      const before = fs.readFileSync(file);
+
       const result = await manager.generateConfig("Claude Code");
-      const content = fs.readFileSync(result.configPath, "utf-8");
-      const config = JSON.parse(content);
 
-      expect(config.mcpServers.comp.command).to.exist;
-      expect(config.mcpServers.comp.env).to.exist;
-      expect(config.mcpServers.comp.env.COMP_WORKSPACE_ROOT).to.equal(testWorkspace);
+      const backup = result.writes[0].backupPath;
+      expect(backup).to.equal(file + ".bak");
+      expect(fs.readFileSync(backup!).equals(before)).to.be.true;
     });
 
-    it("Cline config should contain MCP servers object", async () => {
-      const result = await manager.generateConfig("Cline");
-      const content = fs.readFileSync(result.configPath, "utf-8");
-      const config = JSON.parse(content);
+    it("does not create a .bak when the file did not exist", async () => {
+      const result = await manager.generateConfig("Claude Code");
 
-      expect(config.mcpServers).to.exist;
-      expect(config.mcpServers.comp).to.exist;
+      expect(result.writes[0].backupPath).to.be.undefined;
+      expect(fs.existsSync(path.join(testWorkspace, ".mcp.json.bak"))).to.be.false;
     });
 
-    it("Continue config should be Python-compatible", async () => {
-      const result = await manager.generateConfig("Continue");
-      const content = fs.readFileSync(result.configPath, "utf-8");
+    it("leaves an unparseable config untouched and reports the failure", async () => {
+      const file = path.join(testWorkspace, ".mcp.json");
+      fs.writeFileSync(file, "{ this is not json", "utf-8");
 
-      // Should contain Python-like syntax
-      expect(content).to.include("mcp_servers");
-      expect(content).to.include("COMP_WORKSPACE_ROOT");
+      const result = await manager.generateConfig("Claude Code");
+
+      expect(result.success).to.be.false;
+      expect(fs.readFileSync(file, "utf-8")).to.equal("{ this is not json");
+      expect(result.writes[0].status).to.equal("failed");
+      expect(fs.existsSync(file + ".bak")).to.be.false;
     });
 
-    it("Aider config should contain mcp-servers YAML block", async () => {
-      const result = await manager.generateConfig("Aider");
+    it("does not touch the config when the backup cannot be taken", async () => {
+      const file = path.join(testWorkspace, ".mcp.json");
+      writeJson(file, { mcpServers: { other: { command: "x" } } });
+      const before = fs.readFileSync(file, "utf-8");
+      (manager as any).backupIfExists = () => {
+        throw new Error("disk full");
+      };
+
+      const result = await manager.generateConfig("Claude Code");
+
+      expect(result.success).to.be.false;
+      expect(result.writes[0].reason).to.include("backup failed");
+      expect(fs.readFileSync(file, "utf-8")).to.equal(before);
+    });
+
+    it("keeps writing the remaining targets after one fails", async () => {
+      const broken = path.join(testWorkspace, ".cursor", "mcp.json");
+      fs.mkdirSync(path.dirname(broken), { recursive: true });
+      fs.writeFileSync(broken, "}}not json", "utf-8");
+
+      const result = await manager.generateConfig("Cursor");
+
       expect(result.success).to.be.true;
-      expect(result.configPath).to.include(".aider.conf.yml");
-
-      const content = fs.readFileSync(result.configPath, "utf-8");
-      expect(content).to.include("mcp-servers:");
-      expect(content).to.include("comp:");
-      expect(content).to.include("COMP_WORKSPACE_ROOT");
+      expect(result.writes[0].status).to.equal("failed");
+      expect(result.writes[1].status).to.equal("written");
+      expect(readJson(path.join(fakeHome, ".cursor", "mcp.json")).mcpServers.comp).to.exist;
     });
 
-    it("Aider config should warn when mcp-servers block already exists", async () => {
-      // Pre-create a config file with an existing mcp-servers block
-      const configPath = path.join(testWorkspace, ".aider.conf.yml");
-      fs.writeFileSync(configPath, "mcp-servers:\n  other-server:\n    command: /usr/bin/other\n");
+    it("refuses to guess a merge when Aider already has an mcp-servers block", async () => {
+      const file = path.join(testWorkspace, ".aider.conf.yml");
+      fs.writeFileSync(file, "mcp-servers:\n  other:\n    command: /usr/bin/other\n", "utf-8");
 
       const result = await manager.generateConfig("Aider");
-      expect(result.success).to.be.true;
 
-      const content = fs.readFileSync(result.configPath, "utf-8");
-      expect(content).to.include("WARNING");
-      expect(content).to.include("existing config below");
+      expect(result.success).to.be.false;
+      expect(fs.readFileSync(file, "utf-8")).to.include("/usr/bin/other");
+      expect(result.writes[0].reason).to.include("mcp-servers");
+    });
+  });
+
+  describe("manual fallback", () => {
+    it("is absent when every target was written", async () => {
+      const result = await manager.generateConfig("Cursor");
+
+      expect(result.success).to.be.true;
+      expect(result.manualFallback).to.be.undefined;
+    });
+
+    it("carries pasteable content for the target that failed", async () => {
+      const file = path.join(testWorkspace, ".mcp.json");
+      fs.writeFileSync(file, "not json", "utf-8");
+
+      const result = await manager.generateConfig("Claude Code");
+
+      expect(result.manualFallback).to.have.lengthOf(1);
+      expect(result.manualFallback![0].path).to.equal(file);
+      const parsed = JSON.parse(result.manualFallback![0].content);
+      expect(parsed.mcpServers.comp.command).to.be.a("string");
+    });
+  });
+
+  describe("Continue block format", () => {
+    it("carries the metadata Continue requires and a list-shaped server entry", async () => {
+      await manager.generateConfig("Continue");
+
+      const content = fs.readFileSync(
+        path.join(testWorkspace, ".continue", "mcpServers", "comp.yaml"),
+        "utf-8"
+      );
+      expect(content).to.include("schema: v1");
+      expect(content).to.include("mcpServers:");
+      expect(content).to.include("- name: comp");
+      expect(content).to.include("type: stdio");
+    });
+
+    it("quotes YAML scalars so Windows backslashes survive", () => {
+      const quote = (AgentSetupManager as any).yamlQuote as (v: string) => string;
+
+      expect(quote("E:\\dev\\comP")).to.equal("'E:\\dev\\comP'");
+      expect(quote("it's")).to.equal("'it''s'");
+    });
+  });
+
+  describe("instruction files", () => {
+    it("writes the comP usage rules without asking the user to paste them", async () => {
+      const result = await manager.generateConfig("Claude Code");
+
+      const claudeMd = path.join(testWorkspace, "CLAUDE.md");
+      expect(result.constitutionFiles).to.include(claudeMd);
+      expect(fs.readFileSync(claudeMd, "utf-8")).to.include("comP MCP Tool Usage");
+    });
+
+    it("does not append a second copy on a repeat run", async () => {
+      await manager.generateConfig("Claude Code");
+      await manager.generateConfig("Claude Code");
+
+      const content = fs.readFileSync(path.join(testWorkspace, "CLAUDE.md"), "utf-8");
+      expect(content.split("comP MCP Tool Usage")).to.have.lengthOf(2);
+      expect(content.split("Session Continuity")).to.have.lengthOf(2);
+    });
+
+    it("appends to an existing instruction file instead of replacing it", async () => {
+      const claudeMd = path.join(testWorkspace, "CLAUDE.md");
+      fs.writeFileSync(claudeMd, "# My rules\n\nDo not delete this.\n", "utf-8");
+
+      await manager.generateConfig("Claude Code");
+
+      const content = fs.readFileSync(claudeMd, "utf-8");
+      expect(content).to.include("Do not delete this.");
+      expect(content).to.include("comP MCP Tool Usage");
+    });
+
+    it("writes inside .cursor/rules when it is a directory of rule files", async () => {
+      const rulesDir = path.join(testWorkspace, ".cursor", "rules");
+      fs.mkdirSync(rulesDir, { recursive: true });
+      fs.writeFileSync(path.join(rulesDir, "existing.mdc"), "keep me", "utf-8");
+
+      await manager.generateConfig("Cursor");
+
+      expect(fs.statSync(rulesDir).isDirectory()).to.be.true;
+      expect(fs.readFileSync(path.join(rulesDir, "existing.mdc"), "utf-8")).to.equal("keep me");
+      expect(fs.readFileSync(path.join(rulesDir, "comp.md"), "utf-8")).to.include(
+        "comP MCP Tool Usage"
+      );
+    });
+
+    it("honours autoGenerateConstitution: false", async () => {
+      writeJson(path.join(testWorkspace, ".comp", "config.json"), {
+        autoGenerateConstitution: false,
+      });
+
+      const result = await manager.generateConfig("Claude Code");
+
+      expect(result.constitutionFiles).to.be.empty;
+      expect(fs.existsSync(path.join(testWorkspace, "CLAUDE.md"))).to.be.false;
+    });
+  });
+
+  describe("Claude Code user scope", () => {
+    it("builds a command with the scope, transport and argument separator", async () => {
+      const result = await manager.generateConfig("Claude Code");
+
+      expect(result.command).to.include("--scope user");
+      expect(result.command).to.include("--transport stdio");
+      expect(result.command).to.include(" -- ");
+    });
+
+    it("reports the command instead of throwing when the CLI is missing", async () => {
+      const runner = async () => ({ ok: false, stdout: "", stderr: "not found" });
+
+      const outcome = await manager.registerClaudeCodeUserScope(runner);
+
+      expect(outcome.registered).to.be.false;
+      expect(outcome.reason).to.include("claude CLI");
+      expect(outcome.command).to.include("claude mcp add");
+    });
+
+    it("passes scope, transport and the -- separator to the CLI", async () => {
+      const calls: { file: string; args: string[] }[] = [];
+      const runner = async (file: string, args: string[]) => {
+        calls.push({ file, args });
+        return { ok: true, stdout: "", stderr: "" };
+      };
+
+      const outcome = await manager.registerClaudeCodeUserScope(runner);
+
+      expect(outcome.registered).to.be.true;
+      const add = calls[1].args;
+      expect(add.slice(0, 3)).to.deep.equal(["mcp", "add", "--scope"]);
+      expect(add).to.include("user");
+      expect(add).to.include("stdio");
+      // The daemon path must be the last argument, after the separator.
+      expect(add[add.length - 2]).to.equal("--");
+    });
+
+    it("omits COMP_WORKSPACE_ROOT from the user-scope registration", async () => {
+      const calls: string[][] = [];
+      const runner = async (_file: string, args: string[]) => {
+        calls.push(args);
+        return { ok: true, stdout: "", stderr: "" };
+      };
+
+      await manager.registerClaudeCodeUserScope(runner);
+
+      expect(calls[1].join(" ")).to.not.include("COMP_WORKSPACE_ROOT");
+    });
+
+    it("skips the CLI when the daemon path would be reinterpreted by cmd.exe", async function () {
+      // The Windows runner goes through a shell, so this guard only exists there.
+      if (process.platform !== "win32") {
+        this.skip();
+      }
+      (manager as any).getDaemonPath = () => "C:\\dev\\a&b\\comp-daemon.exe";
+      let ran = false;
+      const runner = async () => {
+        ran = true;
+        return { ok: true, stdout: "", stderr: "" };
+      };
+
+      const outcome = await manager.registerClaudeCodeUserScope(runner);
+
+      expect(ran).to.be.false;
+      expect(outcome.registered).to.be.false;
+      expect(outcome.reason).to.include("シェル特殊文字");
+      expect(outcome.command).to.include("claude mcp add");
+    });
+
+    it("surfaces the CLI error when registration fails", async () => {
+      let call = 0;
+      const runner = async () => {
+        call += 1;
+        return call === 1
+          ? { ok: true, stdout: "2.0.0", stderr: "" }
+          : { ok: false, stdout: "", stderr: "already exists" };
+      };
+
+      const outcome = await manager.registerClaudeCodeUserScope(runner);
+
+      expect(outcome.registered).to.be.false;
+      expect(outcome.reason).to.include("already exists");
+    });
+  });
+
+  describe("detectInstalledAgents", () => {
+    it("returns nothing for an untouched machine", () => {
+      expect(manager.detectInstalledAgents()).to.be.empty;
+    });
+
+    it("detects agents from the traces they leave", () => {
+      fs.mkdirSync(path.join(fakeHome, ".cursor"), { recursive: true });
+      fs.mkdirSync(path.join(fakeHome, ".codeium", "windsurf"), { recursive: true });
+      fs.writeFileSync(path.join(testWorkspace, "CLAUDE.md"), "x", "utf-8");
+
+      const detected = manager.detectInstalledAgents();
+
+      expect(detected).to.include.members(["Cursor", "Windsurf", "Claude Code"]);
+      expect(detected).to.not.include("Continue");
+    });
+  });
+
+  describe("restart guidance", () => {
+    it("tells the user how to reload the agent it just configured", async () => {
+      const cursor = await manager.generateConfig("Cursor");
+      const claude = await manager.generateConfig("Claude Code");
+
+      expect(cursor.restartHint).to.include("Reload Window");
+      expect(claude.restartHint).to.include("claude mcp list");
     });
   });
 
@@ -262,9 +598,14 @@ describe("AgentSetupManager", () => {
       fs.writeFileSync(bundledBinary, "");
       fs.mkdirSync(path.dirname(globalConfig), { recursive: true });
 
-      repairManager = new AgentSetupManager(mockDaemon as any, ws, extDir);
-      // WHY: the global target defaults to the real ~/.gemini config. Redirect it so
-      // running the suite never edits the developer's own machine-wide MCP setup.
+      // WHY homeDir: several repair targets live under the home directory, so
+      // running the suite against a real one would edit the developer's own
+      // Cursor and Windsurf configuration.
+      repairManager = new AgentSetupManager(mockDaemon as any, ws, extDir, {
+        homeDir: path.join(caseDir, "home"),
+      });
+      // The Antigravity target is redirected on top of that so the assertions
+      // below can point at one known file.
       (repairManager as any).antigravityConfigPath = () => globalConfig;
     });
 

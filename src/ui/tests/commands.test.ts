@@ -11,6 +11,9 @@
 import { expect } from "chai";
 import * as sinon from "sinon";
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { registerCommands } from "../commands";
 
 describe("registerCommands", () => {
@@ -19,6 +22,17 @@ describe("registerCommands", () => {
   let mockStatusBar: any;
   let handlers: Map<string, () => Promise<void>>;
 
+  // WHY a real temp directory: setupAgents writes config and instruction files
+  // relative to the workspace root. Left undefined, the root falls back to "."
+  // and a test run would rewrite this repository's own CLAUDE.md.
+  const tmpRoot = path.join(os.tmpdir(), `comp-commands-${process.pid}`);
+  let caseIndex = 0;
+  let setupWorkspace: string;
+
+  after(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     handlers = new Map();
     (vscode.commands as any).registerCommand = (name: string, handler: () => Promise<void>) => {
@@ -26,8 +40,12 @@ describe("registerCommands", () => {
       return { dispose: () => {} };
     };
 
+    setupWorkspace = path.join(tmpRoot, `case-${caseIndex++}`);
+    fs.mkdirSync(setupWorkspace, { recursive: true });
+
     mockContext = {
       subscriptions: { push: sinon.stub() },
+      globalStorageUri: { fsPath: path.join(setupWorkspace, "globalStorage", "comp") },
     };
 
     mockDaemon = {
@@ -51,7 +69,7 @@ describe("registerCommands", () => {
     (vscode.window as any).withProgress = async (_options: any, task: () => Promise<any>) => {
       return await task();
     };
-    (vscode.workspace as any).workspaceFolders = undefined;
+    (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: setupWorkspace } }];
     (vscode.env.clipboard as any).writeText = sinon.stub().resolves();
   });
 
@@ -102,12 +120,43 @@ describe("registerCommands", () => {
     expect((vscode.window as any).showInformationMessage.called).to.be.false;
   });
 
-  it("comp.setupAgents with GitHub Copilot selection generates config", async () => {
-    (vscode.window as any).showQuickPick = sinon.stub().resolves("GitHub Copilot");
-    (vscode.window as any).showInformationMessage = sinon.stub().resolves("Done");
+  it("comp.setupAgents with an empty multi-select does nothing", async () => {
+    (vscode.window as any).showQuickPick = sinon.stub().resolves([]);
     registerCommands(mockContext, () => mockDaemon, mockStatusBar);
     await handlers.get("comp.setupAgents")!();
+    expect((vscode.window as any).showInformationMessage.called).to.be.false;
+  });
+
+  it("comp.setupAgents writes the config for every picked agent", async () => {
+    (vscode.window as any).showQuickPick = sinon
+      .stub()
+      .resolves([{ label: "GitHub Copilot" }, { label: "Aider" }]);
+    (vscode.window as any).showInformationMessage = sinon.stub().resolves("Done");
+    registerCommands(mockContext, () => mockDaemon, mockStatusBar);
+
+    await handlers.get("comp.setupAgents")!();
+
+    expect((vscode.window as any).showErrorMessage.called).to.be.false;
+    expect(fs.existsSync(path.join(setupWorkspace, ".vscode", "mcp.json"))).to.be.true;
+    expect(fs.existsSync(path.join(setupWorkspace, ".aider.conf.yml"))).to.be.true;
+    // The rules land in the instruction file instead of a prompt to paste them.
+    expect(fs.readFileSync(path.join(setupWorkspace, "CLAUDE.md"), "utf-8")).to.include(
+      "comP MCP Tool Usage"
+    );
     expect((vscode.window as any).showInformationMessage.called).to.be.true;
+  });
+
+  it("comp.setupAgents offers user-scope registration only for Claude Code", async () => {
+    (vscode.window as any).showQuickPick = sinon.stub().resolves([{ label: "GitHub Copilot" }]);
+    (vscode.window as any).showInformationMessage = sinon.stub().resolves(undefined);
+    registerCommands(mockContext, () => mockDaemon, mockStatusBar);
+
+    await handlers.get("comp.setupAgents")!();
+
+    const asked = (vscode.window as any).showInformationMessage
+      .getCalls()
+      .some((call: any) => String(call.args[0]).includes("ユーザースコープ"));
+    expect(asked).to.be.false;
   });
 
   it("comp.generateContext with no input does nothing", async () => {
