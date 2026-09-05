@@ -91,10 +91,16 @@ jobs:
           components: clippy
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        # WHY pinned: this exact drift (an unpinned `cargo install` picking up a
+        # newer cargo-audit whose CLI had changed, breaking the next step) is
+        # what broke this job before --file replaced --manifest-path above.
+        run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Audit Rust dependencies
-        run: cargo audit --manifest-path daemon/Cargo.toml
+        # WHY --file rather than --manifest-path: cargo-audit dropped --manifest-path
+        # at some point (this job installs whatever is latest, unpinned), and now only
+        # takes -f/--file pointing directly at the lockfile.
+        run: cargo audit --file daemon/Cargo.lock
 
       - name: Run Clippy (Rust linter)
         run: cargo clippy --all --manifest-path daemon/Cargo.toml -- -D warnings
