@@ -21,11 +21,13 @@ import { DaemonManager } from "../daemon/DaemonManager";
  * - `continue-block`— a standalone Continue block file that comP owns entirely,
  *                     so it is rendered whole rather than merged
  * - `aider`         — YAML appended to .aider.conf.yml
+ * - `toml`          — a `[mcp_servers.comp]` table spliced into Codex's config.toml
  */
 type TargetFormat =
   | { kind: "json"; serverKeys: string[] }
   | { kind: "continue-block" }
-  | { kind: "aider" };
+  | { kind: "aider" }
+  | { kind: "toml" };
 
 /**
  * One config file comP writes, and the rules that apply to it.
@@ -110,6 +112,14 @@ export interface AgentSetupOptions {
   globalStorageDir?: string;
   /** Overrides os.homedir() */
   homeDir?: string;
+  /**
+   * Overrides Codex's config directory.
+   *
+   * Needed on top of homeDir because Codex also honours the CODEX_HOME
+   * environment variable: without an override, a developer who has it set would
+   * have their real Codex configuration rewritten by the test suite.
+   */
+  codexHome?: string;
 }
 
 /**
@@ -146,9 +156,11 @@ export interface RepairEntry {
  */
 interface McpConfigTarget {
   path: string;
-  /** Key chain from the document root down to the comp server object */
+  /** Key chain from the document root down to the comp server object; unused for TOML */
   serverKeys: string[];
   scope: "workspace" | "global";
+  /** How the file is encoded. Decides which repair routine may touch it. */
+  format: "json" | "toml";
 }
 
 /**
@@ -186,6 +198,7 @@ function readObjectPath(doc: unknown, keys: string[]): Record<string, unknown> |
  * | Antigravity    | —                                | `~/.gemini/antigravity-ide/mcp_config.json` |
  * | GitHub Copilot | `.vscode/mcp.json`               | —                                           |
  * | Aider          | `.aider.conf.yml`                | —                                           |
+ * | Codex          | `.codex/config.toml`             | `~/.codex/config.toml` (or `$CODEX_HOME`)   |
  *
  * All servers are registered as stdio: the MCP client spawns the daemon binary.
  */
@@ -194,6 +207,7 @@ export class AgentSetupManager {
   private extensionPath: string | undefined;
   private globalStorageDir: string | undefined;
   private homeDir: string;
+  private codexHomeOverride: string | undefined;
 
   constructor(
     _daemonManager: DaemonManager,
@@ -206,6 +220,26 @@ export class AgentSetupManager {
     this.extensionPath = extensionPath;
     this.globalStorageDir = options?.globalStorageDir;
     this.homeDir = options?.homeDir ?? os.homedir();
+    this.codexHomeOverride = options?.codexHome;
+  }
+
+  /**
+   * Codex's configuration directory.
+   *
+   * CODEX_HOME is best-effort: a value exported from the user's shell profile is
+   * often absent from the environment a desktop-launched VS Code inherits, so a
+   * user who moved their Codex home may still have to point comP at it by hand.
+   * Reading it when it is there is still better than ignoring it.
+   */
+  private codexHome(): string {
+    const fromEnv = process.env.CODEX_HOME;
+    if (this.codexHomeOverride) {
+      return this.codexHomeOverride;
+    }
+    if (fromEnv && fromEnv.length > 0 && path.isAbsolute(fromEnv)) {
+      return fromEnv;
+    }
+    return path.join(this.homeDir, ".codex");
   }
 
   private readCompConfig(): { autoGenerateConstitution?: boolean } {
@@ -324,6 +358,7 @@ export class AgentSetupManager {
   /** Agent names the setup flow offers, in display order. */
   static readonly AGENTS = [
     "Claude Code",
+    "Codex",
     "Cursor",
     "Cline",
     "Windsurf",
@@ -377,6 +412,22 @@ export class AgentSetupManager {
         // Only the project file is written here; user scope goes through the
         // official CLI, which owns ~/.claude.json and its format.
         return [{ path: ws(".mcp.json"), scope: "workspace", format: json(["mcpServers"]) }];
+
+      case "Codex":
+        // One TOML file serves both the CLI and the VS Code extension.
+        //
+        // WHY global first: Codex reads the global file unconditionally, but
+        // loads a project-level .codex/ only for a project the user has marked
+        // trusted. The target that always takes effect therefore leads, so the
+        // reported configPath points at the one the user can rely on.
+        return [
+          {
+            path: path.join(this.codexHome(), "config.toml"),
+            scope: "global",
+            format: { kind: "toml" },
+          },
+          { path: ws(".codex", "config.toml"), scope: "workspace", format: { kind: "toml" } },
+        ];
 
       case "Cursor":
         return [
@@ -444,6 +495,8 @@ export class AgentSetupManager {
     const shared = [ws("CLAUDE.md"), ws(".claude", "CLAUDE.md")];
 
     switch (agentName) {
+      case "Codex":
+        return [...shared, ws("AGENTS.md")];
       case "Cursor":
         return [...shared, ws(".cursor", "rules")];
       case "Cline":
@@ -469,6 +522,16 @@ export class AgentSetupManager {
           "- VS Code / JetBrains 拡張: コマンドパレット →「Developer: Reload Window」",
           "初回起動時に「このプロジェクトの MCP サーバーを使うか」と確認されるので承認してください。",
           "`claude mcp list` で comp が Connected になっていれば成功です。",
+        ].join("\n");
+      case "Codex":
+        return [
+          "実行中の Codex を終了し、起動し直してください。",
+          "- CLI: セッションを抜けて `codex` を起動し直す",
+          "- VS Code 拡張: コマンドパレット →「Developer: Reload Window」",
+          "セッション内で `/mcp` を実行し comp が表示されれば成功です。",
+          "",
+          "プロジェクト側の `.codex/config.toml` は「信頼済み」にしたプロジェクトでしか読み込まれません。",
+          "未信頼のままだとグローバル設定（~/.codex/config.toml）だけが有効になります。",
         ].join("\n");
       case "Cursor":
         return [
@@ -589,6 +652,241 @@ export class AgentSetupManager {
   }
 
   /**
+   * The `[mcp_servers.comp]` table written into Codex's config.toml.
+   *
+   * WHY `env` is an inline table rather than a `[mcp_servers.comp.env]`
+   * sub-table: it keeps the whole entry one contiguous block, so the end of
+   * comP's section is unambiguously "the next line starting a table". A
+   * sub-table would split the entry in two and make replacing it a guess.
+   */
+  private codexBlock(daemonPath: string, scope: "workspace" | "global"): string {
+    const q = AgentSetupManager.tomlQuote;
+    const env = [`RUST_LOG = ${q("info")}`];
+    if (scope === "workspace") {
+      env.push(`COMP_WORKSPACE_ROOT = ${q(this.workspaceRoot)}`);
+    }
+    return (
+      [
+        "# comP MCP server — generated by the comP VS Code extension",
+        "[mcp_servers.comp]",
+        `command = ${q(daemonPath)}`,
+        "args = []",
+        `env = { ${env.join(", ")} }`,
+      ].join("\n") + "\n"
+    );
+  }
+
+  /**
+   * Quote a value as a TOML string.
+   *
+   * WHY a literal string by default: a Windows daemon path is full of
+   * backslashes, and TOML reads a backslash inside a basic string as an escape,
+   * so `C:\Users` would be rejected as an unknown escape sequence. A literal
+   * string takes every character as-is. It cannot contain a single quote or a
+   * control character, so those rare values fall back to a basic string.
+   *
+   * The fallback escapes the control characters too: a directory name may
+   * legally contain a newline on macOS and Linux, and emitting it raw would
+   * split the value across lines and leave the whole config unparseable.
+   */
+  private static tomlQuote(value: string): string {
+    // eslint-disable-next-line no-control-regex
+    if (!/['\u0000-\u001f\u007f]/.test(value)) {
+      return "'" + value + "'";
+    }
+    const escaped = value
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r")
+      .replace(/\t/g, "\\t")
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f]/g, (char) => {
+        const code = char.charCodeAt(0).toString(16).padStart(4, "0");
+        return `\\u${code}`;
+      });
+    return '"' + escaped + '"';
+  }
+
+  /**
+   * Locate comP's own table in a Codex config.
+   *
+   * Returns the character range covering `[mcp_servers.comp]`, everything under
+   * it, and any `[mcp_servers.comp.*]` sub-tables that follow — a config written
+   * by `codex mcp add` uses a `[mcp_servers.comp.env]` sub-table, and leaving it
+   * behind after replacing the parent would resurrect a stale environment.
+   *
+   * Shared by the writer and the repair pass so that "where comP's block is" has
+   * exactly one definition.
+   */
+  private static findCompSection(text: string): { start: number; end: number } | null {
+    const lines = text.split("\n");
+    // Header of comP's table, or of one of its sub-tables. Bare and quoted key
+    // forms both occur: `codex mcp add` writes the bare one, hand edits vary.
+    const isCompHeader = (line: string): boolean =>
+      /^\s*\[\s*mcp_servers\s*\.\s*("comp"|'comp'|comp)\s*(\.[^\]]*)?\]/.test(line);
+    const isAnyHeader = (line: string): boolean => /^\s*\[/.test(line);
+
+    let start = -1;
+    let end = -1;
+    let offset = 0;
+    for (const line of lines) {
+      const lineEnd = offset + line.length + 1;
+      if (start === -1) {
+        if (isCompHeader(line)) {
+          start = offset;
+          end = Math.min(lineEnd, text.length);
+        }
+      } else if (isAnyHeader(line)) {
+        // A sub-table still belongs to comP; anything else ends the section.
+        if (!isCompHeader(line)) {
+          break;
+        }
+        end = Math.min(lineEnd, text.length);
+      } else {
+        end = Math.min(lineEnd, text.length);
+      }
+      offset = lineEnd;
+    }
+
+    return start === -1 ? null : { start, end };
+  }
+
+  /**
+   * Whether a located section can be replaced as a unit.
+   *
+   * findCompSection ends the section at the next line that opens a table, and a
+   * nested array element written on its own line — `["--flag"],` inside a
+   * multi-line `args` — looks exactly like one. Splicing there would strip the
+   * rest of the collection and leave the file unparseable, taking down the
+   * user's whole Codex configuration rather than just comP.
+   *
+   * A truncated section always ends with brackets still open, so that is what is
+   * checked. Anything this cannot account for — a multi-line basic string, say —
+   * also comes back unbalanced, which is the safe direction to be wrong in.
+   */
+  private static isSelfContained(section: string): boolean {
+    let depth = 0;
+    let quote: '"' | "'" | null = null;
+
+    for (let i = 0; i < section.length; i++) {
+      const char = section[i];
+
+      if (quote !== null) {
+        // Only basic strings have escapes; in a literal string a backslash is
+        // just a backslash, which is the whole reason paths are written that way.
+        if (char === "\\" && quote === '"') {
+          i++;
+        } else if (char === quote) {
+          quote = null;
+        } else if (char === "\n") {
+          return false;
+        }
+        continue;
+      }
+
+      if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === "#") {
+        while (i < section.length && section[i] !== "\n") {
+          i++;
+        }
+      } else if (char === "[" || char === "{") {
+        depth++;
+      } else if (char === "]" || char === "}") {
+        depth--;
+        if (depth < 0) {
+          return false;
+        }
+      }
+    }
+
+    return depth === 0 && quote === null;
+  }
+
+  /**
+   * Servers written in a shape this line-oriented splice cannot rewrite.
+   *
+   * Both checks are scoped to the table they matter in: an unrelated key called
+   * `comp` under `[tui]` is none of comP's business, and refusing to configure
+   * Codex because of one would be a plain false alarm.
+   *
+   * Returns the reason to refuse, or null when the file can be edited.
+   */
+  private static unsupportedServerShape(text: string): string | null {
+    let table = "";
+
+    for (const rawLine of text.split("\n")) {
+      const line = rawLine.trim();
+
+      const header = /^\[\s*([^\]]*?)\s*\]/.exec(line);
+      if (header) {
+        table = header[1].replace(/\s+/g, "");
+        continue;
+      }
+      // `mcp_servers = { ... }` — the entire server table written inline.
+      if (table === "" && /^mcp_servers\s*=/.test(line)) {
+        return "mcp_servers is written as an inline table; merge comP by hand";
+      }
+      // `comp = { ... }` or `comp.command = ...` under `[mcp_servers]`.
+      if (
+        table === "mcp_servers" &&
+        /^("comp"|'comp'|comp)\s*(\.[A-Za-z0-9_-]+)*\s*=/.test(line)
+      ) {
+        return "a comp entry is written in inline/dotted form; merge comP by hand";
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Splice the comp table into Codex's config.toml, preserving everything else.
+   *
+   * Unlike the Aider block, an existing comP section is always rewritten rather
+   * than left alone: it carries the daemon path, which is exactly the value that
+   * goes stale when the extension is upgraded.
+   *
+   * Throws when the file encodes its servers in a shape that cannot be edited
+   * without a TOML parser. Reporting that is far better than guessing at a merge
+   * and destroying the user's other servers.
+   */
+  private renderCodexConfig(daemonPath: string, target: WriteTarget): string {
+    const block = this.codexBlock(daemonPath, target.scope);
+
+    if (!fs.existsSync(target.path)) {
+      return block;
+    }
+    const existing = fs.readFileSync(target.path, "utf-8");
+    if (existing.trim().length === 0) {
+      return block;
+    }
+
+    const unsupported = AgentSetupManager.unsupportedServerShape(existing);
+    if (unsupported) {
+      throw new Error(unsupported);
+    }
+
+    const section = AgentSetupManager.findCompSection(existing);
+    if (section) {
+      const before = existing.slice(0, section.start);
+      const after = existing.slice(section.end);
+      if (!AgentSetupManager.isSelfContained(existing.slice(section.start, section.end))) {
+        throw new Error("the existing comp table spans a multi-line value; merge comP by hand");
+      }
+      // The generated block carries its own comment line, so drop the one the
+      // previous run left immediately above the header.
+      const trimmedBefore = before.replace(
+        /(^|\n)# comP MCP server[^\n]*\n$/,
+        (_match, lead: string) => lead
+      );
+      return trimmedBefore + block + (after.startsWith("\n") ? after : after ? "\n" + after : "");
+    }
+
+    return existing.trimEnd() + "\n\n" + block;
+  }
+
+  /**
    * Merge the comp entry into an existing JSON config.
    *
    * Throws when the file exists but does not parse: overwriting it would
@@ -659,6 +957,8 @@ export class AgentSetupManager {
         return this.renderContinueBlock(daemonPath, target.scope);
       case "aider":
         return this.renderAiderConfig(daemonPath, target);
+      case "toml":
+        return this.renderCodexConfig(daemonPath, target);
     }
   }
 
@@ -685,6 +985,8 @@ export class AgentSetupManager {
         return this.renderContinueBlock(daemonPath, target.scope);
       case "aider":
         return this.aiderBlock(daemonPath, target.scope);
+      case "toml":
+        return this.codexBlock(daemonPath, target.scope);
     }
   }
 
@@ -866,6 +1168,7 @@ export class AgentSetupManager {
     if (any(ws(".mcp.json"), ws("CLAUDE.md"), home(".claude"), home(".claude.json"))) {
       detected.push("Claude Code");
     }
+    if (any(this.codexHome(), ws(".codex"))) detected.push("Codex");
     if (any(ws(".cursor"), home(".cursor"))) detected.push("Cursor");
     if (any(this.clineSettingsPath())) detected.push("Cline");
     if (any(home(".codeium", "windsurf"))) detected.push("Windsurf");
@@ -1007,24 +1310,37 @@ export class AgentSetupManager {
     const ws = (...segments: string[]) => path.join(this.workspaceRoot, ...segments);
     const home = (...segments: string[]) => path.join(this.homeDir, ...segments);
     const cline = this.clineSettingsPath();
+    const json = (path: string, serverKeys: string[], scope: "workspace" | "global") => ({
+      path,
+      serverKeys,
+      scope,
+      format: "json" as const,
+    });
     return [
-      { path: ws(".vscode", "mcp.json"), serverKeys: ["servers", "comp"], scope: "workspace" },
-      { path: ws(".mcp.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
-      { path: ws(".cursor", "mcp.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
-      { path: home(".cursor", "mcp.json"), serverKeys: ["mcpServers", "comp"], scope: "global" },
+      json(ws(".vscode", "mcp.json"), ["servers", "comp"], "workspace"),
+      json(ws(".mcp.json"), ["mcpServers", "comp"], "workspace"),
+      json(ws(".cursor", "mcp.json"), ["mcpServers", "comp"], "workspace"),
+      json(home(".cursor", "mcp.json"), ["mcpServers", "comp"], "global"),
+      json(home(".codeium", "windsurf", "mcp_config.json"), ["mcpServers", "comp"], "global"),
+      ...(cline ? [json(cline, ["mcpServers", "comp"], "global")] : []),
+      json(this.antigravityConfigPath(), ["mcpServers", "comp"], "global"),
+      // Codex keeps its servers in TOML, so these go through repairTomlTarget.
       {
-        path: home(".codeium", "windsurf", "mcp_config.json"),
-        serverKeys: ["mcpServers", "comp"],
-        scope: "global",
+        path: path.join(this.codexHome(), "config.toml"),
+        serverKeys: [],
+        scope: "global" as const,
+        format: "toml" as const,
       },
-      ...(cline
-        ? [{ path: cline, serverKeys: ["mcpServers", "comp"], scope: "global" as const }]
-        : []),
-      { path: this.antigravityConfigPath(), serverKeys: ["mcpServers", "comp"], scope: "global" },
+      {
+        path: ws(".codex", "config.toml"),
+        serverKeys: [],
+        scope: "workspace" as const,
+        format: "toml" as const,
+      },
       // Legacy locations, still repaired for anyone who copied them by hand.
-      { path: ws(".comp", "config", "cursor_config.json"), serverKeys: ["comp"], scope: "workspace" },
-      { path: ws(".comp", "config", "cline_config.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
-      { path: ws(".comp", "config", "windsurf_config.json"), serverKeys: ["mcpServers", "comp"], scope: "workspace" },
+      json(ws(".comp", "config", "cursor_config.json"), ["comp"], "workspace"),
+      json(ws(".comp", "config", "cline_config.json"), ["mcpServers", "comp"], "workspace"),
+      json(ws(".comp", "config", "windsurf_config.json"), ["mcpServers", "comp"], "workspace"),
     ];
   }
 
@@ -1047,7 +1363,7 @@ export class AgentSetupManager {
   repairStaleConfigs(): RepairEntry[] {
     return this.repairTargets().map((target) => {
       try {
-        return this.repairTarget(target);
+        return target.format === "toml" ? this.repairTomlTarget(target) : this.repairTarget(target);
       } catch (error) {
         return {
           file: target.path,
@@ -1145,6 +1461,130 @@ export class AgentSetupManager {
   }
 
   /**
+   * The TOML counterpart of repairTarget(), for Codex's config.toml.
+   *
+   * WHY it exists rather than letting repairTarget() handle every file: that one
+   * parses JSON, so a perfectly valid Codex config would be reported as broken
+   * on every single activation while the daemon path it holds went stale
+   * forever — the one failure mode this whole repair pass was written to stop.
+   *
+   * The checks mirror repairTarget() exactly, in the same order and for the same
+   * reasons; only the parsing differs.
+   */
+  private repairTomlTarget(target: McpConfigTarget): RepairEntry {
+    const file = target.path;
+
+    if (!fs.existsSync(file)) {
+      return { file, status: "missing" };
+    }
+
+    const text = fs.readFileSync(file, "utf-8");
+    const section = AgentSetupManager.findCompSection(text);
+    if (!section) {
+      return { file, status: "skipped", reason: "no comp server entry" };
+    }
+
+    const block = text.slice(section.start, section.end);
+    // Same guard as the writer: a section ending with brackets still open was
+    // cut short by a nested array element, and splicing it would destroy the
+    // rest of the file.
+    if (!AgentSetupManager.isSelfContained(block)) {
+      return { file, status: "skipped", reason: "comp table spans a multi-line value" };
+    }
+
+    const commandMatch = /^\s*command\s*=\s*('[^'\n]*'|"(?:[^"\\\n]|\\.)*")/m.exec(block);
+    if (!commandMatch) {
+      return { file, status: "skipped", reason: "no command value" };
+    }
+    const command = decodeTomlString(commandMatch[1]);
+    if (command.length === 0) {
+      return { file, status: "skipped", reason: "no command value" };
+    }
+    if (command.includes("${")) {
+      return { file, status: "skipped", reason: "command uses a variable reference" };
+    }
+    if (!path.isAbsolute(command)) {
+      return { file, status: "skipped", reason: "command is relative" };
+    }
+
+    const commandBroken = !fs.existsSync(command);
+    let replacement: string | null = null;
+    if (commandBroken) {
+      replacement = this.resolveRepairPath(target.scope);
+      if (!replacement) {
+        return { file, status: "skipped", reason: "no replacement binary available" };
+      }
+    }
+
+    let repairedBlock = block;
+    if (replacement) {
+      // WHY offsets rather than String.replace: a replacement path containing
+      // `$&` or `$1` would be reinterpreted as a capture reference and splice
+      // the old value back into the middle of the new one, leaving a command
+      // that is both wrong and unquoted. The quoted value is the tail of the
+      // match, so its start is derivable without searching for it.
+      const valueStart = commandMatch.index + commandMatch[0].length - commandMatch[1].length;
+      repairedBlock =
+        repairedBlock.slice(0, valueStart) +
+        AgentSetupManager.tomlQuote(replacement) +
+        repairedBlock.slice(valueStart + commandMatch[1].length);
+    }
+
+    const withFreshRoot =
+      target.scope === "workspace" ? this.refreshWorkspaceRootToml(repairedBlock) : null;
+    const envRepaired = withFreshRoot !== null;
+    if (withFreshRoot !== null) {
+      repairedBlock = withFreshRoot;
+    }
+
+    if (!commandBroken && !envRepaired) {
+      return { file, status: "healthy" };
+    }
+
+    fs.writeFileSync(
+      file,
+      text.slice(0, section.start) + repairedBlock + text.slice(section.end),
+      "utf-8"
+    );
+
+    const entry: RepairEntry = { file, status: "repaired" };
+    if (replacement) {
+      entry.from = command;
+      entry.to = replacement;
+    }
+    if (envRepaired) {
+      entry.envRepaired = true;
+    }
+    return entry;
+  }
+
+  /**
+   * TOML counterpart of refreshWorkspaceRootEnv(), with the same skip rules.
+   *
+   * Returns the rewritten block, or null when nothing needed changing. Callers
+   * must only invoke this for workspace-scoped files.
+   */
+  private refreshWorkspaceRootToml(block: string): string | null {
+    const match = /(COMP_WORKSPACE_ROOT\s*=\s*)('[^'\n]*'|"(?:[^"\\\n]|\\.)*")/.exec(block);
+    if (!match) {
+      return null;
+    }
+    const current = decodeTomlString(match[2]);
+    if (current.length === 0 || current.includes("${") || !path.isAbsolute(current)) {
+      return null;
+    }
+    if (path.resolve(current) === path.resolve(this.workspaceRoot)) {
+      return null;
+    }
+    return (
+      block.slice(0, match.index) +
+      match[1] +
+      AgentSetupManager.tomlQuote(this.workspaceRoot) +
+      block.slice(match.index + match[0].length)
+    );
+  }
+
+  /**
    * Point COMP_WORKSPACE_ROOT at the workspace that is actually open.
    *
    * WHY: the value is written as an absolute path at generation time, so moving
@@ -1208,6 +1648,31 @@ export class AgentSetupManager {
 /** Message of an unknown throwable, for reporting into a WriteOutcome. */
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Read the value out of a quoted TOML scalar.
+ *
+ * Only the two single-line forms are handled, which is all comP writes and all
+ * a daemon path can be: a literal string takes its content verbatim, a basic
+ * string has its backslash escapes undone.
+ */
+function decodeTomlString(raw: string): string {
+  if (raw.startsWith("'")) {
+    return raw.slice(1, -1);
+  }
+  return raw.slice(1, -1).replace(/\\(.)/g, (_match, char: string) => {
+    switch (char) {
+      case "n":
+        return "\n";
+      case "t":
+        return "\t";
+      case "r":
+        return "\r";
+      default:
+        return char;
+    }
+  });
 }
 
 /** How long an external CLI may run before it is killed. */

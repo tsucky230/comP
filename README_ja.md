@@ -4,7 +4,7 @@
 
 # comP — AIコーディングアシスタントの「記憶」になるシステム
 
-**オープンソースで完全ローカル動作するコード分析エンジン。Claude Code・Cursor・Cline・Antigravity対応。**
+**オープンソースで完全ローカル動作するコード分析エンジン。Claude Code・Codex・Cursor・Cline・Antigravity対応。**
 
 🌐 **[公式ウェブサイト](https://tsucky230.github.io/comP/)**
 
@@ -116,6 +116,7 @@ comP が各ツールの実際の設定ファイルへ直接書き込み、既存
 | エージェント | 書き込み先 |
 | --- | --- |
 | **Claude Code** | `.mcp.json`（任意で `claude mcp add --scope user` も実行） |
+| **Codex** | `~/.codex/config.toml` と `.codex/config.toml` |
 | **GitHub Copilot** | `.vscode/mcp.json` |
 | **Cursor** | `.cursor/mcp.json` と `~/.cursor/mcp.json` |
 | **Cline** | VS Code globalStorage 配下の MCP 設定 |
@@ -370,6 +371,7 @@ VS Code は拡張機能をバージョン番号入りのディレクトリに展
 | エージェント | 状況 |
 | --- | --- |
 | Claude Code / GitHub Copilot | ✅ 対応・確認済み |
+| Codex（CLI・VS Code 拡張の両方） | ✅ 対応 |
 | Cursor / Cline / Windsurf / Antigravity / Aider / Continue.dev | ✅ 対応 |
 | Gemini | ❌ 非対応 |
 

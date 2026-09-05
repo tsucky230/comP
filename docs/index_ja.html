@@ -102,7 +102,7 @@
         <div class="detail-content">
           <h3>VS Codeに完全統合</h3>
           <p>VS Codeサイドバーからボタン1つで簡単に開始でき、コードの変更を監視してリアルタイムにインデックスを差分更新（stale状態の自動付与）します。</p>
-          <p>Claude Code, Cursor, Cline, Windsurf, GitHub Copilotなど、あらゆる主要AIエージェントのMCP（Model Context Protocol）設定を自動生成し、シームレスに連携可能です。</p>
+          <p>Claude Code, Codex, Cursor, Cline, Windsurf, GitHub Copilotなど、あらゆる主要AIエージェントのMCP（Model Context Protocol）設定を自動生成し、シームレスに連携可能です。</p>
         </div>
       </div>
 
@@ -285,6 +285,7 @@
           <p>コマンドパレット → <code>comP: Setup Agents</code>を実行し、エージェントを選択します。comPは新しいタブでMarkdownの手順書（および自動設定用のLLMプロンプト）を開き、設定をサポートします。また、サイドバーからいつでもエージェントの接続状況（最終アクセス時刻）を確認できます。各エージェントの手順：</p>
           <ul style="margin-top:0.75rem;padding-left:1.2rem;line-height:1.8">
             <li><strong>Claude Code</strong>: 手順書に従い <code>claude mcp add comp</code> コマンドをコピーして実行します。手順書を見逃した場合は <code>.comp/config/claude_desktop_config.json</code> のパスを使用</li>
+            <li><strong>Codex</strong>: <code>~/.codex/config.toml</code> と <code>.codex/config.toml</code> に自動書き込み済み（プロジェクト側は「信頼済みプロジェクト」でのみ有効）</li>
             <li><strong>Cursor</strong>: <code>~/.cursor/mcp.json</code> または <code>.cursor/mcp.json</code> にマージ</li>
             <li><strong>Cline</strong>: VS Code設定 → <em>Cline › MCP Servers</em>に貼り付け</li>
             <li><strong>Windsurf</strong>: <code>~/.codeium/windsurf/mcp_config.json</code> にマージ</li>

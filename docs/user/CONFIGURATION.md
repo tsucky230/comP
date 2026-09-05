@@ -36,7 +36,7 @@ For agents running inside VS Code (Copilot, Cline), configure MCP servers in `.v
 }
 ```
 
-### External Agents (Claude Code, Cursor, Antigravity)
+### External Agents (Claude Code, Codex, Cursor, Antigravity)
 
 External agents use their own MCP configuration files. Run:
 

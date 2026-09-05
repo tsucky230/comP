@@ -31,6 +31,7 @@ describe("AgentSetupManager", () => {
   let testWorkspace: string;
   let fakeHome: string;
   let globalStorageDir: string;
+  let codexHome: string;
 
   beforeEach(() => {
     mockDaemon = new MockDaemonManager();
@@ -42,6 +43,9 @@ describe("AgentSetupManager", () => {
     fakeHome = path.join(caseDir, "home");
     // Mirrors VS Code's layout: <...>/User/globalStorage/<publisher>.<extension>
     globalStorageDir = path.join(caseDir, "globalStorage", "tsucky230.comp-vscode");
+    // Codex honours CODEX_HOME, so without this override a developer who has it
+    // set would have their real Codex config rewritten by this suite.
+    codexHome = path.join(caseDir, "codex-home");
 
     fs.mkdirSync(testWorkspace, { recursive: true });
     fs.mkdirSync(fakeHome, { recursive: true });
@@ -50,6 +54,7 @@ describe("AgentSetupManager", () => {
     manager = new AgentSetupManager(mockDaemon as any, testWorkspace, undefined, {
       homeDir: fakeHome,
       globalStorageDir,
+      codexHome,
     });
   });
 
@@ -64,6 +69,13 @@ describe("AgentSetupManager", () => {
   };
   const writtenPaths = (result: GenerateConfigResult): string[] =>
     result.writes.filter((w) => w.status === "written").map((w) => w.path);
+  const readText = (file: string): string => fs.readFileSync(file, "utf-8");
+  const writeText = (file: string, value: string): void => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, value, "utf-8");
+  };
+  const codexGlobal = (): string => path.join(codexHome, "config.toml");
+  const codexProject = (): string => path.join(testWorkspace, ".codex", "config.toml");
 
   describe("target paths", () => {
     it("Claude Code writes only the project .mcp.json", async () => {
@@ -72,6 +84,16 @@ describe("AgentSetupManager", () => {
       expect(result.success).to.be.true;
       expect(writtenPaths(result)).to.deep.equal([path.join(testWorkspace, ".mcp.json")]);
       expect(readJson(result.configPath).mcpServers.comp).to.exist;
+    });
+
+    it("Codex writes the global config.toml before the project one", async () => {
+      const result = await manager.generateConfig("Codex");
+
+      expect(result.success).to.be.true;
+      // The global file is always read by Codex; the project one only for a
+      // project the user trusts, so the reliable target has to come first.
+      expect(writtenPaths(result)).to.deep.equal([codexGlobal(), codexProject()]);
+      expect(readText(codexGlobal())).to.include("[mcp_servers.comp]");
     });
 
     it("Cursor writes both the project and the global mcp.json", async () => {
@@ -205,6 +227,13 @@ describe("AgentSetupManager", () => {
       expect(project).to.include("COMP_WORKSPACE_ROOT");
       expect(global).to.not.include("COMP_WORKSPACE_ROOT");
     });
+
+    it("the global Codex table omits COMP_WORKSPACE_ROOT but the project one keeps it", async () => {
+      await manager.generateConfig("Codex");
+
+      expect(readText(codexProject())).to.include(`COMP_WORKSPACE_ROOT = '${testWorkspace}'`);
+      expect(readText(codexGlobal())).to.not.include("COMP_WORKSPACE_ROOT");
+    });
   });
 
   describe("merging with existing configuration", () => {
@@ -270,6 +299,141 @@ describe("AgentSetupManager", () => {
 
       const merged = readJson(path.join(testWorkspace, ".mcp.json"));
       expect(Object.keys(merged.mcpServers)).to.deep.equal(["comp"]);
+    });
+
+    it("preserves other Codex servers, sub-tables included", async () => {
+      // Shaped like a real config.toml: another server carrying a sub-table of
+      // its own, which a naive splice would swallow.
+      writeText(
+        codexGlobal(),
+        [
+          "[mcp_servers.vexp]",
+          'url = "http://127.0.0.1:9000/mcp"',
+          "tool_timeout_sec = 120",
+          "",
+          "[mcp_servers.vexp.http_headers]",
+          'Authorization = "Bearer example-token"',
+          "",
+        ].join("\n")
+      );
+
+      await manager.generateConfig("Codex");
+
+      const merged = readText(codexGlobal());
+      expect(merged).to.include("[mcp_servers.vexp]");
+      expect(merged).to.include("[mcp_servers.vexp.http_headers]");
+      expect(merged).to.include('Authorization = "Bearer example-token"');
+      expect(merged).to.include("[mcp_servers.comp]");
+    });
+
+    it("replaces its own Codex table instead of appending a second one", async () => {
+      await manager.generateConfig("Codex");
+      await manager.generateConfig("Codex");
+
+      const merged = readText(codexGlobal());
+      expect(merged.split("[mcp_servers.comp]")).to.have.lengthOf(2);
+      expect(merged.split("# comP MCP server")).to.have.lengthOf(2);
+    });
+
+    it("replaces a Codex entry that used an env sub-table, leaving nothing behind", async () => {
+      // The shape `codex mcp add` writes. Replacing only the parent table would
+      // leave the old env sub-table attached to the new command.
+      writeText(
+        codexGlobal(),
+        [
+          "[mcp_servers.comp]",
+          'command = "/gone/comp-daemon"',
+          "args = []",
+          "",
+          "[mcp_servers.comp.env]",
+          'RUST_LOG = "trace"',
+          "",
+          "[mcp_servers.other]",
+          'command = "/usr/bin/other"',
+          "",
+        ].join("\n")
+      );
+
+      await manager.generateConfig("Codex");
+
+      const merged = readText(codexGlobal());
+      expect(merged).to.not.include("[mcp_servers.comp.env]");
+      expect(merged).to.not.include('RUST_LOG = "trace"');
+      expect(merged).to.not.include("/gone/comp-daemon");
+      expect(merged).to.include("[mcp_servers.other]");
+      expect(merged).to.include('command = "/usr/bin/other"');
+    });
+
+    it("refuses to guess a merge when Codex uses an inline mcp_servers table", async () => {
+      const original = 'mcp_servers = { other = { command = "/usr/bin/other" } }\n';
+      writeText(codexGlobal(), original);
+
+      const result = await manager.generateConfig("Codex");
+
+      expect(readText(codexGlobal())).to.equal(original);
+      expect(result.writes[0].status).to.equal("failed");
+      expect(result.writes[0].reason).to.include("inline table");
+    });
+
+    it("refuses to guess a merge when a comp entry is written in dotted form", async () => {
+      const original = ["[mcp_servers]", 'comp = { command = "/old/comp-daemon" }', ""].join("\n");
+      writeText(codexGlobal(), original);
+
+      const result = await manager.generateConfig("Codex");
+
+      expect(readText(codexGlobal())).to.equal(original);
+      expect(result.writes[0].status).to.equal("failed");
+    });
+
+    it("is not tripped by an unrelated key called comp in another table", async () => {
+      // `[tui] comp = true` says nothing about MCP servers, and refusing to
+      // configure Codex over it would be a plain false alarm.
+      writeText(codexGlobal(), ["[tui]", "comp = true", ""].join("\n"));
+
+      const result = await manager.generateConfig("Codex");
+
+      expect(result.writes[0].status).to.equal("written");
+      const merged = readText(codexGlobal());
+      expect(merged).to.include("comp = true");
+      expect(merged).to.include("[mcp_servers.comp]");
+    });
+
+    it("leaves a server whose name merely starts with comp alone", async () => {
+      writeText(
+        codexGlobal(),
+        ["[mcp_servers.company]", 'command = "/usr/bin/company"', ""].join("\n")
+      );
+
+      await manager.generateConfig("Codex");
+
+      const merged = readText(codexGlobal());
+      expect(merged).to.include("[mcp_servers.company]");
+      expect(merged).to.include('command = "/usr/bin/company"');
+      expect(merged).to.include("[mcp_servers.comp]");
+    });
+
+    it("refuses to splice a comp table cut short by a nested array element", async () => {
+      // `["--flag"],` opens a line the way a table header does, so the section
+      // scan stops there. Splicing would strip the rest of the array and leave
+      // the file unparseable — taking down all of Codex, not just comP.
+      const original = [
+        "[mcp_servers.comp]",
+        "command = '/old/comp-daemon'",
+        "args = [",
+        '["--flag"],',
+        "]",
+        "",
+        "[mcp_servers.keepme]",
+        'command = "/usr/bin/keepme"',
+        "",
+      ].join("\n");
+      writeText(codexGlobal(), original);
+
+      const result = await manager.generateConfig("Codex");
+
+      expect(result.writes[0].status).to.equal("failed");
+      expect(result.writes[0].reason).to.include("multi-line");
+      expect(readText(codexGlobal())).to.equal(original);
     });
   });
 
@@ -363,6 +527,57 @@ describe("AgentSetupManager", () => {
       expect(result.manualFallback![0].path).to.equal(file);
       const parsed = JSON.parse(result.manualFallback![0].content);
       expect(parsed.mcpServers.comp.command).to.be.a("string");
+    });
+
+    it("carries a pasteable TOML table when the Codex config cannot be merged", async () => {
+      writeText(codexGlobal(), 'mcp_servers = { other = { command = "/usr/bin/other" } }\n');
+
+      const result = await manager.generateConfig("Codex");
+
+      const fallback = result.manualFallback!.find((f) => f.path === codexGlobal())!;
+      expect(fallback.content).to.include("[mcp_servers.comp]");
+      expect(fallback.content).to.include("command = '");
+    });
+  });
+
+  describe("Codex TOML format", () => {
+    it("writes env as an inline table so the entry stays one contiguous block", async () => {
+      await manager.generateConfig("Codex");
+
+      const content = readText(codexProject());
+      expect(content).to.include("[mcp_servers.comp]");
+      expect(content).to.include("args = []");
+      expect(content).to.match(/^env = \{ RUST_LOG = 'info', COMP_WORKSPACE_ROOT = '.+' \}$/m);
+      expect(content).to.not.include("[mcp_servers.comp.env]");
+    });
+
+    it("quotes TOML scalars so Windows backslashes survive", () => {
+      const quote = (AgentSetupManager as any).tomlQuote as (v: string) => string;
+
+      // A literal string takes every character as-is; a basic string would read
+      // \U as an escape and reject the path.
+      expect(quote("E:\\dev\\comP")).to.equal("'E:\\dev\\comP'");
+      expect(quote("it's")).to.equal('"it\'s"');
+    });
+
+    it("escapes a newline instead of letting it split the value across lines", () => {
+      const quote = (AgentSetupManager as any).tomlQuote as (v: string) => string;
+
+      // A directory name may legally contain a newline on macOS and Linux; a raw
+      // one would end the string early and make the whole config unparseable.
+      expect(quote("/we\nird/path")).to.equal('"/we\\nird/path"');
+      expect(quote("/tab\there")).to.equal('"/tab\\there"');
+    });
+
+    it("keeps a daemon path containing $& intact", async () => {
+      // Written through String.replace, `$&` would be read as a capture
+      // reference and splice the old value into the middle of the new one.
+      const tricky = path.join(caseDir, "bin$&dir", "comp-daemon");
+      (manager as any).getDaemonPath = () => tricky;
+
+      await manager.generateConfig("Codex");
+
+      expect(readText(codexGlobal())).to.include(`command = '${tricky}'`);
     });
   });
 
@@ -542,6 +757,13 @@ describe("AgentSetupManager", () => {
 
       expect(detected).to.include.members(["Cursor", "Windsurf", "Claude Code"]);
       expect(detected).to.not.include("Continue");
+      expect(detected).to.not.include("Codex");
+    });
+
+    it("detects Codex from its config directory", () => {
+      fs.mkdirSync(codexHome, { recursive: true });
+
+      expect(manager.detectInstalledAgents()).to.include("Codex");
     });
   });
 
@@ -572,6 +794,7 @@ describe("AgentSetupManager", () => {
     let devBinary: string;
     let bundledBinary: string;
     let stalePath: string;
+    let repairCodexHome: string;
     let repairManager: AgentSetupManager;
 
     const writeJson = (file: string, value: unknown): void => {
@@ -603,7 +826,11 @@ describe("AgentSetupManager", () => {
       // Cursor and Windsurf configuration.
       repairManager = new AgentSetupManager(mockDaemon as any, ws, extDir, {
         homeDir: path.join(caseDir, "home"),
+        // Codex reads CODEX_HOME, which would otherwise point these repairs at
+        // the developer's own configuration.
+        codexHome: path.join(caseDir, "codex-home"),
       });
+      repairCodexHome = path.join(caseDir, "codex-home");
       // The Antigravity target is redirected on top of that so the assertions
       // below can point at one known file.
       (repairManager as any).antigravityConfigPath = () => globalConfig;
@@ -847,7 +1074,13 @@ describe("AgentSetupManager", () => {
     });
 
     it("cannot repair a global config when the extension path is unknown", () => {
-      const noExtManager = new AgentSetupManager(mockDaemon as any, ws, undefined);
+      // homeDir and codexHome are pinned for the same reason as the shared
+      // manager above: several targets live under them, and a real one would
+      // put this test on the developer's own configuration.
+      const noExtManager = new AgentSetupManager(mockDaemon as any, ws, undefined, {
+        homeDir: path.join(tmpRoot, "no-ext-home"),
+        codexHome: path.join(tmpRoot, "no-ext-codex"),
+      });
       (noExtManager as any).antigravityConfigPath = () => globalConfig;
       writeJson(globalConfig, { mcpServers: { comp: { command: stalePath } } });
 
@@ -855,6 +1088,185 @@ describe("AgentSetupManager", () => {
 
       expect(entryFor(entries, globalConfig)?.status).to.equal("skipped");
       expect(readJson(globalConfig).mcpServers.comp.command).to.equal(stalePath);
+    });
+
+    describe("Codex config.toml", () => {
+      const codexConfig = (): string => path.join(repairCodexHome, "config.toml");
+      const writeToml = (file: string, value: string): void => {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, value, "utf-8");
+      };
+      const readToml = (file: string): string => fs.readFileSync(file, "utf-8");
+
+      it("does not report a valid TOML config as unparseable JSON", () => {
+        // The regression this whole routine exists for: routed through the JSON
+        // reader, a healthy Codex config fails on every activation while the
+        // stale daemon path inside it is never fixed.
+        writeToml(
+          codexConfig(),
+          ["[mcp_servers.comp]", `command = '${bundledBinary}'`, "args = []", ""].join("\n")
+        );
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("healthy");
+      });
+
+      it("rewrites a stale command and leaves every other line untouched", () => {
+        writeToml(
+          codexConfig(),
+          [
+            "[mcp_servers.vexp]",
+            'url = "http://127.0.0.1:9000/mcp"',
+            "",
+            "[mcp_servers.comp]",
+            `command = '${stalePath}'`,
+            "args = []",
+            "env = { RUST_LOG = 'info' }",
+            "",
+            "[mcp_servers.other]",
+            'command = "/usr/bin/other"',
+            "",
+          ].join("\n")
+        );
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+        const repaired = readToml(codexConfig());
+
+        expect(entry?.status).to.equal("repaired");
+        expect(entry?.from).to.equal(stalePath);
+        // A global file gets the bundled binary, never this workspace's dev build.
+        expect(entry?.to).to.equal(bundledBinary);
+        expect(repaired).to.include(`command = '${bundledBinary}'`);
+        expect(repaired).to.include('url = "http://127.0.0.1:9000/mcp"');
+        expect(repaired).to.include("[mcp_servers.other]");
+        expect(repaired).to.include('command = "/usr/bin/other"');
+      });
+
+      it("reads a command written as a basic string", () => {
+        // `codex mcp add` writes basic strings, so the repair has to decode them
+        // as well as the literal strings comP itself emits.
+        const escaped = stalePath.replace(/\\/g, "\\\\");
+        writeToml(
+          codexConfig(),
+          ["[mcp_servers.comp]", `command = "${escaped}"`, "args = []", ""].join("\n")
+        );
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("repaired");
+        expect(entry?.from).to.equal(stalePath);
+      });
+
+      it("leaves a relative command untouched", () => {
+        const original = ["[mcp_servers.comp]", "command = 'comp-daemon'", ""].join("\n");
+        writeToml(codexConfig(), original);
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("skipped");
+        expect(readToml(codexConfig())).to.equal(original);
+      });
+
+      it("leaves a command containing a ${...} variable untouched", () => {
+        const original = ["[mcp_servers.comp]", "command = '${env:COMP_BIN}'", ""].join("\n");
+        writeToml(codexConfig(), original);
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("skipped");
+        expect(readToml(codexConfig())).to.equal(original);
+      });
+
+      it("skips a config with no comp table", () => {
+        writeToml(codexConfig(), '[mcp_servers.vexp]\nurl = "http://localhost/mcp"\n');
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("skipped");
+        expect(entry?.reason).to.include("no comp server entry");
+      });
+
+      it("reports a missing file without throwing", () => {
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("missing");
+      });
+
+      it("refreshes a stale COMP_WORKSPACE_ROOT in the project config", () => {
+        const projectConfig = path.join(ws, ".codex", "config.toml");
+        writeToml(
+          projectConfig,
+          [
+            "[mcp_servers.comp]",
+            `command = '${devBinary}'`,
+            "args = []",
+            "env = { RUST_LOG = 'info', COMP_WORKSPACE_ROOT = '/moved/away' }",
+            "",
+          ].join("\n")
+        );
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), projectConfig);
+
+        expect(entry?.status).to.equal("repaired");
+        expect(entry?.envRepaired).to.be.true;
+        expect(readToml(projectConfig)).to.include(`COMP_WORKSPACE_ROOT = '${ws}'`);
+      });
+
+      it("keeps a replacement path containing $& intact", () => {
+        const tricky = path.join(extDir, "bin$&dir", "comp-daemon-macos");
+        fs.mkdirSync(path.dirname(tricky), { recursive: true });
+        fs.writeFileSync(tricky, "");
+        (repairManager as any).bundledDaemonPath = () => tricky;
+        writeToml(
+          codexConfig(),
+          ["[mcp_servers.comp]", `command = '${stalePath}'`, "args = []", ""].join("\n")
+        );
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("repaired");
+        // Through String.replace this became bin'<old path>'dir — a command that
+        // is both wrong and unquoted, i.e. an unparseable config.
+        expect(readToml(codexConfig())).to.include(`command = '${tricky}'`);
+      });
+
+      it("skips a comp table cut short by a nested array element", () => {
+        const original = [
+          "[mcp_servers.comp]",
+          `command = '${stalePath}'`,
+          "args = [",
+          '["--flag"],',
+          "]",
+          "",
+          "[mcp_servers.keepme]",
+          'command = "/usr/bin/keepme"',
+          "",
+        ].join("\n");
+        writeToml(codexConfig(), original);
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("skipped");
+        expect(readToml(codexConfig())).to.equal(original);
+      });
+
+      it("never rewrites COMP_WORKSPACE_ROOT in the global config", () => {
+        writeToml(
+          codexConfig(),
+          [
+            "[mcp_servers.comp]",
+            `command = '${bundledBinary}'`,
+            "env = { COMP_WORKSPACE_ROOT = '/some/other/project' }",
+            "",
+          ].join("\n")
+        );
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("healthy");
+        expect(readToml(codexConfig())).to.include("'/some/other/project'");
+      });
     });
   });
 });
