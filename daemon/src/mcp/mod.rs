@@ -39,6 +39,16 @@ pub struct SessionCall {
     #[serde(default)]
     pub stale: bool,
     pub timestamp: u64,
+    /// Which MCP client/LLM produced this record (e.g. "claude-code", "codex").
+    /// WHY default rather than Option: pre-migration records and any client that
+    /// doesn't set COMP_AGENT_ID have no way to know their origin — "unknown" keeps
+    /// session_recall's formatting code from needing to unwrap a missing value.
+    #[serde(default = "default_agent")]
+    pub agent: String,
+}
+
+fn default_agent() -> String {
+    "unknown".to_string()
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -53,8 +63,34 @@ pub struct SessionMemory {
     pub sessions: Vec<Session>,
 }
 
-fn get_session_memory_path(root: &str) -> std::path::PathBuf {
-    std::path::Path::new(root).join(".comp").join("session-memory.json")
+/// Keep only ASCII alphanumerics, `-`, and `_` from `agent_id`; replace everything
+/// else with `_`. WHY: agent_id ultimately comes from the COMP_AGENT_ID env var
+/// (set by each MCP client's launch config) and is used as a filename component —
+/// this prevents a malformed value (path separators, "..") from escaping the
+/// session-memory directory. Agent ids are drawn from a small, known set defined
+/// by AgentSetup.ts, so Windows-reserved names (CON, NUL, ...) are out of scope.
+fn sanitize_agent_id(agent_id: &str) -> String {
+    agent_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
+}
+
+/// Path to this agent's own session-memory cache file.
+///
+/// WHY per-agent rather than one shared file: comP is a stdio MCP server, so each
+/// MCP client (Claude Code, Cursor, a future Codex integration, ...) spawns its own
+/// comp-daemon subprocess against the same workspace (see AgentSetup.ts). A single
+/// shared session-memory.json would be read-modify-written by multiple independent
+/// OS processes with no coordination — lost updates, or a full reset to empty on a
+/// torn-write parse failure (see docs/ARCHITECTURE_ja.md's session-memory ADR).
+/// Splitting by agent id makes each file single-writer by construction, so no
+/// locking is needed for this layer at all.
+fn get_session_memory_path(root: &str, agent_id: &str) -> std::path::PathBuf {
+    std::path::Path::new(root)
+        .join(".comp")
+        .join("session-memory")
+        .join(format!("{}.json", sanitize_agent_id(agent_id)))
 }
 
 /// Render a backtick-quoted, comma-separated list capped at `cap` items,
@@ -74,14 +110,15 @@ fn format_capped_list(items: &[String], cap: usize) -> String {
 
 fn record_mcp_call(
     workspace_root: &str,
+    agent_id: &str,
     session_id: &str,
     query: String,
     symbols: Vec<String>,
     files: Vec<String>,
     tokens: u64,
 ) -> Result<()> {
-    let path = get_session_memory_path(workspace_root);
-    
+    let path = get_session_memory_path(workspace_root, agent_id);
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -110,6 +147,7 @@ fn record_mcp_call(
                 tokens,
                 stale: false,
                 timestamp: now,
+                agent: agent_id.to_string(),
             });
             found = true;
             break;
@@ -128,6 +166,7 @@ fn record_mcp_call(
                 tokens,
                 stale: false,
                 timestamp: now,
+                agent: agent_id.to_string(),
             }],
         });
     }
@@ -137,6 +176,225 @@ fn record_mcp_call(
     serde_json::to_writer_pretty(writer, &memory)?;
 
     Ok(())
+}
+
+/// Append one already-serialized JSONL line to `hist_path`, holding a short-lived
+/// *exclusive* OS advisory lock for the duration of the write.
+///
+/// WHY exclusive, not shared, even though only compaction strictly needs to
+/// exclude other writers: on Windows, `LockFileEx`-backed locks (what
+/// `std::fs::File::lock*` uses, stable since Rust 1.89) are not purely advisory
+/// like POSIX `flock` — a handle holding only a *shared* lock is denied write
+/// access to the locked region with `ERROR_LOCK_VIOLATION` (os error 33), even
+/// when the writer is the same handle that holds the lock. Verified empirically
+/// on this toolchain: every test appending under `lock_shared()` failed at
+/// `write_all`, while the same pattern under `lock()` succeeded. Since every
+/// caller of this function writes, every caller needs the exclusive lock — there
+/// is no cheaper "shared" tier available for a writer on Windows. Contention is
+/// negligible in practice: each critical section is one small write, so
+/// concurrent appenders just take turns rather than truly blocking each other.
+///
+/// WHY this must be the ONLY writer of this file: history-record.sh (the Stop hook)
+/// used to call `fs.appendFileSync` directly from Node, bypassing this lock entirely
+/// — an advisory lock only blocks callers that also try to acquire it, so an
+/// unlocked writer defeats the whole scheme. The hook now shells out to
+/// `comp-daemon append-history` (see try_run_cli_subcommand) so every writer, in
+/// every language, goes through this one function.
+///
+/// Synchronous / blocking: callers on the async runtime must wrap this in
+/// `tokio::task::spawn_blocking`.
+fn append_history_line(hist_path: &std::path::Path, line: &str) -> Result<()> {
+    // WHY no external crate: std::fs::File::lock (stable since Rust 1.89) wraps
+    // flock/LockFileEx natively — no locking dependency needed.
+    use std::io::Write;
+
+    if let Some(parent) = hist_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // WHY .read(true) on a write-only append: on Windows, File::lock (and
+    // lock_shared) require the handle to carry read access — an append()-only
+    // handle lacks it and lock() fails with ERROR_ACCESS_DENIED (os error 5),
+    // verified empirically on this toolchain. Adding .read(true) doesn't change
+    // the actual write behavior (writes still go through the append-mode path).
+    let mut file = std::fs::OpenOptions::new().create(true).read(true).append(true).open(hist_path)?;
+    // WHY block here (not try_lock): compaction and other appenders hold this
+    // only briefly, so waiting is preferable to failing the caller's append.
+    // Released automatically when `file` drops at the end of this function.
+    file.lock()?;
+    file.write_all(format!("{}\n", line).as_bytes())?;
+    Ok(())
+}
+
+/// Rewrite `hist_path` in place, replacing its content with a compacted form,
+/// while holding an *exclusive* OS advisory lock for the entire read-modify-write.
+///
+/// WHY in-place rewrite (seek-to-0 + write + truncate) instead of write-new-file
+/// + atomic rename: on Windows, renaming a file over a path while another process
+/// holds an open handle to the destination can fail with a sharing violation, and
+/// even when it succeeds there is a window between "release lock on the old file"
+/// and "rename the new file into place" where an unlocked append could land in the
+/// old file and be silently discarded by the rename. Holding one exclusive lock for
+/// the full read+write+truncate closes that window: no appender (which also takes
+/// an exclusive lock — see append_history_line's doc for why shared doesn't work
+/// on Windows) can write until this function releases the lock.
+///
+/// WHY a `.bak` snapshot is written before mutating: `compact_fn` is a lossy
+/// summarization step; if it produces bad output there must be a manual recovery
+/// path back to the pre-compaction content (checklist item: "失敗時に.bakから
+/// ロールバック可能").
+///
+/// `compact_fn` receives the raw pre-compaction file bytes and returns the bytes to
+/// write back. The compaction *policy* (dedup? drop entries older than N days? ask
+/// an LLM to summarize?) is deliberately not decided here — this function only
+/// guarantees the locking/atomicity contract around whatever policy is supplied.
+///
+/// Synchronous / blocking; manually triggered only (never called from the request
+/// handling path), so callers should run it via `spawn_blocking` same as
+/// `append_history_line`.
+fn compact_history_file(
+    hist_path: &std::path::Path,
+    compact_fn: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
+) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(hist_path)?;
+    // WHY blocking exclusive lock, held for the entire read+compute+write below:
+    // any appender (append_history_line) also takes an exclusive lock before its
+    // write, so holding this one for the full critical section guarantees no
+    // append can land between "we read the old content" and "we finish writing the
+    // new content" — closing the race window from Gemini review finding #2.
+    file.lock()?;
+
+    let mut original = Vec::new();
+    file.read_to_end(&mut original)?;
+
+    // Compaction *policy* is the caller's problem; abort here (file untouched, no
+    // backup written) if it fails — there is nothing to roll back from yet.
+    let compacted = compact_fn(&original)?;
+
+    // Snapshot pre-compaction content before mutating anything: compact_fn is a
+    // lossy step, and this is the manual recovery path if it summarized badly.
+    let backup_path = hist_path.with_extension("jsonl.bak");
+    std::fs::write(&backup_path, &original)?;
+
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&compacted)?;
+    file.set_len(compacted.len() as u64)?;
+
+    Ok(())
+}
+
+/// Parsed form of a recognized CLI subcommand (`args[1..]`, i.e. excluding the
+/// binary path). Kept separate from execution (`run_append_history`) so parsing
+/// alone is unit-testable without touching stdin or the filesystem.
+#[derive(Debug, PartialEq, Eq)]
+enum CliSubcommand {
+    AppendHistory { workspace_root: String, agent_id: String },
+}
+
+/// Parse `args` (as given to `main`, so `args[0]` is the binary path) into a
+/// recognized subcommand, or `None` if `args` should fall through to normal MCP
+/// server startup — either no subcommand was given, or it wasn't recognized.
+///
+/// # Subcommands
+/// - `append-history <workspace_root> <agent_id>`
+fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
+    if args.len() != 4 || args[1] != "append-history" {
+        return None;
+    }
+    Some(CliSubcommand::AppendHistory {
+        workspace_root: args[2].clone(),
+        agent_id: args[3].clone(),
+    })
+}
+
+/// Read one JSON object `{ "request": string, "outcome": string | null }` from
+/// `input`, build the corresponding `SessionCall` — attaching `agent_id` and the
+/// current timestamp itself, never trusting the payload for either, so attribution
+/// can't be spoofed by a confused or malicious caller — and append it to this
+/// month's `.comp/history/log-YYYY-MM.jsonl` under `workspace_root` via
+/// `append_history_line` (locked-append protocol).
+///
+/// `input` is injectable (any `Read`) so this is unit-testable without real stdin;
+/// the CLI entry point below passes `std::io::stdin()`.
+fn run_append_history(
+    workspace_root: &str,
+    agent_id: &str,
+    mut input: impl std::io::Read,
+) -> Result<()> {
+    // WHY a dedicated payload struct instead of deserializing straight into
+    // SessionCall: SessionCall has an `agent` field, and if the stdin payload
+    // could set it directly, a confused or malicious hook script could spoof
+    // attribution. This struct has no `agent` field at all, so serde silently
+    // ignores one if present in the input — agent_id (the CLI arg) always wins.
+    #[derive(serde::Deserialize)]
+    struct AppendHistoryPayload {
+        request: String,
+        #[serde(default)]
+        outcome: Option<String>,
+    }
+
+    let mut buf = String::new();
+    input.read_to_string(&mut buf)?;
+    let payload: AppendHistoryPayload = serde_json::from_str(&buf)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let call = SessionCall {
+        query: payload.request,
+        outcome: payload.outcome,
+        symbols: Vec::new(),
+        files: Vec::new(),
+        tokens: 0,
+        stale: false,
+        timestamp: now,
+        agent: agent_id.to_string(),
+    };
+
+    let month = &format_epoch_ms(now)[0..7];
+    let hist_path = std::path::Path::new(workspace_root)
+        .join(".comp")
+        .join("history")
+        .join(format!("log-{}.jsonl", month));
+
+    let line = serde_json::to_string(&call)?;
+    append_history_line(&hist_path, &line)
+}
+
+/// Handle a lightweight CLI invocation of the comp-daemon binary, as opposed to
+/// starting the long-running MCP stdio server.
+///
+/// Returns `Some(exit_code)` if `args` matched a known subcommand — the caller
+/// (main.rs) must exit immediately with that code rather than falling through to
+/// normal daemon startup. Returns `None` if `args` did not match any subcommand,
+/// meaning the caller should proceed with normal MCP server startup.
+///
+/// WHY this exists as a CLI subcommand rather than requiring callers to speak
+/// JSON-RPC over stdio: .claude/hooks/history-record.sh fires once per Claude Code
+/// turn and needs a fast, one-shot write — spinning up the full MCP server
+/// (GraphDB open + background indexing, ~48s) for that would be wrong. See
+/// append_history_line's doc for why this path must be the only JSONL writer.
+///
+/// Thin by design: real parsing lives in `parse_cli_subcommand`, real logic in
+/// `run_append_history` — both independently unit-tested. This function only
+/// wires them to real stdin and an exit code, which is why it isn't itself
+/// covered by a dedicated unit test.
+pub fn try_run_cli_subcommand(args: &[String]) -> Option<i32> {
+    match parse_cli_subcommand(args)? {
+        CliSubcommand::AppendHistory { workspace_root, agent_id } => {
+            match run_append_history(&workspace_root, &agent_id, std::io::stdin()) {
+                Ok(()) => Some(0),
+                Err(e) => {
+                    eprintln!("append-history failed: {}", e);
+                    Some(1)
+                }
+            }
+        }
+    }
 }
 
 /// Format a Unix-epoch millisecond timestamp as "YYYY-MM-DD HH:MM" in UTC.
@@ -628,6 +886,7 @@ impl MCPServer {
         recorded_files.dedup();
         if let Err(e) = record_mcp_call(
             &self.state.workspace_root,
+            &self.state.agent_id,
             &self.state.session_id,
             task.to_string(),
             recorded_symbols,
@@ -912,6 +1171,7 @@ impl MCPServer {
         let estimated_tokens = (count as u64) * 50;
         if let Err(e) = record_mcp_call(
             &self.state.workspace_root,
+            &self.state.agent_id,
             &self.state.session_id,
             query.to_string(),
             recorded_symbols,
@@ -1504,7 +1764,6 @@ impl MCPServer {
     pub async fn handle_session_recall(&self, params: Value) -> Result<Value> {
         let query_filter = params["query"].as_str().map(|q| q.to_lowercase());
         let limit = params["limit"].as_u64().unwrap_or(20) as usize;
-        let path = get_session_memory_path(&self.state.workspace_root);
 
         let mut markdown = String::new();
         markdown.push_str("### Session Recall\n\n");
@@ -1515,21 +1774,33 @@ impl MCPServer {
             "No past invocations recorded."
         };
 
-        // WHY: recall must survive daemon restarts / session breaks. Gather from BOTH stores:
-        //   1. session-memory.json — auto run_pipeline/get_context query records (per-session,
-        //      accumulated across daemon starts);
+        // WHY: recall must survive daemon restarts / session breaks, AND merge the work of
+        // every agent that has touched this workspace. Gather from BOTH stores:
+        //   1. .comp/session-memory/*.json — one file per agent (see get_session_memory_path);
+        //      each is single-writer, so this is a read-only fan-in across files, not a shared
+        //      mutable store. Auto-recorded run_pipeline/get_context query records.
         //   2. .comp/history/*.jsonl — explicit interaction logs (request + outcome) written by
-        //      session_log / the Stop hook, which also feed BM25 recall via run_pipeline.
-        // Flatten everything across ALL sessions and show newest-first to reconstruct context.
+        //      session_log / the Stop hook (any agent may append), which also feed BM25 recall
+        //      via run_pipeline.
+        // Flatten everything across ALL agents/sessions and show newest-first.
         let mut calls: Vec<SessionCall> = Vec::new();
 
-        if path.exists() {
-            if let Ok(file) = std::fs::File::open(&path) {
-                let reader = std::io::BufReader::new(file);
-                let memory: SessionMemory =
-                    serde_json::from_reader(reader).unwrap_or(SessionMemory { sessions: Vec::new() });
-                for session in memory.sessions {
-                    calls.extend(session.calls);
+        let memory_dir = std::path::Path::new(&self.state.workspace_root)
+            .join(".comp")
+            .join("session-memory");
+        if let Ok(entries) = std::fs::read_dir(&memory_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(file) = std::fs::File::open(&p) {
+                    let reader = std::io::BufReader::new(file);
+                    let memory: SessionMemory = serde_json::from_reader(reader)
+                        .unwrap_or(SessionMemory { sessions: Vec::new() });
+                    for session in memory.sessions {
+                        calls.extend(session.calls);
+                    }
                 }
             }
         }
@@ -1639,6 +1910,7 @@ impl MCPServer {
             tokens: 0,
             stale: false,
             timestamp: now,
+            agent: self.state.agent_id.clone(),
         };
 
         // Monthly file bounds each log while preserving full history.
@@ -1652,14 +1924,11 @@ impl MCPServer {
         }
 
         let line = serde_json::to_string(&call)?;
-        {
-            use std::io::Write;
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&hist_path)?;
-            writeln!(f, "{}", line)?;
-        }
+        // WHY spawn_blocking: append_history_line takes an OS advisory lock (fs4,
+        // synchronous API) around a single write_all — a blocking call that must not
+        // run directly on the async runtime's worker thread.
+        let lock_path = hist_path.clone();
+        tokio::task::spawn_blocking(move || append_history_line(&lock_path, &line)).await??;
 
         // Index the history file so run_pipeline BM25 can surface past interactions.
         // Best-effort: session_recall reads the file directly regardless of indexing.
@@ -2081,7 +2350,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap()).await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         // Nodes are 0 at creation since indexing has not run
@@ -2107,7 +2376,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_run_pipeline() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let params = json!({
@@ -2139,7 +2408,7 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let state = Arc::new(
-            crate::AppState::new(temp_dir.to_str().unwrap())
+            crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent")
                 .await
                 .expect("Failed to create AppState"),
         );
@@ -2180,7 +2449,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_run_pipeline_missing_task() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let params = json!({ "max_tokens": 8000 }); // Missing task
@@ -2264,7 +2533,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_get_context() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let params = json!({
@@ -2283,7 +2552,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_get_context_missing_query() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let params = json!({ "limit": 10 }); // Missing query
@@ -2294,7 +2563,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_get_impact_graph() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let params = json!({
@@ -2314,7 +2583,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_get_impact_graph_missing_symbol_id() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let params = json!({ "symbol_name": "authenticate" }); // Missing symbol_id
@@ -2325,7 +2594,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_list_indexed_files() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let result = server.handle_list_indexed_files().await;
@@ -2344,7 +2613,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap()).await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let response = server.handle_get_token_usage().await.unwrap();
@@ -2373,7 +2642,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_get_stats() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let result = server.handle_get_stats().await;
@@ -2402,7 +2671,7 @@ mod tests {
 
         std::env::set_var("COMP_WORKSPACE_ROOT", temp_dir.to_str().unwrap());
 
-        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap()).await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state.clone());
 
         let result = server.handle_session_recall(json!({})).await.unwrap();
@@ -2410,6 +2679,7 @@ mod tests {
 
         record_mcp_call(
             temp_dir.to_str().unwrap(),
+            &state.agent_id,
             &state.session_id,
             "test task".to_string(),
             vec!["test_symbol".to_string()],
@@ -2454,12 +2724,12 @@ mod tests {
         let root = temp_dir.to_str().unwrap();
 
         std::env::set_var("COMP_WORKSPACE_ROOT", root);
-        let state = Arc::new(crate::AppState::new(root).await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(root, "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state.clone());
 
         let symbols: Vec<String> = (1..=30).map(|i| format!("symbol_{}", i)).collect();
         let files: Vec<String> = (1..=12).map(|i| format!("src/file_{}.rs", i)).collect();
-        record_mcp_call(root, &state.session_id, "big task".to_string(), symbols, files, 100).unwrap();
+        record_mcp_call(root, &state.agent_id, &state.session_id, "big task".to_string(), symbols, files, 100).unwrap();
 
         let markdown = server.handle_session_recall(json!({})).await.unwrap();
         let markdown = markdown.as_str().unwrap();
@@ -2491,13 +2761,13 @@ mod tests {
         let root = temp_dir.to_str().unwrap();
 
         std::env::set_var("COMP_WORKSPACE_ROOT", root);
-        let state = Arc::new(crate::AppState::new(root).await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(root, "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state.clone());
 
         // Two records under two DIFFERENT session ids, neither equal to the current
         // session_id — the old per-session filter would have returned nothing.
-        record_mcp_call(root, "sess-old", "alpha task".to_string(), vec![], vec![], 10).unwrap();
-        record_mcp_call(root, "sess-new", "beta task".to_string(), vec![], vec![], 20).unwrap();
+        record_mcp_call(root, "test-agent", "sess-old", "alpha task".to_string(), vec![], vec![], 10).unwrap();
+        record_mcp_call(root, "test-agent", "sess-new", "beta task".to_string(), vec![], vec![], 20).unwrap();
 
         let markdown = server.handle_session_recall(json!({})).await.unwrap();
         let markdown = markdown.as_str().unwrap();
@@ -2524,7 +2794,7 @@ mod tests {
         let root = temp_dir.to_str().unwrap();
 
         std::env::set_var("COMP_WORKSPACE_ROOT", root);
-        let state = Arc::new(crate::AppState::new(root).await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(root, "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state.clone());
 
         let logged = server
@@ -2579,7 +2849,7 @@ mod tests {
         let root = temp_dir.to_str().unwrap();
 
         std::env::set_var("COMP_WORKSPACE_ROOT", root);
-        let state = Arc::new(crate::AppState::new(root).await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(root, "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state.clone());
 
         let hist_dir = temp_dir.join(".comp").join("history");
@@ -2613,7 +2883,7 @@ mod tests {
 
         std::env::set_var("COMP_WORKSPACE_ROOT", temp_dir.to_str().unwrap());
 
-        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap()).await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state.clone());
 
         // Insert mock data into DB
@@ -2662,7 +2932,7 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
         std::env::set_var("COMP_WORKSPACE_ROOT", temp_dir.to_str().unwrap());
 
-        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap()).await.unwrap());
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.unwrap());
         let server = MCPServer::new(state.clone());
 
         let file_id = state.graph_db.upsert_file("src/test.rs", "hash1", "rust", 0).unwrap();
@@ -2696,7 +2966,7 @@ mod tests {
 
         std::env::set_var("COMP_WORKSPACE_ROOT", temp_dir.to_str().unwrap());
 
-        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap()).await.unwrap());
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.unwrap());
         let server = MCPServer::new(state);
 
         // Test level 1 (Compact) -> should remove comment
@@ -2824,7 +3094,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_pipeline_coverage_has_git_diff_boosted() {
-        let state = Arc::new(crate::AppState::new(".").await.expect("Failed to create AppState"));
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
         let server = MCPServer::new(state);
 
         let result = server.handle_run_pipeline(json!({
@@ -2866,7 +3136,7 @@ mod tests {
         std::fs::write(temp_dir.join("boosted.rs"), "fn boosted() { let x = 1; }").unwrap();
 
         std::env::set_var("COMP_WORKSPACE_ROOT", temp_dir.to_str().unwrap());
-        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap()).await.unwrap());
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.unwrap());
         let server = MCPServer::new(state);
 
         // Index the file
@@ -2903,7 +3173,7 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         std::env::set_var("COMP_WORKSPACE_ROOT", temp_dir.to_str().unwrap());
-        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap()).await.unwrap());
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.unwrap());
         let server = MCPServer::new(state);
 
         // Must not error even though there is no git repo
@@ -2919,6 +3189,346 @@ mod tests {
             0,
             "git_diff_boosted must be 0 when not in a git repo"
         );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    // ---- multi-LLM session memory sharing (agent field, locking, compaction, CLI) ----
+
+    #[test]
+    fn test_sanitize_agent_id_keeps_safe_chars() {
+        assert_eq!(sanitize_agent_id("claude-code"), "claude-code");
+        assert_eq!(sanitize_agent_id("codex_v2"), "codex_v2");
+    }
+
+    #[test]
+    fn test_sanitize_agent_id_neutralizes_path_traversal() {
+        // A malformed COMP_AGENT_ID must not be able to escape the
+        // .comp/session-memory/ directory via path separators or "..".
+        assert_eq!(sanitize_agent_id("../../etc/passwd"), "______etc_passwd");
+        assert_eq!(sanitize_agent_id("a/b\\c"), "a_b_c");
+    }
+
+    #[test]
+    fn test_sanitize_agent_id_empty_stays_empty() {
+        assert_eq!(sanitize_agent_id(""), "");
+    }
+
+    #[test]
+    fn test_get_session_memory_path_is_per_agent() {
+        let p1 = get_session_memory_path("/workspace", "claude-code");
+        let p2 = get_session_memory_path("/workspace", "codex");
+        assert_ne!(p1, p2, "different agents must resolve to different files");
+        assert!(p1.to_string_lossy().replace('\\', "/").ends_with(".comp/session-memory/claude-code.json"));
+    }
+
+    #[test]
+    fn test_append_history_line_creates_file_and_parent_dir() {
+        let temp_dir = std::env::temp_dir().join("comP_test_append_history_new");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let hist_path = temp_dir.join("history").join("log-2026-01.jsonl");
+
+        append_history_line(&hist_path, r#"{"a":1}"#).unwrap();
+
+        let content = std::fs::read_to_string(&hist_path).unwrap();
+        assert_eq!(content, "{\"a\":1}\n");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_append_history_line_preserves_order_across_calls() {
+        let temp_dir = std::env::temp_dir().join("comP_test_append_history_order");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+
+        append_history_line(&hist_path, "one").unwrap();
+        append_history_line(&hist_path, "two").unwrap();
+        append_history_line(&hist_path, "three").unwrap();
+
+        let content = std::fs::read_to_string(&hist_path).unwrap();
+        assert_eq!(content, "one\ntwo\nthree\n");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_append_history_line_survives_concurrent_writers() {
+        // Simulates the real scenario this feature exists for: several independent
+        // comp-daemon processes (one per MCP client) appending to the same JSONL
+        // file at once. Every line must survive — none lost, none torn/corrupted.
+        let temp_dir = std::env::temp_dir().join("comP_test_append_history_concurrent");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+
+        const WRITERS: usize = 8;
+        const LINES_PER_WRITER: usize = 25;
+        let mut handles = Vec::new();
+        for writer_id in 0..WRITERS {
+            let path = hist_path.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..LINES_PER_WRITER {
+                    append_history_line(&path, &format!("w{}-{}", writer_id, i)).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let content = std::fs::read_to_string(&hist_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(
+            lines.len(),
+            WRITERS * LINES_PER_WRITER,
+            "every writer's every line must survive concurrent appends"
+        );
+        // Every line must be intact (no interleaved/torn "w{n}-{m}" tokens).
+        for line in &lines {
+            assert!(
+                line.starts_with('w') && line.contains('-'),
+                "line must not be torn by a concurrent write: {:?}",
+                line
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_compact_history_file_rewrites_and_keeps_backup() {
+        let temp_dir = std::env::temp_dir().join("comP_test_compact_basic");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+        std::fs::write(&hist_path, "line1\nline2\nline1\n").unwrap();
+
+        compact_history_file(&hist_path, |original| {
+            let text = String::from_utf8_lossy(original);
+            let mut seen: Vec<&str> = Vec::new();
+            for l in text.lines() {
+                if !seen.contains(&l) {
+                    seen.push(l);
+                }
+            }
+            Ok(format!("{}\n", seen.join("\n")).into_bytes())
+        })
+        .unwrap();
+
+        let compacted = std::fs::read_to_string(&hist_path).unwrap();
+        assert_eq!(compacted, "line1\nline2\n", "duplicate lines must be removed");
+
+        let backup_path = hist_path.with_extension("jsonl.bak");
+        let backup = std::fs::read_to_string(&backup_path).unwrap();
+        assert_eq!(backup, "line1\nline2\nline1\n", "backup must hold the pre-compaction content");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_compact_history_file_leaves_original_untouched_on_error() {
+        let temp_dir = std::env::temp_dir().join("comP_test_compact_error");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+        std::fs::write(&hist_path, "original\n").unwrap();
+
+        let result = compact_history_file(&hist_path, |_original| {
+            Err(anyhow!("summarization failed"))
+        });
+
+        assert!(result.is_err());
+        let content = std::fs::read_to_string(&hist_path).unwrap();
+        assert_eq!(content, "original\n", "a failed compaction must not mutate the original file");
+        assert!(
+            !hist_path.with_extension("jsonl.bak").exists(),
+            "no backup should be written when compaction never reaches the mutation step"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_compact_history_file_excludes_concurrent_append() {
+        // Proves the shared/exclusive lock pairing: while compaction holds the
+        // exclusive lock, a concurrent appender must block until it releases —
+        // never interleave, never get silently dropped by the rewrite.
+        let temp_dir = std::env::temp_dir().join("comP_test_compact_exclusion");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+        std::fs::write(&hist_path, "before\n").unwrap();
+
+        let appender_path = hist_path.clone();
+        let appender = std::thread::spawn(move || {
+            // Give compaction a head start so it is very likely holding the
+            // exclusive lock when this fires.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            append_history_line(&appender_path, "appended-during-compaction").unwrap();
+        });
+
+        compact_history_file(&hist_path, |original| {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            Ok(original.to_vec())
+        })
+        .unwrap();
+
+        appender.join().unwrap();
+
+        let content = std::fs::read_to_string(&hist_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(
+            lines,
+            vec!["before", "appended-during-compaction"],
+            "the append must land intact, ordered after the compaction it waited out"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_append_history() {
+        let args: Vec<String> = ["comp-daemon", "append-history", "/ws", "claude-code"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            parse_cli_subcommand(&args),
+            Some(CliSubcommand::AppendHistory {
+                workspace_root: "/ws".to_string(),
+                agent_id: "claude-code".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_none_for_normal_startup() {
+        let args: Vec<String> = vec!["comp-daemon".to_string()];
+        assert_eq!(parse_cli_subcommand(&args), None);
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_none_for_unknown_subcommand() {
+        let args: Vec<String> = ["comp-daemon", "frobnicate"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(parse_cli_subcommand(&args), None);
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_none_for_missing_args() {
+        // append-history requires exactly workspace_root + agent_id; fewer args
+        // must fall through to normal startup rather than panicking on an
+        // out-of-bounds index.
+        let args: Vec<String> = ["comp-daemon", "append-history", "/ws"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(parse_cli_subcommand(&args), None);
+    }
+
+    #[test]
+    fn test_run_append_history_writes_agent_tagged_entry() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_append_history");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap();
+
+        let input = std::io::Cursor::new(br#"{"request":"do the thing","outcome":"done"}"#.to_vec());
+        run_append_history(root, "codex", input).unwrap();
+
+        let month = &format_epoch_ms(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        )[0..7];
+        let hist_path = temp_dir.join(".comp").join("history").join(format!("log-{}.jsonl", month));
+        let content = std::fs::read_to_string(&hist_path).unwrap();
+        let call: SessionCall = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(call.query, "do the thing");
+        assert_eq!(call.outcome, Some("done".to_string()));
+        assert_eq!(call.agent, "codex", "agent must come from the CLI arg, not the stdin payload");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_run_append_history_agent_cannot_be_spoofed_via_stdin() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_append_history_spoof");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap();
+
+        // Payload tries to smuggle an "agent" field; the CLI arg must win.
+        let input = std::io::Cursor::new(
+            br#"{"request":"x","outcome":null,"agent":"attacker-controlled"}"#.to_vec(),
+        );
+        run_append_history(root, "claude-code", input).unwrap();
+
+        let hist_dir = temp_dir.join(".comp").join("history");
+        let entry = std::fs::read_dir(&hist_dir).unwrap().next().unwrap().unwrap();
+        let content = std::fs::read_to_string(entry.path()).unwrap();
+        let call: SessionCall = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(call.agent, "claude-code");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_run_append_history_rejects_malformed_json() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_append_history_bad_json");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap();
+
+        let input = std::io::Cursor::new(b"not json".to_vec());
+        assert!(run_append_history(root, "claude-code", input).is_err());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_run_append_history_rejects_missing_request_field() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_append_history_missing_request");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap();
+
+        let input = std::io::Cursor::new(br#"{"outcome":"done"}"#.to_vec());
+        assert!(run_append_history(root, "claude-code", input).is_err());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_session_call_missing_agent_field_defaults_to_unknown() {
+        // Pre-migration JSONL lines / session-memory.json entries have no "agent"
+        // key at all; they must still deserialize instead of being dropped.
+        let json = r#"{"query":"old task","timestamp":1700000000000}"#;
+        let call: SessionCall = serde_json::from_str(json).unwrap();
+        assert_eq!(call.agent, "unknown");
+    }
+
+    #[tokio::test]
+    async fn test_session_recall_merges_multiple_agents() {
+        // The core multi-LLM goal: two different agents' own session-memory files
+        // must both surface in one session_recall call.
+        let temp_dir = std::env::temp_dir().join("comP_test_recall_multi_agent");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap();
+
+        record_mcp_call(root, "claude-code", "sess-a", "claude did this".to_string(), vec![], vec![], 10).unwrap();
+        record_mcp_call(root, "codex", "sess-b", "codex did that".to_string(), vec![], vec![], 20).unwrap();
+
+        let state = Arc::new(crate::AppState::new(root, "claude-code").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state);
+        let markdown = server.handle_session_recall(json!({})).await.unwrap();
+        let markdown = markdown.as_str().unwrap();
+
+        assert!(markdown.contains("claude did this"), "claude-code's own record must surface");
+        assert!(markdown.contains("codex did that"), "codex's record must surface even though this daemon is running as claude-code");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
