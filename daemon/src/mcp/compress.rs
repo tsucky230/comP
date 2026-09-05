@@ -156,7 +156,7 @@ fn markdown_compress(source: &str) -> String {
             || trimmed == "---"
             || trimmed == "***"
             || trimmed == "___"
-            || trimmed.chars().next().map_or(false, |c| c.is_numeric());
+            || trimmed.chars().next().is_some_and(|c| c.is_numeric());
 
         if is_keep {
             kept_lines.push(line);

@@ -622,23 +622,43 @@ describe("AgentSetupManager", () => {
       expect(readText(codexGlobal())).to.include(`command = '${tricky}'`);
     });
 
-    it("round-trips a control character through the basic-string escape it emits", async () => {
+    it("escapes a control character in the daemon path as \\uXXXX", async () => {
       // tomlQuote falls back to a basic string and \uXXXX-escapes control
-      // characters (a path may legally contain one on macOS/Linux). The repair
-      // pass reads that value back with decodeTomlString; if the two disagreed,
-      // the path would look nonexistent and this test's second run would
-      // "repair" a config that was already healthy, on every activation.
-      const dirWithControlChar = path.join(caseDir, "esc" + String.fromCharCode(0x1b) + "dir");
-      fs.mkdirSync(dirWithControlChar, { recursive: true });
-      const daemon = path.join(dirWithControlChar, "comp-daemon");
-      fs.writeFileSync(daemon, "");
-      (manager as any).getDaemonPath = () => daemon;
+      // characters (a path may legally contain one on macOS/Linux). This only
+      // needs the *string* to contain the character — generateConfig never
+      // touches the daemon path on disk while writing the config — so unlike
+      // the round-trip test below, this is safe to exercise with a real
+      // control byte even though Windows forbids one in an actual filename.
+      const tricky = path.join(caseDir, "esc" + String.fromCharCode(0x1b) + "dir", "comp-daemon");
+      (manager as any).getDaemonPath = () => tricky;
 
       await manager.generateConfig("Codex");
+
       expect(readText(codexGlobal())).to.include("\\u001b");
+    });
+
+    it("decodes a \\uXXXX-escaped command value back to a real path during repair", async () => {
+      // Same decode branch a real control character would take, but escaping
+      // a filesystem-legal character ('x', x) instead — Windows forbids
+      // literal control bytes (0x00-0x1F) in filenames, so a test that needed
+      // to actually create one on disk would fail there. Writing the escape
+      // by hand and pointing it at a real file exercises decodeTomlString's
+      // \uXXXX branch identically without relying on that.
+      const daemon = path.join(caseDir, "x");
+      fs.writeFileSync(daemon, "");
+      // Forward slashes only: a raw backslash (e.g. a Windows path's own
+      // separators) inside a double-quoted TOML string is itself an escape
+      // sequence, which would corrupt the very value this test constructs by
+      // hand. fs.existsSync resolves forward slashes fine on every platform.
+      const escapedDaemon = daemon.replace(/\\/g, "/").slice(0, -1) + "\\u0078"; // literal backslash-u-0078, not an actual escape
+      writeText(
+        codexGlobal(),
+        ["[mcp_servers.comp]", `command = "${escapedDaemon}"`, "args = []", ""].join("\n")
+      );
 
       const entries = manager.repairStaleConfigs();
       const entry = entries.find((e) => e.file === codexGlobal());
+
       expect(entry?.status).to.equal("healthy");
     });
   });
