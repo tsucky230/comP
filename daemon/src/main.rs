@@ -31,6 +31,14 @@ pub struct AppState {
     pub search_engine: Arc<tokio::sync::Mutex<SearchEngine>>,
     pub session_id: String,
     pub workspace_root: String,
+    /// Which MCP client this daemon process was spawned by (e.g. "claude-code", "codex",
+    /// "cursor"). WHY: comP is a stdio MCP server — each client spawns its own comp-daemon
+    /// subprocess (see src/mcp/AgentSetup.ts), so several independent OS processes can share
+    /// one workspace's .comp/ directory at once. This id attributes session-memory / history
+    /// records to the process that wrote them and namespaces the per-agent cache file
+    /// (.comp/session-memory/<agent_id>.json) so concurrent processes never write the same
+    /// file. Set via COMP_AGENT_ID; defaults to "unknown" for clients not yet wired to set it.
+    pub agent_id: String,
 }
 
 impl AppState {
@@ -38,6 +46,7 @@ impl AppState {
     ///
     /// # Input
     /// - workspace_root: Project root directory
+    /// - agent_id: identifies which MCP client spawned this process (see field doc above)
     ///
     /// # Output
     /// - Result<Self>: AppState instance or initialization error
@@ -45,7 +54,7 @@ impl AppState {
     /// # Process
     /// 1. GraphDB: Open .comp/index.db (create if not exists)
     /// 2. SearchEngine: Initialize in-memory search engine
-    pub async fn new(workspace_root: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(workspace_root: &str, agent_id: &str) -> Result<Self, Box<dyn std::error::Error>> {
         // Initialize GraphDB
         let graph_db = GraphDB::new(workspace_root).await?;
         info!("GraphDB initialized: {}", workspace_root);
@@ -64,12 +73,25 @@ impl AppState {
             search_engine: Arc::new(tokio::sync::Mutex::new(search_engine)),
             session_id,
             workspace_root: workspace_root.to_string(),
+            agent_id: agent_id.to_string(),
         })
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // WHY checked before env_logger/full startup: a lightweight CLI invocation
+    // (`comp-daemon append-history <workspace_root> <agent_id>`, used by
+    // .claude/hooks/history-record.sh) must not pay the cost of GraphDB open +
+    // background indexing on every Claude Code turn, and must exit immediately
+    // rather than falling into the long-running MCP stdio server loop below.
+    // See mcp::try_run_cli_subcommand for the locked-append implementation shared
+    // with the session_log MCP tool.
+    let cli_args: Vec<String> = std::env::args().collect();
+    if let Some(exit_code) = mcp::try_run_cli_subcommand(&cli_args) {
+        std::process::exit(exit_code);
+    }
+
     env_logger::Builder::from_env(env_logger::Env::new().default_filter_or("info")).init();
 
     info!("comP daemon starting");
@@ -79,8 +101,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|_| std::env::var("WORKSPACE_ROOT"))  // Fallback for compatibility
         .unwrap_or_else(|_| ".".to_string());
 
+    // Identifies which MCP client spawned this process; see AppState::agent_id doc.
+    let agent_id = std::env::var("COMP_AGENT_ID").unwrap_or_else(|_| "unknown".to_string());
+
     // Initialize application state
-    let state = Arc::new(AppState::new(&workspace_root).await?);
+    let state = Arc::new(AppState::new(&workspace_root, &agent_id).await?);
     info!("Application state initialized");
 
     // Start indexing in the background and immediately start the MCP server.
@@ -154,7 +179,7 @@ mod integration_tests {
         std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
         // Initialize AppState
-        let result = AppState::new(temp_dir.to_str().unwrap()).await;
+        let result = AppState::new(temp_dir.to_str().unwrap(), "test-agent").await;
         assert!(result.is_ok(), "AppState initialization failed");
 
         let _state = result.unwrap();
@@ -172,7 +197,7 @@ mod integration_tests {
         std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
         let root = temp_dir.to_str().unwrap();
-        let state = AppState::new(root).await.expect("AppState::new failed");
+        let state = AppState::new(root, "test-agent").await.expect("AppState::new failed");
         assert_eq!(state.workspace_root, root, "workspace_root must equal the path passed to new()");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -186,7 +211,7 @@ mod integration_tests {
         std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
         let state = Arc::new(
-            AppState::new(temp_dir.to_str().unwrap())
+            AppState::new(temp_dir.to_str().unwrap(), "test-agent")
                 .await
                 .expect("Failed to create AppState"),
         );
@@ -209,7 +234,7 @@ mod integration_tests {
 
         // Initialize AppState
         let state = Arc::new(
-            AppState::new(temp_dir.to_str().unwrap())
+            AppState::new(temp_dir.to_str().unwrap(), "test-agent")
                 .await
                 .expect("Failed to create AppState"),
         );
@@ -290,7 +315,7 @@ mod integration_tests {
         std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
         let state = Arc::new(
-            AppState::new(temp_dir.to_str().unwrap())
+            AppState::new(temp_dir.to_str().unwrap(), "test-agent")
                 .await
                 .expect("Failed to create AppState"),
         );
