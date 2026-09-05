@@ -828,10 +828,15 @@ export class AgentSetupManager {
       if (table === "" && /^mcp_servers\s*=/.test(line)) {
         return "mcp_servers is written as an inline table; merge comP by hand";
       }
-      // `comp = { ... }` or `comp.command = ...` under `[mcp_servers]`.
+      // `comp = { ... }` or `comp.command = ...` under `[mcp_servers]`. TOML
+      // allows whitespace on both sides of a dotted-key separator, so the dot
+      // itself — not just the key after it — needs `\s*` around it too;
+      // otherwise `comp . command = …` (legal TOML) slips through undetected
+      // and a later `[mcp_servers.comp]` table becomes a duplicate-key error
+      // that Codex refuses to parse at all.
       if (
         table === "mcp_servers" &&
-        /^("comp"|'comp'|comp)\s*(\.[A-Za-z0-9_-]+)*\s*=/.test(line)
+        /^("comp"|'comp'|comp)\s*(\.\s*[A-Za-z0-9_-]+\s*)*=/.test(line)
       ) {
         return "a comp entry is written in inline/dotted form; merge comP by hand";
       }
@@ -1559,13 +1564,71 @@ export class AgentSetupManager {
   }
 
   /**
+   * Blank out TOML comments while keeping every other character — including
+   * newlines — exactly in place.
+   *
+   * WHY: the caller matches a key like COMP_WORKSPACE_ROOT against the raw
+   * text. Unlike the command match elsewhere, that key can sit in the middle
+   * of a line (it does in the very block this writer generates, packed into an
+   * inline `env = { … }` table), so anchoring the pattern to the start of a
+   * line cannot rule out a comment the way `^\s*command` does. A user comment
+   * such as `# old value: COMP_WORKSPACE_ROOT = '/old/path'` placed above the
+   * real line would otherwise be found first — regex search returns the
+   * leftmost match — and get "repaired" instead of the value that actually
+   * takes effect, leaving the real one stale forever.
+   *
+   * Preserving length and line breaks keeps every match index valid against
+   * the original, unmasked text: nothing meaningful ever lives inside a
+   * comment, so a match found here always falls in a region this function left
+   * untouched, and slicing the original at that index yields identical bytes.
+   */
+  private static maskComments(text: string): string {
+    let out = "";
+    let quote: '"' | "'" | null = null;
+    let i = 0;
+    while (i < text.length) {
+      const char = text[i];
+      if (quote !== null) {
+        out += char;
+        if (char === "\\" && quote === '"' && i + 1 < text.length) {
+          out += text[i + 1];
+          i += 2;
+          continue;
+        }
+        if (char === quote) {
+          quote = null;
+        }
+        i++;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        out += char;
+        i++;
+        continue;
+      }
+      if (char === "#") {
+        while (i < text.length && text[i] !== "\n") {
+          out += " ";
+          i++;
+        }
+        continue;
+      }
+      out += char;
+      i++;
+    }
+    return out;
+  }
+
+  /**
    * TOML counterpart of refreshWorkspaceRootEnv(), with the same skip rules.
    *
    * Returns the rewritten block, or null when nothing needed changing. Callers
    * must only invoke this for workspace-scoped files.
    */
   private refreshWorkspaceRootToml(block: string): string | null {
-    const match = /(COMP_WORKSPACE_ROOT\s*=\s*)('[^'\n]*'|"(?:[^"\\\n]|\\.)*")/.exec(block);
+    const masked = AgentSetupManager.maskComments(block);
+    const match = /(COMP_WORKSPACE_ROOT\s*=\s*)('[^'\n]*'|"(?:[^"\\\n]|\\.)*")/.exec(masked);
     if (!match) {
       return null;
     }
@@ -1661,18 +1724,28 @@ function decodeTomlString(raw: string): string {
   if (raw.startsWith("'")) {
     return raw.slice(1, -1);
   }
-  return raw.slice(1, -1).replace(/\\(.)/g, (_match, char: string) => {
-    switch (char) {
-      case "n":
-        return "\n";
-      case "t":
-        return "\t";
-      case "r":
-        return "\r";
-      default:
-        return char;
-    }
-  });
+  // \uXXXX has to be tried before the single-char escapes below: it is the
+  // counterpart of the \uXXXX form tomlQuote emits for control characters, and
+  // without it a value containing one would decode as the literal text "u001b"
+  // instead of the control character, permanently disagreeing with what was
+  // written. Since the write and the read of the same value would then never
+  // match, the workspace-root repair pass would treat the file as stale and
+  // rewrite it on every single activation.
+  return raw
+    .slice(1, -1)
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\(.)/g, (_match, char: string) => {
+      switch (char) {
+        case "n":
+          return "\n";
+        case "t":
+          return "\t";
+        case "r":
+          return "\r";
+        default:
+          return char;
+      }
+    });
 }
 
 /** How long an external CLI may run before it is killed. */

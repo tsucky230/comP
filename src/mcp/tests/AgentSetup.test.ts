@@ -412,6 +412,48 @@ describe("AgentSetupManager", () => {
       expect(merged).to.include("[mcp_servers.comp]");
     });
 
+    it("refuses a dotted comp entry even with whitespace around the dot", async () => {
+      // `comp . command = "…"` is legal TOML — whitespace around a dotted-key
+      // separator is explicitly permitted by the spec — and is equivalent to
+      // `[mcp_servers.comp]` with `command = "…"`. Missing it here means a
+      // later `[mcp_servers.comp]` table redefines the same path and Codex
+      // rejects the whole file as a duplicate key.
+      const original = ["[mcp_servers]", 'comp . command = "old-daemon"', ""].join("\n");
+      writeText(codexGlobal(), original);
+
+      const result = await manager.generateConfig("Codex");
+
+      expect(result.writes[0].status).to.equal("failed");
+      expect(readText(codexGlobal())).to.equal(original);
+    });
+
+    it("refuses to splice a comp table containing a header-like line inside a multi-line string", async () => {
+      // A neighbouring server's multi-line string can legally contain a line
+      // that reads exactly like comP's own table header. findCompSection has no
+      // notion of TOML string state and would treat it as one, but the
+      // bracket-balance check in isSelfContained still catches the resulting
+      // truncation and refuses rather than truncating the file.
+      const original = [
+        "[mcp_servers.aider]",
+        'command = "/bin/aider"',
+        "args = [\"--system-prompt\", '''",
+        "Example TOML you might write:",
+        "[mcp_servers.comp]",
+        'command = "whatever"',
+        "''']",
+        "",
+        "[mcp_servers.other]",
+        'command = "/usr/bin/other"',
+        "",
+      ].join("\n");
+      writeText(codexGlobal(), original);
+
+      const result = await manager.generateConfig("Codex");
+
+      expect(result.writes[0].status).to.equal("failed");
+      expect(readText(codexGlobal())).to.equal(original);
+    });
+
     it("refuses to splice a comp table cut short by a nested array element", async () => {
       // `["--flag"],` opens a line the way a table header does, so the section
       // scan stops there. Splicing would strip the rest of the array and leave
@@ -578,6 +620,26 @@ describe("AgentSetupManager", () => {
       await manager.generateConfig("Codex");
 
       expect(readText(codexGlobal())).to.include(`command = '${tricky}'`);
+    });
+
+    it("round-trips a control character through the basic-string escape it emits", async () => {
+      // tomlQuote falls back to a basic string and \uXXXX-escapes control
+      // characters (a path may legally contain one on macOS/Linux). The repair
+      // pass reads that value back with decodeTomlString; if the two disagreed,
+      // the path would look nonexistent and this test's second run would
+      // "repair" a config that was already healthy, on every activation.
+      const dirWithControlChar = path.join(caseDir, "esc" + String.fromCharCode(0x1b) + "dir");
+      fs.mkdirSync(dirWithControlChar, { recursive: true });
+      const daemon = path.join(dirWithControlChar, "comp-daemon");
+      fs.writeFileSync(daemon, "");
+      (manager as any).getDaemonPath = () => daemon;
+
+      await manager.generateConfig("Codex");
+      expect(readText(codexGlobal())).to.include("\\u001b");
+
+      const entries = manager.repairStaleConfigs();
+      const entry = entries.find((e) => e.file === codexGlobal());
+      expect(entry?.status).to.equal("healthy");
     });
   });
 
