@@ -198,6 +198,30 @@ A value is deliberately left alone when it is a relative path, when it contains 
 moving a project or opening the same checkout on another machine no longer breaks
 indexing. The value inside a global config is never touched.
 
+### Branch switches
+
+comP has no built-in concept of "this workspace has multiple branches" — the
+index just reflects whatever is on disk. A `git checkout`/`git switch` changes
+a lot of files at once, which the per-file save watcher isn't built for, so
+comP detects the branch change separately and reindexes the whole workspace to
+catch up.
+
+- comP polls the repository's current ref (`.git/HEAD`) every few seconds — no
+  `git` process is spawned, it's a plain file read
+- On a detected change it runs a full re-index automatically, the same
+  operation **comP: Force Re-index** runs manually, but without the
+  confirmation dialog and without an error toast on failure (check the "comP"
+  output panel if the status bar shows **Error** after a switch)
+- This is gated by `comp.autoIndex` (see [Configuration](./CONFIGURATION.md)):
+  turning that off also turns off the automatic reindex on branch switch
+- Detached HEAD (e.g. mid-rebase, or a checked-out commit/tag) is handled the
+  same way — the commit SHA itself is treated as the "current ref"
+- Each switch always reparses every file that differs between the two
+  branches; nothing is cached across switches, so bouncing between the same
+  two branches repeatedly costs the same each time
+- Not covered: git worktrees (`.git` is a file, not a directory, in a
+  worktree checkout) — comP simply does not detect a branch change there
+
 ### A file was reported as failed
 
 The report names the file and the reason. The usual cause is that the existing

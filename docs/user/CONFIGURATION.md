@@ -6,7 +6,7 @@ All settings are under `comp.*` in VS Code settings (`Ctrl+,`).
 | --- | --- | --- | --- |
 | `comp.maxTokens` | number | `8000` | Maximum tokens for `run_pipeline` context capsule |
 | `comp.enableCodeLens` | boolean | `true` | Show dependency counts as CodeLens above symbols |
-| `comp.autoIndex` | boolean | `true` | Automatically index files on workspace open |
+| `comp.autoIndex` | boolean | `true` | Automatically index files on workspace open. Also gates the branch-switch watcher — see [Branch switches](./MCP_SETUP.md#branch-switches) — since disabling auto-indexing means no automatic reindex should fire from either path. |
 | `comp.exclude` | string[] | `[]` | Additional directory names to exclude from indexing. Synced to `.comp/config.json` on activation. Changes take effect after Force Re-index. |
 
 ## Workspace vs User settings

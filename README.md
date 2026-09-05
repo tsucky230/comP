@@ -307,6 +307,7 @@ Customize via `.comp/config.json`:
 2. **Search engine**: BM25 full-text search + graph traversal + semantic scoring
 3. **MCP server**: Exposes `run_pipeline`, `get_context`, `get_impact_graph`, `session_recall`
 4. **VS Code extension**: Manages the daemon, UI, and commands
+5. **Branch-switch detection**: a `git checkout`/`git switch` changes far more files at once than the per-save watcher is built for, so comP polls the current branch separately and reindexes automatically when it changes — see [Troubleshooting](#branch-switches-reindex-automatically)
 
 ```text
 Code files (30+ languages)
@@ -365,7 +366,16 @@ agent when you see the repair notification. On older versions, re-run
 ### "Indexing is slow"
 
 - Large repos (>100k files) take time on first run only. Subsequent runs are incremental (fast)
-- The comP daemon typically uses <500MB RAM
+- The comP daemon typically uses less than 500MB RAM
+
+### Branch switches reindex automatically
+
+comP polls the current git ref every few seconds (a plain file read, no `git`
+process spawned) and runs a full re-index — the same thing **"comP: Force
+Re-index"** does manually — as soon as it detects a branch change, without a
+confirmation dialog. This is gated by `comp.autoIndex`; turning that off also
+disables the automatic reindex on branch switch. Details, including detached
+HEAD and worktree behavior, are in [MCP_SETUP.md](docs/user/MCP_SETUP.md#branch-switches).
 
 ---
 
@@ -390,6 +400,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.9** | **Session history, persistent memory, session_log / session_recall** | ✅ Released |
 | **v0.9.4** | **Self-healing MCP config — daemon paths survive extension upgrades** | ✅ Released |
 | **v0.10.0** | **Zero-copy-paste agent setup — comP writes itself into every agent's real config** | ✅ Released |
+| **v0.11.0** | **Codex support, English/Japanese UI, automatic branch-switch reindexing** | ✅ Released |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---

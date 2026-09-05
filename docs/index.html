@@ -257,6 +257,22 @@
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.10.0</div>
+          <div class="roadmap-content">
+            <h4>Zero-Copy-Paste Agent Setup</h4>
+            <p>comP writes itself into every agent's real config file, merging with the MCP servers already there, instead of generating text into <code>.comp/config/</code> for the user to paste by hand. A completed setup needs nothing pasted anywhere — only a restart of the agent, since none of these tools re-read their config while running. Also fixes the generated <code>claude mcp add</code> command (it was missing <code>--scope user</code> and the <code>--</code> separator) and the Windows path where the CLI could never start <code>claude.cmd</code> at all.</p>
+            <span class="status-tag">✅ Released</span>
+          </div>
+        </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.0</div>
+          <div class="roadmap-content">
+            <h4>Codex Support, English/Japanese UI, and Automatic Branch-Switch Reindexing</h4>
+            <p>Adds Codex (OpenAI) to <b>comP: Setup Agents</b>, writing a <code>[mcp_servers.comp]</code> table into both <code>~/.codex/config.toml</code> and the project's <code>.codex/config.toml</code> via a safe line-oriented TOML splice (no parser dependency added, matching the existing Aider integration). comP's own onboarding messages — the Setup Agents wizard, its output-panel report, and the generated constitution rules — now switch between English and Japanese based on VS Code's own display language instead of always showing Japanese. Also adds automatic branch-switch detection: comP polls the current git ref and triggers a full re-index the moment it changes, since a <code>git checkout</code> touches far more files at once than the per-save watcher is built for. Along the way, fixed a long-standing bug where every re-indexed file left its previous symbols behind as orphaned rows, growing <code>.comp/index.db</code> without bound.</p>
+            <span class="status-tag">✅ Released</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>

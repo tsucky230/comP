@@ -256,6 +256,22 @@
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.10.0</div>
+          <div class="roadmap-content">
+            <h4>コピペ不要のエージェントセットアップ</h4>
+            <p>comP が各エージェントの実際の設定ファイルへ直接書き込み、既存の MCP サーバーとマージするようになりました。従来は <code>.comp/config/</code> 配下に生成した文字列を手で正しい場所へ貼り付ける必要がありました。セットアップ完了後に必要なのはエージェントの再起動だけです（どのツールも実行中は設定を読み直さないため）。生成される <code>claude mcp add</code> コマンドの不備（<code>--scope user</code> と <code>--</code> セパレータの欠落）と、Windows で <code>claude.cmd</code> がまったく起動できなかった問題も修正しています。</p>
+            <span class="status-tag">✅ リリース済み</span>
+          </div>
+        </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.0</div>
+          <div class="roadmap-content">
+            <h4>Codex 対応・日英UI切り替え・ブランチ切り替え時の自動再インデックス</h4>
+            <p><b>comP: Setup Agents</b> の対象に Codex（OpenAI）を追加。<code>~/.codex/config.toml</code> とプロジェクトの <code>.codex/config.toml</code> の両方に、安全な行指向の TOML 差し替え処理で <code>[mcp_servers.comp]</code> テーブルを書き込みます（既存の Aider 対応と同様、パーサーへの依存は追加していません）。comP 自身が出すメッセージ（Setup Agents ウィザード、出力パネルのレポート、生成される利用ルール）も、常に日本語だったのを VS Code の表示言語に応じて日英を切り替えるようにしました。さらにブランチ切り替えの自動検知にも対応: comP は現在の git ブランチをポーリングし、切り替わりを検知したら自動でフル再インデックスします（<code>git checkout</code> は保存イベント単位の監視では追いきれない量のファイルを一度に変えるため）。あわせて、再インデックスのたびに古いシンボルが孤児として残り続け <code>.comp/index.db</code> が際限なく肥大化する既存バグも修正しました。</p>
+            <span class="status-tag">✅ リリース済み</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
