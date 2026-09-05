@@ -11,6 +11,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { DaemonManager } from "../daemon/DaemonManager";
 import { StatusBar } from "./StatusBar";
+import { isJapaneseLocale, t } from "../i18n";
 import {
   AgentSetupManager,
   GenerateConfigResult,
@@ -31,7 +32,10 @@ export function registerCommands(
     null as unknown as DaemonManager,
     workspaceRoot,
     context.extensionPath,
-    { globalStorageDir: context.globalStorageUri?.fsPath }
+    {
+      globalStorageDir: context.globalStorageUri?.fsPath,
+      locale: isJapaneseLocale() ? "ja" : "en",
+    }
   );
 
   // WHY a channel rather than a notification: setup writes outside the
@@ -56,12 +60,15 @@ export function registerCommands(
       const picked = await vscode.window.showQuickPick(
         AgentSetupManager.AGENTS.map((name) => ({
           label: name,
-          description: detected.includes(name) ? "検出済み" : "",
+          description: detected.includes(name) ? t("detected", "検出済み") : "",
           picked: detected.includes(name),
         })),
         {
           canPickMany: true,
-          placeHolder: "comP を設定するエージェントを選んでください（検出済みは選択済み）",
+          placeHolder: t(
+            "Select the agents to configure comP for (detected ones are pre-selected)",
+            "comP を設定するエージェントを選んでください（検出済みは選択済み）"
+          ),
         }
       );
 
@@ -75,12 +82,16 @@ export function registerCommands(
 
         let userScope: UserScopeResult | undefined;
         if (picked.some((item) => item.label === "Claude Code")) {
+          const registerNow = t("Register", "登録する");
           const answer = await vscode.window.showInformationMessage(
-            "Claude Code に、全プロジェクト共通（ユーザースコープ）でも comP を登録しますか？",
-            "登録する",
-            "今はしない"
+            t(
+              "Also register comP with Claude Code at user scope (every project, not just this one)?",
+              "Claude Code に、全プロジェクト共通（ユーザースコープ）でも comP を登録しますか？"
+            ),
+            registerNow,
+            t("Not now", "今はしない")
           );
-          if (answer === "登録する") {
+          if (answer === registerNow) {
             userScope = await agentSetup.registerClaudeCodeUserScope();
           }
         }
@@ -100,8 +111,14 @@ export function registerCommands(
         const configured = results.filter((entry) => entry.result.success).length;
         vscode.window.showInformationMessage(
           failures.length === 0
-            ? `${configured} 件のエージェントを設定しました。エージェントを再起動すると使えます（手順は出力パネルの「comP Setup」）。`
-            : `${configured} 件設定しました。${failures.length} 件は手動設定が必要です。開いたタブを確認してください。`
+            ? t(
+                `Configured ${configured} agent(s). Restart the agent(s) to pick it up (see the "comP Setup" output panel for the steps).`,
+                `${configured} 件のエージェントを設定しました。エージェントを再起動すると使えます（手順は出力パネルの「comP Setup」）。`
+              )
+            : t(
+                `Configured ${configured}. ${failures.length} need manual setup — check the tab that opened.`,
+                `${configured} 件設定しました。${failures.length} 件は手動設定が必要です。開いたタブを確認してください。`
+              )
         );
       } catch (error) {
         vscode.window.showErrorMessage(
@@ -365,20 +382,25 @@ function renderSetupReport(
     for (const write of result.writes) {
       const mark =
         write.status === "written" ? "OK  " : write.status === "skipped" ? "SKIP" : "FAIL";
-      const scope = write.scope === "global" ? "  (全プロジェクト共通)" : "";
+      const scope = write.scope === "global" ? t("  (all projects)", "  (全プロジェクト共通)") : "";
       lines.push(`  [${mark}] ${write.path}${scope}`);
       if (write.backupPath) {
-        lines.push(`         バックアップ: ${write.backupPath}`);
+        lines.push(`         ${t("Backup:", "バックアップ:")} ${write.backupPath}`);
       }
       if (write.reason) {
-        lines.push(`         理由: ${write.reason}`);
+        lines.push(`         ${t("Reason:", "理由:")} ${write.reason}`);
       }
     }
     for (const file of result.constitutionFiles) {
-      lines.push(`  [RULE] ${file} に comP の利用ルールを追記しました`);
+      lines.push(
+        t(
+          `  [RULE] Appended comP's usage rules to ${file}`,
+          `  [RULE] ${file} に comP の利用ルールを追記しました`
+        )
+      );
     }
     if (result.restartHint) {
-      lines.push("  --- 反映するには ---");
+      lines.push(t("  --- To apply ---", "  --- 反映するには ---"));
       for (const line of result.restartHint.split("\n")) {
         lines.push(`  ${line}`);
       }
@@ -387,12 +409,12 @@ function renderSetupReport(
   }
 
   if (userScope) {
-    lines.push("=== Claude Code (ユーザースコープ) ===");
+    lines.push(t("=== Claude Code (user scope) ===", "=== Claude Code (ユーザースコープ) ==="));
     if (userScope.registered) {
-      lines.push("  [OK  ] claude mcp add --scope user を実行しました");
+      lines.push(t("  [OK  ] Ran claude mcp add --scope user", "  [OK  ] claude mcp add --scope user を実行しました"));
     } else {
-      lines.push(`  [FAIL] ${userScope.reason ?? "登録できませんでした"}`);
-      lines.push("  次のコマンドをターミナルで実行してください:");
+      lines.push(`  [FAIL] ${userScope.reason ?? t("Registration failed", "登録できませんでした")}`);
+      lines.push(t("  Run this command in your terminal:", "  次のコマンドをターミナルで実行してください:"));
       lines.push(`    ${userScope.command}`);
     }
     lines.push("");
@@ -413,23 +435,26 @@ async function openManualFallback(
   failures: { agent: string; fallback: ManualFallback }[]
 ): Promise<void> {
   const lines = [
-    "# comP: 手動設定が必要な項目",
+    t("# comP: Manual setup needed", "# comP: 手動設定が必要な項目"),
     "",
-    "自動書き込みに失敗したファイルです。既存の内容を確認したうえで、",
-    "以下の設定を該当ファイルへマージしてください。",
+    t(
+      "These files could not be written automatically. Check their existing content, then",
+      "自動書き込みに失敗したファイルです。既存の内容を確認したうえで、"
+    ),
+    t("merge the entry below into each one.", "以下の設定を該当ファイルへマージしてください。"),
     "",
   ];
 
   for (const { agent, fallback } of failures) {
     lines.push(`## ${agent}`);
     lines.push("");
-    lines.push("対象ファイル:");
+    lines.push(t("Target file:", "対象ファイル:"));
     lines.push("");
     lines.push("```text");
     lines.push(fallback.path);
     lines.push("```");
     lines.push("");
-    lines.push("追記する内容:");
+    lines.push(t("Entry to add:", "追記する内容:"));
     lines.push("");
     lines.push("```");
     lines.push(fallback.content.trimEnd());

@@ -38,7 +38,7 @@
         "id": "comp.chat",
         "name": "comp",
         "fullName": "comP Context Helper",
-        "description": "API仕様や長大なコードを賢く圧縮してLLMに質問を投げます。",
+        "description": "%comp.chatParticipant.description%",
         "icon": "resources/comp-icon.png"
       }
     ],

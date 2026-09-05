@@ -27,7 +27,7 @@ re-read their MCP configuration while running. See
    restart each agent you configured
 
 If you selected Claude Code, comP also offers to register itself for **every**
-project by running `claude mcp add --scope user`. Answering "今はしない" leaves
+project by running `claude mcp add --scope user`. Answering "Not now" leaves
 the project-level registration in place.
 
 ---
@@ -174,7 +174,7 @@ the server.
 
 comP repairs this automatically: every time the extension activates it checks the
 known config files and rewrites any `command` that no longer resolves. **Restart
-your agent after seeing the "MCP 設定を修復しました" notification.**
+your agent after seeing the "comP: repaired N MCP config(s)" notification.**
 
 Files that are checked:
 

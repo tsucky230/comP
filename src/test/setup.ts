@@ -119,6 +119,10 @@ Module.prototype.require = function (id: string) {
         activeTextEditor: undefined,
       },
       env: {
+        // Tests run under plain mocha, not the real VS Code host, so this has
+        // no locale of its own — default to English, the same default the
+        // extension itself falls back to when it can't tell.
+        language: "en",
         clipboard: {
           writeText: () => Promise.resolve(),
         },

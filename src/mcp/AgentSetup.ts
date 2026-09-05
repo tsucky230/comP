@@ -120,6 +120,17 @@ export interface AgentSetupOptions {
    * have their real Codex configuration rewritten by the test suite.
    */
   codexHome?: string;
+  /**
+   * Language for generated prose (restart instructions, failure reasons, the
+   * constitution snippet). Defaults to "en".
+   *
+   * WHY a plain option instead of reading vscode.env.language here: this class
+   * has no dependency on the `vscode` module, which is what lets its unit tests
+   * run directly under mocha instead of the VS Code extension host. The caller
+   * — which already imports vscode — resolves the display language and passes
+   * the result in, the same way it resolves globalStorageDir.
+   */
+  locale?: "en" | "ja";
 }
 
 /**
@@ -208,6 +219,7 @@ export class AgentSetupManager {
   private globalStorageDir: string | undefined;
   private homeDir: string;
   private codexHomeOverride: string | undefined;
+  private locale: "en" | "ja";
 
   constructor(
     _daemonManager: DaemonManager,
@@ -221,6 +233,12 @@ export class AgentSetupManager {
     this.globalStorageDir = options?.globalStorageDir;
     this.homeDir = options?.homeDir ?? os.homedir();
     this.codexHomeOverride = options?.codexHome;
+    this.locale = options?.locale ?? "en";
+  }
+
+  /** Pick the string matching the configured locale; English is the default. */
+  private t(en: string, ja: string): string {
+    return this.locale === "ja" ? ja : en;
   }
 
   /**
@@ -279,11 +297,33 @@ export class AgentSetupManager {
   }
 
   private sessionContinuitySnippet(): string {
+    // The marker ensureInstructions() dedups on ("Session Continuity") stays
+    // literal English in both variants — see the header line below — so a
+    // repeat run recognizes either language's copy and does not append a
+    // second one.
+    if (this.locale === "ja") {
+      return [
+        "## Session Continuity (デーモン再起動・セッション切れ対応)",
+        "",
+        "セッションはデーモン再起動をまたいで永続化されます。",
+        "作業を再開したり、エージェントを再起動した場合は、まず `session_recall` を呼んで過去の文脈を復帰させてください。",
+        "",
+        "**作業を再開する場合**:",
+        "",
+        "1. `session_recall()` を呼んで過去のやり取りを確認する",
+        "   - `session_recall({ \"query\": \"keyword\" })` — タスクのキーワードで絞り込み",
+        "   - `session_recall({ \"limit\": 5 })` — 直近N件を表示",
+        "2. 過去に何をしたかを確認し、その文脈のまま作業を続ける",
+        "",
+        "**補足**: フック機構もプロンプトごとに直近の履歴を自動的に注入します（`<system-reminder>`）が、",
+        "過去の作業を手動で確認したり特定のタスクを検索したりする場合は、明示的に `session_recall` を呼ぶと便利です。",
+      ].join("\n");
+    }
     return [
-      "## Session Continuity (デーモン再起動・セッション切れ対応)",
+      "## Session Continuity (daemon restarts / session resets)",
       "",
-      "セッションはデーモン再起動をまたいで永続化されます。",
-      "作業を再開したり、エージェントを再起動した場合は、まず `session_recall` を呼んで過去の文脈を復帰させてください。",
+      "Sessions persist across daemon restarts.",
+      "When resuming work or restarting the agent, call `session_recall` first to restore prior context.",
       "",
       "**When resuming work**:",
       "",
@@ -513,66 +553,131 @@ export class AgentSetupManager {
   }
 
   /** What the user has to do before the agent sees the new config. */
-  private static restartHint(agentName: string): string {
+  private restartHint(agentName: string): string {
     switch (agentName) {
       case "Claude Code":
-        return [
-          "Claude Code を再起動してください。",
-          "- CLI: 実行中のセッションを終了し、プロジェクトディレクトリで `claude` を起動し直す",
-          "- VS Code / JetBrains 拡張: コマンドパレット →「Developer: Reload Window」",
-          "初回起動時に「このプロジェクトの MCP サーバーを使うか」と確認されるので承認してください。",
-          "`claude mcp list` で comp が Connected になっていれば成功です。",
-        ].join("\n");
+        return this.t(
+          [
+            "Restart Claude Code.",
+            "- CLI: quit the running session, then start `claude` again from the project directory",
+            "- VS Code / JetBrains extension: Command Palette → \"Developer: Reload Window\"",
+            "On first start it asks whether to trust this project's MCP servers — approve it.",
+            "`claude mcp list` should show comp as Connected.",
+          ].join("\n"),
+          [
+            "Claude Code を再起動してください。",
+            "- CLI: 実行中のセッションを終了し、プロジェクトディレクトリで `claude` を起動し直す",
+            "- VS Code / JetBrains 拡張: コマンドパレット →「Developer: Reload Window」",
+            "初回起動時に「このプロジェクトの MCP サーバーを使うか」と確認されるので承認してください。",
+            "`claude mcp list` で comp が Connected になっていれば成功です。",
+          ].join("\n")
+        );
       case "Codex":
-        return [
-          "実行中の Codex を終了し、起動し直してください。",
-          "- CLI: セッションを抜けて `codex` を起動し直す",
-          "- VS Code 拡張: コマンドパレット →「Developer: Reload Window」",
-          "セッション内で `/mcp` を実行し comp が表示されれば成功です。",
-          "",
-          "プロジェクト側の `.codex/config.toml` は「信頼済み」にしたプロジェクトでしか読み込まれません。",
-          "未信頼のままだとグローバル設定（~/.codex/config.toml）だけが有効になります。",
-        ].join("\n");
+        return this.t(
+          [
+            "Quit the running Codex and start it again.",
+            "- CLI: leave the session and start `codex` again",
+            "- VS Code extension: Command Palette → \"Developer: Reload Window\"",
+            "Run `/mcp` inside a session — comp should appear.",
+            "",
+            "The project-level `.codex/config.toml` is only read for a project you have trusted.",
+            "Until then, only the global config (~/.codex/config.toml) is in effect.",
+          ].join("\n"),
+          [
+            "実行中の Codex を終了し、起動し直してください。",
+            "- CLI: セッションを抜けて `codex` を起動し直す",
+            "- VS Code 拡張: コマンドパレット →「Developer: Reload Window」",
+            "セッション内で `/mcp` を実行し comp が表示されれば成功です。",
+            "",
+            "プロジェクト側の `.codex/config.toml` は「信頼済み」にしたプロジェクトでしか読み込まれません。",
+            "未信頼のままだとグローバル設定（~/.codex/config.toml）だけが有効になります。",
+          ].join("\n")
+        );
       case "Cursor":
-        return [
-          "Cursor をリロードしてください。",
-          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
-          "反映されない場合は Cursor を完全に終了して起動し直してください。",
-          "Settings → MCP に comp が有効として表示されれば成功です。",
-        ].join("\n");
+        return this.t(
+          [
+            "Reload Cursor.",
+            "- Command Palette (Ctrl/Cmd+Shift+P) → \"Developer: Reload Window\"",
+            "If it still doesn't pick it up, quit Cursor completely and start it again.",
+            "Settings → MCP should show comp as enabled.",
+          ].join("\n"),
+          [
+            "Cursor をリロードしてください。",
+            "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+            "反映されない場合は Cursor を完全に終了して起動し直してください。",
+            "Settings → MCP に comp が有効として表示されれば成功です。",
+          ].join("\n")
+        );
       case "Cline":
-        return [
-          "VS Code をリロードしてください。",
-          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
-          "Cline のチャット画面上部の MCP アイコンから comp が有効か確認できます。",
-        ].join("\n");
+        return this.t(
+          [
+            "Reload VS Code.",
+            "- Command Palette (Ctrl/Cmd+Shift+P) → \"Developer: Reload Window\"",
+            "You can check whether comp is enabled from the MCP icon at the top of Cline's chat view.",
+          ].join("\n"),
+          [
+            "VS Code をリロードしてください。",
+            "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+            "Cline のチャット画面上部の MCP アイコンから comp が有効か確認できます。",
+          ].join("\n")
+        );
       case "Windsurf":
-        return [
-          "Windsurf をリロードしてください。",
-          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
-          "- または Cascade パネル右上の MCP アイコン →「Refresh」",
-        ].join("\n");
+        return this.t(
+          [
+            "Reload Windsurf.",
+            "- Command Palette (Ctrl/Cmd+Shift+P) → \"Developer: Reload Window\"",
+            "- or the MCP icon at the top right of the Cascade panel → \"Refresh\"",
+          ].join("\n"),
+          [
+            "Windsurf をリロードしてください。",
+            "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+            "- または Cascade パネル右上の MCP アイコン →「Refresh」",
+          ].join("\n")
+        );
       case "Continue":
-        return [
-          "VS Code をリロードしてください。",
-          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
-          "Continue は設定変更を自動では読み直しません。また MCP ツールは Agent モードでのみ使えます。",
-        ].join("\n");
+        return this.t(
+          [
+            "Reload VS Code.",
+            "- Command Palette (Ctrl/Cmd+Shift+P) → \"Developer: Reload Window\"",
+            "Continue does not pick up config changes automatically, and MCP tools only work in Agent mode.",
+          ].join("\n"),
+          [
+            "VS Code をリロードしてください。",
+            "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+            "Continue は設定変更を自動では読み直しません。また MCP ツールは Agent モードでのみ使えます。",
+          ].join("\n")
+        );
       case "Antigravity":
-        return "Antigravity を完全に終了して起動し直してください。";
+        return this.t(
+          "Quit Antigravity completely and start it again.",
+          "Antigravity を完全に終了して起動し直してください。"
+        );
       case "GitHub Copilot":
-        return [
-          "VS Code をリロードしてください。",
-          "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
-          "Copilot Chat を Agent モードに切り替え、ツール一覧に comp が出れば成功です。",
-        ].join("\n");
+        return this.t(
+          [
+            "Reload VS Code.",
+            "- Command Palette (Ctrl/Cmd+Shift+P) → \"Developer: Reload Window\"",
+            "Switch Copilot Chat to Agent mode — comp should appear in the tool list.",
+          ].join("\n"),
+          [
+            "VS Code をリロードしてください。",
+            "- コマンドパレット（Ctrl/Cmd+Shift+P）→「Developer: Reload Window」",
+            "Copilot Chat を Agent モードに切り替え、ツール一覧に comp が出れば成功です。",
+          ].join("\n")
+        );
       case "Aider":
-        return [
-          "実行中の Aider を終了し、起動し直してください。",
-          "Aider の MCP 対応はバージョンによって差があります。認識されない場合は `aider --version` を確認してください。",
-        ].join("\n");
+        return this.t(
+          [
+            "Quit the running Aider and start it again.",
+            "Aider's MCP support varies by version — if it's not picked up, check `aider --version`.",
+          ].join("\n"),
+          [
+            "実行中の Aider を終了し、起動し直してください。",
+            "Aider の MCP 対応はバージョンによって差があります。認識されない場合は `aider --version` を確認してください。",
+          ].join("\n")
+        );
       default:
-        return "エージェントを再起動してください。";
+        return this.t("Restart the agent.", "エージェントを再起動してください。");
     }
   }
 
@@ -1098,13 +1203,16 @@ export class AgentSetupManager {
       };
     }
 
-    const restartHint = AgentSetupManager.restartHint(agentName);
+    const restartHint = this.restartHint(agentName);
 
     if (targets.length === 0) {
       return {
         configPath: "",
         success: false,
-        message: `${agentName} の設定ファイルの場所を特定できませんでした。`,
+        message: this.t(
+          `Could not determine ${agentName}'s config file location.`,
+          `${agentName} の設定ファイルの場所を特定できませんでした。`
+        ),
         writes: [],
         constitutionFiles: [],
         restartHint,
@@ -1206,13 +1314,20 @@ export class AgentSetupManager {
       return {
         registered: false,
         command,
-        reason: "daemon のパスにシェル特殊文字が含まれるため、自動登録を見送りました",
+        reason: this.t(
+          "Skipped automatic registration: the daemon path contains shell metacharacters",
+          "daemon のパスにシェル特殊文字が含まれるため、自動登録を見送りました"
+        ),
       };
     }
 
     const version = await run("claude", ["--version"]);
     if (!version.ok) {
-      return { registered: false, command, reason: "claude CLI が見つかりませんでした" };
+      return {
+        registered: false,
+        command,
+        reason: this.t("claude CLI was not found", "claude CLI が見つかりませんでした"),
+      };
     }
 
     // User scope is shared by every project, so no COMP_WORKSPACE_ROOT here:
@@ -1236,7 +1351,11 @@ export class AgentSetupManager {
       return {
         registered: false,
         command,
-        reason: (added.stderr || added.stdout || "claude mcp add に失敗しました").trim(),
+        reason: (
+          added.stderr ||
+          added.stdout ||
+          this.t("claude mcp add failed", "claude mcp add に失敗しました")
+        ).trim(),
       };
     }
     return { registered: true, command };

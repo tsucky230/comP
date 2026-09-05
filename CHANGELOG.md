@@ -20,11 +20,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
     - 判定は `[mcp_servers]` テーブル内に限定する。無関係な `[tui]` の `comp = true` や、名前が `comp` で始まるだけの別サーバー（`[mcp_servers.company]`）で誤検知しないため
     - 複数行の値の検出は括弧の対応で行う。セクションの終端を「次の行頭 `[`」で決めているため、`args` の途中に `["--flag"],` のような行があると途中で切れ、**comP だけでなく Codex の設定ファイル全体が壊れる**。切れた場合は必ず括弧が開いたままになるので、それを検出して書き換えを中止する
   - `AGENTS.md` に comP の利用ルールを追記する（Codex が読む指示ファイル）
+- **comP 自身が出すメッセージ（Setup Agents の QuickPick・確認ダイアログ・通知・出力パネルのレポート・手動設定用 Markdown、CLAUDE.md 等に追記する comP 利用ルール、拡張更新後の daemon パス修復通知、chat participant の説明文）を英語圏のユーザー向けに整備**。多言語化の仕組み（vscode-nls / l10n）が無く、これらは全て日本語決め打ちだったため、VS Code の表示言語が日本語以外なら常に日本語が表示されていた
+  - VS Code の表示言語（`vscode.env.language`）で英語 / 日本語を切り替える最小限の仕組みを追加（`src/i18n.ts` の `t(en, ja)`、既定は英語）。`AgentSetup.ts` は `vscode` モジュールに依存させたくない（ユニットテストが VS Code 拡張ホスト無しで直接動く設計のため）ので、呼び出し側が解決したロケールを `AgentSetupOptions.locale` として注入する形にした
+  - `package.json` の chat participant の説明文だけは実行時コードが届かないため、VS Code 標準の `package.nls.json` / `package.nls.ja.json` で対応
+  - `docs/user/MCP_TOOLS.md`（`session_log` / `session_recall` の節が丸ごと日本語だった）と `SECURITY.md`（サポート版数表の一部ラベルのみ日本語だった）も英語に統一
 
 ### Fixed
 
 - **`repairStaleConfigs` が TOML 設定を扱えるようにした**（`src/mcp/AgentSetup.ts`）。この関数は VS Code 起動のたびに走り、拡張更新で `<publisher>.<name>-<version>` ディレクトリが消えたあとの陳腐化したデーモンパスを直している。JSON パーサに Codex の TOML を通すと、正常な設定を毎回 `invalid JSON` として報告しながら、本来直すべきパスは永久に直らず、**拡張を更新するたびに Codex から comP が無言で落ちる**状態になる。同じ判定順序（変数参照・相対パス・実在チェック）を TOML 上で再現した専用の修復経路を追加
 - テストで `AgentSetupManager` を組み立てる際に `codexHome` を注入するようにした。Codex は `CODEX_HOME` を読むため、注入しないと `CODEX_HOME` を設定している開発者の実設定をテストが書き換えうる（`homeDir` を注入しているのと同じ理由）
+- **Codex の TOML マージにあった正規表現の穴を3件修正**（`src/mcp/AgentSetup.ts`）。まっさらな目線でのレビューを Gemini に依頼して見つかった
+  - `unsupportedServerShape` がドット表記の前後の空白（`comp . command = "x"` — TOML 仕様上合法）を見落としており、すり抜けると後続の `[mcp_servers.comp]` と重複キーになって Codex がファイル全体をパース拒否する
+  - `refreshWorkspaceRootToml` の `COMP_WORKSPACE_ROOT` 正規表現に行頭アンカーが無く、セクション内のコメント本文（例: `# old: COMP_WORKSPACE_ROOT = '/old/path'`）に左端優先でマッチし、本物の値ではなくコメントの方を書き換えてしまっていた。コメント本文だけを同じ文字数・改行を保ったまま空白化する `maskComments` を追加して対処
+  - `decodeTomlString` が `tomlQuote` の `\uXXXX` エスケープを復号できておらず、制御文字を含むパスで書き込みと読み取りが非対称になり、`repairStaleConfigs` が起動のたびに「壊れている」と誤判定し続けていた
 
 ---
 

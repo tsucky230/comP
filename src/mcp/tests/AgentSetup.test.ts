@@ -785,7 +785,7 @@ describe("AgentSetupManager", () => {
 
       expect(ran).to.be.false;
       expect(outcome.registered).to.be.false;
-      expect(outcome.reason).to.include("シェル特殊文字");
+      expect(outcome.reason).to.include("shell metacharacters");
       expect(outcome.command).to.include("claude mcp add");
     });
 
@@ -836,6 +836,25 @@ describe("AgentSetupManager", () => {
 
       expect(cursor.restartHint).to.include("Reload Window");
       expect(claude.restartHint).to.include("claude mcp list");
+    });
+
+    it("defaults to English when no locale is given", async () => {
+      const result = await manager.generateConfig("Codex");
+
+      expect(result.restartHint).to.include("Quit the running Codex");
+      expect(result.restartHint).to.not.match(/[぀-ヿ一-鿿]/);
+    });
+
+    it("switches every generated string to Japanese when locale: \"ja\" is set", async () => {
+      const jaManager = new AgentSetupManager(mockDaemon as any, testWorkspace, undefined, {
+        homeDir: fakeHome,
+        codexHome,
+        locale: "ja",
+      });
+
+      const result = await jaManager.generateConfig("Codex");
+
+      expect(result.restartHint).to.include("実行中の Codex を終了し");
     });
   });
 
