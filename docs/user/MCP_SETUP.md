@@ -37,6 +37,7 @@ the project-level registration in place.
 | Agent | Project config | Machine-wide config |
 | --- | --- | --- |
 | Claude Code | `.mcp.json` | `claude mcp add --scope user` (optional) |
+| Codex | `.codex/config.toml` | `~/.codex/config.toml` (or `$CODEX_HOME`) |
 | Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` |
 | Cline | — | VS Code `globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
 | Windsurf | — | `~/.codeium/windsurf/mcp_config.json` |
@@ -82,6 +83,35 @@ claude mcp list
 ```
 
 `comp` should be listed as `✔ Connected`.
+
+### Codex
+
+- **CLI**: leave the session and start `codex` again
+- **VS Code extension**: Command Palette → **Developer: Reload Window**
+
+Both read the same `config.toml`, so one setup run covers them.
+
+Verify by running `/mcp` inside a Codex session — `comp` should appear with its
+tools.
+
+**The project-level file only counts for a trusted project.** Codex skips
+`.codex/config.toml` entirely in a project you have not marked trusted. Until you
+trust it, only the machine-wide `~/.codex/config.toml` is in effect. That one
+works everywhere, so comP writes it first.
+
+comP writes a single `[mcp_servers.comp]` table and leaves the rest of the file
+byte for byte. Three shapes cannot be rewritten safely without a full TOML
+parser. comP refuses to edit the file rather than risk it, and hands you the
+table to paste instead:
+
+- servers declared as an inline table — `mcp_servers = { … }`
+- a comp entry in dotted form — `comp = { … }` or `comp.command = …` under
+  `[mcp_servers]`
+- an existing `[mcp_servers.comp]` whose values span several lines (a multi-line
+  `args` array, for instance)
+
+A key named `comp` in an unrelated table, or a server whose name merely starts
+with `comp`, is not affected — only the `[mcp_servers]` table is examined.
 
 ### Cursor
 

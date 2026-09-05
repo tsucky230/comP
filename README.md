@@ -4,7 +4,7 @@
 
 # comP — The Memory System for Your AI Coding Assistant
 
-**Open-source, 100% local code analysis engine. Works with Claude Code, Cursor, Cline, and Antigravity.**
+**Open-source, 100% local code analysis engine. Works with Claude Code, Codex, Cursor, Cline, and Antigravity.**
 
 🌐 **[Official Website](https://tsucky230.github.io/comP/)**
 
@@ -116,6 +116,7 @@ merging with any MCP servers you already have. Nothing is copied by hand.
 | Agent | Written to |
 | --- | --- |
 | **Claude Code** | `.mcp.json` (plus optional `claude mcp add --scope user`) |
+| **Codex** | `~/.codex/config.toml` and `.codex/config.toml` |
 | **GitHub Copilot** | `.vscode/mcp.json` |
 | **Cursor** | `.cursor/mcp.json` and `~/.cursor/mcp.json` |
 | **Cline** | VS Code globalStorage MCP settings |
@@ -373,6 +374,7 @@ agent when you see the repair notification. On older versions, re-run
 | Agent | Status |
 | --- | --- |
 | Claude Code / GitHub Copilot | ✅ Supported & verified |
+| Codex (CLI and VS Code extension) | ✅ Supported |
 | Cursor / Cline / Windsurf / Antigravity / Aider / Continue.dev | ✅ Supported |
 | Gemini | ❌ Not supported |
 

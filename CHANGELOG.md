@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Codex（OpenAI）を `comP: Setup Agents` の対象に追加**（`src/mcp/AgentSetup.ts`）。Codex の設定は TOML なので、既存の JSON マージ経路では書き込めず、これまで対象外だった
+  - 書き込み先は `~/.codex/config.toml`（`$CODEX_HOME` があればそちら）と `<workspace>/.codex/config.toml` の 2 箇所。CLI と VS Code 拡張は同じファイルを読むため、1 回の設定で両方に効く
+  - グローバルを先に書く。Codex はグローバル設定を常に読むが、プロジェクト側の `.codex/config.toml` は**信頼済みプロジェクトでしか読まない**ため、確実に効く方を先頭に置く。この制約は再起動手順にも明記する
+  - `env` はサブテーブル（`[mcp_servers.comp.env]`）ではなく**インラインテーブル**で書く。エントリが 1 つの連続ブロックになり、再実行時に「comP のブロックだけ差し替える」処理の終端が「次の行頭 `[`」で一意に決まるため
+  - パスは TOML の**リテラル文字列**（`'…'`）で書く。基本文字列だと Windows の `C:\Users\…` がエスケープとして解釈されて壊れるため（`yamlQuote` と同じ理由）
+  - 他の MCP サーバーの行はバイト単位で保持する。`codex mcp add` が書いた `[mcp_servers.comp.env]` 形式の古いエントリも、サブテーブルごと差し替える
+  - 安全に書き換えられない 3 つの形（インラインテーブル `mcp_servers = { … }` / `[mcp_servers]` 配下のドット形 `comp = { … }` / 既存の `[mcp_servers.comp]` が複数行にまたがる値を持つ場合）は書き換えず失敗として報告し、貼り付け用のテーブルを提示する（Aider の `mcp-servers:` と同じ方針。新規依存は追加していない）
+    - 判定は `[mcp_servers]` テーブル内に限定する。無関係な `[tui]` の `comp = true` や、名前が `comp` で始まるだけの別サーバー（`[mcp_servers.company]`）で誤検知しないため
+    - 複数行の値の検出は括弧の対応で行う。セクションの終端を「次の行頭 `[`」で決めているため、`args` の途中に `["--flag"],` のような行があると途中で切れ、**comP だけでなく Codex の設定ファイル全体が壊れる**。切れた場合は必ず括弧が開いたままになるので、それを検出して書き換えを中止する
+  - `AGENTS.md` に comP の利用ルールを追記する（Codex が読む指示ファイル）
+
+### Fixed
+
+- **`repairStaleConfigs` が TOML 設定を扱えるようにした**（`src/mcp/AgentSetup.ts`）。この関数は VS Code 起動のたびに走り、拡張更新で `<publisher>.<name>-<version>` ディレクトリが消えたあとの陳腐化したデーモンパスを直している。JSON パーサに Codex の TOML を通すと、正常な設定を毎回 `invalid JSON` として報告しながら、本来直すべきパスは永久に直らず、**拡張を更新するたびに Codex から comP が無言で落ちる**状態になる。同じ判定順序（変数参照・相対パス・実在チェック）を TOML 上で再現した専用の修復経路を追加
+- テストで `AgentSetupManager` を組み立てる際に `codexHome` を注入するようにした。Codex は `CODEX_HOME` を読むため、注入しないと `CODEX_HOME` を設定している開発者の実設定をテストが書き換えうる（`homeDir` を注入しているのと同じ理由）
+
+---
+
 ## [0.10.0] - 2026-09-01
 
 ### Changed
