@@ -18,6 +18,7 @@ import { registerCommands } from "./ui/commands";
 import { SessionMemoryManager } from "./mcp/sessionMemory";
 import { registerChatParticipant } from "./mcp/chatParticipant";
 import { AgentSetupManager } from "./mcp/AgentSetup";
+import { isJapaneseLocale, t } from "./i18n";
 
 /** Global context */
 let daemonManager: DaemonManager | null = null;
@@ -92,7 +93,8 @@ export function repairMcpConfigs(context: vscode.ExtensionContext): void {
     const agentSetup = new AgentSetupManager(
       null as unknown as DaemonManager,
       workspaceRoot,
-      context.extensionPath
+      context.extensionPath,
+      { locale: isJapaneseLocale() ? "ja" : "en" }
     );
     const repaired = agentSetup.repairStaleConfigs().filter((entry) => entry.status === "repaired");
 
@@ -102,7 +104,10 @@ export function repairMcpConfigs(context: vscode.ExtensionContext): void {
       console.log(`[comP] Repaired MCP config: ${entry.file}${entry.to ? ` -> ${entry.to}` : " (workspace root)"}`);
     }
     vscode.window.showInformationMessage(
-      `comP: ${repaired.length} 件の MCP 設定を現在の daemon パスへ修復しました。エージェントを再起動してください。`
+      t(
+        `comP: repaired ${repaired.length} MCP config(s) to point at the current daemon path. Restart the agent(s) to pick it up.`,
+        `comP: ${repaired.length} 件の MCP 設定を現在の daemon パスへ修復しました。エージェントを再起動してください。`
+      )
     );
   } catch (error) {
     console.warn("[comP] MCP config repair failed:", error);

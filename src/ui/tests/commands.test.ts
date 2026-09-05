@@ -120,6 +120,33 @@ describe("registerCommands", () => {
     expect((vscode.window as any).showInformationMessage.called).to.be.false;
   });
 
+  it("comp.setupAgents shows an English QuickPick placeholder by default", async () => {
+    // The shared vscode mock defaults env.language to "en" (see src/test/setup.ts);
+    // this is the state every other test in this file already runs under.
+    registerCommands(mockContext, () => mockDaemon, mockStatusBar);
+
+    await handlers.get("comp.setupAgents")!();
+
+    const placeHolder = (vscode.window as any).showQuickPick.getCall(0).args[1].placeHolder;
+    expect(placeHolder).to.equal("Select the agents to configure comP for (detected ones are pre-selected)");
+  });
+
+  it("comp.setupAgents switches the QuickPick placeholder to Japanese under a Japanese VS Code locale", async () => {
+    const originalLanguage = (vscode.env as any).language;
+    (vscode.env as any).language = "ja";
+    try {
+      registerCommands(mockContext, () => mockDaemon, mockStatusBar);
+      await handlers.get("comp.setupAgents")!();
+
+      const placeHolder = (vscode.window as any).showQuickPick.getCall(0).args[1].placeHolder;
+      expect(placeHolder).to.equal("comP を設定するエージェントを選んでください（検出済みは選択済み）");
+    } finally {
+      // The vscode mock is one shared instance across every test file in the
+      // run, so leaving this changed would bleed into unrelated tests.
+      (vscode.env as any).language = originalLanguage;
+    }
+  });
+
   it("comp.setupAgents with an empty multi-select does nothing", async () => {
     (vscode.window as any).showQuickPick = sinon.stub().resolves([]);
     registerCommands(mockContext, () => mockDaemon, mockStatusBar);
@@ -153,10 +180,10 @@ describe("registerCommands", () => {
 
     await handlers.get("comp.setupAgents")!();
 
-    const asked = (vscode.window as any).showInformationMessage
-      .getCalls()
-      .some((call: any) => String(call.args[0]).includes("ユーザースコープ"));
-    expect(asked).to.be.false;
+    // The user-scope confirmation only fires alongside a Claude Code pick.
+    // With just GitHub Copilot selected, the only call left is the final
+    // summary — so exactly one call, not the two a Claude Code pick produces.
+    expect((vscode.window as any).showInformationMessage.callCount).to.equal(1);
   });
 
   it("comp.generateContext with no input does nothing", async () => {

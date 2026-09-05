@@ -134,26 +134,28 @@ Returns a Markdown table of changed files with language, symbol count, and wheth
 
 ### `session_log`
 
-ユーザーの依頼と対応結果を `.comp/history/log-YYYY-MM.jsonl` に永続記録します。
-書き込み直後に BM25 インデックスへ即時反映されるため、次回以降の `run_pipeline` 検索で過去のやりとりが自然に参照されます。
+Persists the user's request and its outcome to `.comp/history/log-YYYY-MM.jsonl`.
+The entry is reflected into the BM25 index immediately after the write, so later
+`run_pipeline` searches naturally surface past exchanges.
 
-セッション切れ・デーモン再起動後も残る「作業ログ」として、重要タスクの完了時に呼んでください。
+Call it when a significant task finishes — it's the "work log" that survives a
+session ending or the daemon restarting.
 
 ```json
 {
-  "request": "session_log MCPツールを追加する",
-  "outcome": "daemon/src/mcp/mod.rs に handle_session_log を実装し JSONL 追記＋即時インデックスを完了",
+  "request": "add a session_log MCP tool",
+  "outcome": "implemented handle_session_log in daemon/src/mcp/mod.rs; appends JSONL and indexes immediately",
   "files": ["daemon/src/mcp/mod.rs", "daemon/src/indexer/walker.rs"]
 }
 ```
 
-パラメータ:
+Parameters:
 
-- `request` (string, 必須) — ユーザーの依頼テキスト（最大 600 文字）
-- `outcome` (string, 省略可) — 対応結果の要約（最大 400 文字）
-- `files` (string[], 省略可) — 変更したファイルパスの一覧
+- `request` (string, required) — the user's request, as text (max 600 characters)
+- `outcome` (string, optional) — a summary of the outcome (max 400 characters)
+- `files` (string[], optional) — paths of the files that were changed
 
-レスポンス例:
+Example response:
 
 ```json
 { "status": "ok", "path": ".comp/history/log-2026-06.jsonl", "timestamp": 1751023456789 }
@@ -163,32 +165,39 @@ Returns a Markdown table of changed files with language, symbol count, and wheth
 
 ### `session_recall`
 
-過去のやりとりをセッション横断で検索・返却します。デーモン再起動をまたいだ **全セッション** を対象とします。
+Searches and returns past exchanges across sessions. Covers **every session**,
+including ones from before the daemon last restarted.
 
-`.comp/session-memory.json`（run_pipeline / get_context の自動記録）と `.comp/history/*.jsonl`（session_log の明示記録・Stop hook 自動記録）を統合し、新しい順で返します。
+Merges `.comp/session-memory.json` (auto-recorded by run_pipeline / get_context)
+with `.comp/history/*.jsonl` (explicit session_log entries, plus Stop-hook
+auto-records), and returns them newest first.
 
 ```json
 { "query": "session_log", "limit": 10 }
 ```
 
-パラメータ:
+Parameters:
 
-- `query` (string, 省略可) — request・outcome 両フィールドへの部分一致フィルタ
-- `limit` (number, 省略可, デフォルト 20) — 返却件数の上限
+- `query` (string, optional) — partial-match filter against both the request and outcome fields
+- `limit` (number, optional, default 20) — maximum number of results to return
 
-レスポンス形式（Markdown テキスト）:
+Response format (Markdown text):
 
 ```
 ### Session Recall
 
-- `2026-06-27 01:30` **Query**: "session_log MCPツールを追加する" (Tokens: 4200)
-  - **Outcome**: daemon/src/mcp/mod.rs に handle_session_log を実装し JSONL 追記＋即時インデックスを完了
-  - **Symbols**: `SessionCall`, `format_epoch_ms`（該当する場合）
-  - **Files**: `daemon/src/mcp/mod.rs`, `daemon/src/indexer/walker.rs`（該当する場合）
+- `2026-06-27 01:30` **Query**: "add a session_log MCP tool" (Tokens: 4200)
+  - **Outcome**: implemented handle_session_log in daemon/src/mcp/mod.rs; appends JSONL and indexes immediately
+  - **Symbols**: `SessionCall`, `format_epoch_ms` (when present)
+  - **Files**: `daemon/src/mcp/mod.rs`, `daemon/src/indexer/walker.rs` (when present)
 ```
 
-各項目（Outcome・Symbols・Files）は、データが存在する場合のみ表示されます。
+Each field (Outcome, Symbols, Files) is shown only when the entry actually has data.
 
-**v0.9.2+**: Symbols・Files は各エントリ **先頭 5 件まで** 表示し、超過分は `… (+N more)` と件数のみ示します（run_pipeline 自動記録は数十件のシンボルを含むことがあり、全列挙すると recall 自体がトークンを浪費するため）。
+**v0.9.2+**: Symbols and Files are capped at **the first 5 entries** each, with the
+remainder collapsed into `… (+N more)` — an auto-recorded run_pipeline entry can
+carry dozens of symbols, and listing all of them would waste the very tokens
+recall is meant to save.
 
-**推奨**: 新しいセッション開始時や作業再開時に `session_recall` を呼び、前回の依頼と対応を確認してください。
+**Recommended**: call `session_recall` at the start of a new session, or when
+resuming work, to check the previous request and how it was handled.
