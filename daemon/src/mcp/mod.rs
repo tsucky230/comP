@@ -229,14 +229,15 @@ fn append_history_line(hist_path: &std::path::Path, line: &str) -> Result<()> {
 /// Rewrite `hist_path` in place, replacing its content with a compacted form,
 /// while holding an *exclusive* OS advisory lock for the entire read-modify-write.
 ///
-/// WHY in-place rewrite (seek-to-0 + write + truncate) instead of write-new-file
-/// + atomic rename: on Windows, renaming a file over a path while another process
-/// holds an open handle to the destination can fail with a sharing violation, and
-/// even when it succeeds there is a window between "release lock on the old file"
-/// and "rename the new file into place" where an unlocked append could land in the
-/// old file and be silently discarded by the rename. Holding one exclusive lock for
-/// the full read+write+truncate closes that window: no appender (which also takes
-/// an exclusive lock — see append_history_line's doc for why shared doesn't work
+/// WHY in-place rewrite (seek-to-0 + write + truncate) instead of writing a new
+/// file and atomically renaming it: on Windows, renaming a file over a path
+/// while another process holds an open handle to the destination can fail with
+/// a sharing violation, and even when it succeeds there is a window between
+/// releasing the lock on the old file and renaming the new file into place,
+/// where an unlocked append could land in the old file and be silently
+/// discarded by the rename. Holding one exclusive lock for the full
+/// read+write+truncate closes that window: no appender (which also takes an
+/// exclusive lock — see append_history_line's doc for why shared doesn't work
 /// on Windows) can write until this function releases the lock.
 ///
 /// WHY a `.bak` snapshot is written before mutating: `compact_fn` is a lossy
@@ -252,6 +253,12 @@ fn append_history_line(hist_path: &std::path::Path, line: &str) -> Result<()> {
 /// Synchronous / blocking; manually triggered only (never called from the request
 /// handling path), so callers should run it via `spawn_blocking` same as
 /// `append_history_line`.
+///
+/// WHY `#[allow(dead_code)]`: no manual trigger (CLI subcommand or MCP tool) has
+/// been wired up yet — which mechanism should own that decision was intentionally
+/// left open (see docs/ARCHITECTURE_ja.md 4.2.2). The locking/atomicity contract
+/// here is complete and covered by tests; only the entry point is pending.
+#[allow(dead_code)]
 fn compact_history_file(
     hist_path: &std::path::Path,
     compact_fn: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
