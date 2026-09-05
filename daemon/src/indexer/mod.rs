@@ -288,6 +288,13 @@ impl Indexer {
         let char_count = content_str.len();
         let file_id = db.upsert_file(&file_entry.path, &file_entry.hash, &file_entry.language, char_count)?;
 
+        // WHY: this file's previous parse may have produced a different set of
+        // symbols (renamed/removed functions, etc.). insert_node below is a bare
+        // INSERT, so without clearing the old set first, old and new nodes would
+        // simply accumulate under the same file_id forever. See clear_file_symbols'
+        // doc comment for the accepted cross-file-edge trade-off.
+        db.clear_file_symbols(file_id)?;
+
         // 4. Store each symbol as a node in DB
         let mut symbol_map: HashMap<String, i64> = HashMap::new();
         for symbol in &symbols {

@@ -67,12 +67,27 @@ impl GraphDB {
     /// `char_count` is the UTF-8 byte length of the file content, stored as the
     /// real token-baseline for savings calculations in run_pipeline.
     ///
+    /// WHY `ON CONFLICT ... DO UPDATE` instead of `INSERT OR REPLACE`: with a
+    /// UNIQUE constraint on `path`, REPLACE resolves the conflict by deleting the
+    /// existing row and inserting a new one — and since `id` is AUTOINCREMENT, the
+    /// new row gets a fresh id rather than reusing the old one. Every re-index of
+    /// a changed file would then orphan that file's entire previous `nodes` set
+    /// (no FK cascade is enabled, see schema.rs), silently accumulating forever. A
+    /// real upsert updates the existing row in place, so `id` stays stable across
+    /// re-indexes — which is what lets `clear_file_symbols` below find and remove
+    /// exactly this file's stale nodes/edges before new ones are inserted.
+    ///
     /// Returns the file ID for use in subsequent operations
     pub fn upsert_file(&self, path: &str, hash: &str, language: &str, char_count: usize) -> Result<i64> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
         conn.execute(
-            "INSERT OR REPLACE INTO files (path, hash, language, last_indexed, char_count)
-             VALUES (?, ?, ?, strftime('%s', 'now'), ?)",
+            "INSERT INTO files (path, hash, language, last_indexed, char_count)
+             VALUES (?, ?, ?, strftime('%s', 'now'), ?)
+             ON CONFLICT(path) DO UPDATE SET
+                 hash = excluded.hash,
+                 language = excluded.language,
+                 last_indexed = excluded.last_indexed,
+                 char_count = excluded.char_count",
             rusqlite::params![path, hash, language, char_count as i64],
         )?;
 
@@ -81,6 +96,50 @@ impl GraphDB {
         let file_id: i64 = stmt.query_row([path], |row| row.get(0))?;
 
         Ok(file_id)
+    }
+
+    /// Remove a file's own `nodes` (and any edges touching them) without
+    /// removing its `files` row.
+    ///
+    /// WHY this exists separately from `delete_file`: re-indexing a changed file
+    /// re-parses it into a fresh set of symbols, but nothing previously deleted
+    /// the *old* set first — `insert_node` is a bare INSERT, so old and new nodes
+    /// simply accumulated under the same (now-stable, post-upsert-fix) file_id.
+    /// Mirrors `delete_file`'s edges-then-nodes cascade (steps 1-3), stopping
+    /// short of deleting the `files` row itself since the caller is about to
+    /// re-populate it.
+    ///
+    /// TRADE-OFF (accepted, see plan): this clears edges pointing *into* this
+    /// file's old nodes too, including ones inserted by *other* files that
+    /// depend on this one. Those other files' outbound edges are only rebuilt
+    /// when they themselves get re-parsed (see `resolve_edges_for_file`, which
+    /// only recomputes edges for files present in the current change set) — so
+    /// a dependency edge into a changed file can go missing until its source
+    /// file is re-indexed for some unrelated reason. This is judged better than
+    /// the previous behavior of never deleting anything and growing `nodes`
+    /// without bound.
+    pub fn clear_file_symbols(&self, file_id: i64) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
+
+        // 1. Get all node IDs of this file
+        let mut stmt = conn.prepare("SELECT id FROM nodes WHERE file_id = ?")?;
+        let node_ids: Vec<i64> = stmt
+            .query_map([file_id], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        // 2. Delete edges referencing the target nodes (both from and to sides)
+        for nid in &node_ids {
+            conn.execute(
+                "DELETE FROM edges WHERE from_id = ? OR to_id = ?",
+                rusqlite::params![nid, nid],
+            )?;
+        }
+
+        // 3. Delete nodes
+        conn.execute("DELETE FROM nodes WHERE file_id = ?", [file_id])?;
+
+        Ok(())
     }
 
     /// Insert a symbol node
@@ -783,6 +842,86 @@ mod tests {
 
         // Empty input short-circuits.
         assert!(db.get_related_files(&[], 10).unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_file_keeps_the_same_id_across_updates() {
+        // WHY this matters: INSERT OR REPLACE would delete-then-reinsert on a
+        // path conflict, handing out a fresh AUTOINCREMENT id each time and
+        // orphaning every previous nodes/edges row tied to the old id.
+        let temp_dir = std::env::temp_dir().join("comP_test_upsert_file_stable_id");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let db = GraphDB::new(temp_dir.to_str().unwrap()).await.unwrap();
+        let first_id = db.upsert_file("a.rs", "hash-v1", "rust", 10).unwrap();
+        let second_id = db.upsert_file("a.rs", "hash-v2", "rust", 20).unwrap();
+
+        assert_eq!(first_id, second_id, "re-upserting the same path must keep its id");
+
+        let (files, _, _) = db.get_stats().unwrap();
+        assert_eq!(files, 1, "re-upserting must update the row in place, not add a second one");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_clear_file_symbols_removes_only_the_target_files_rows() {
+        let temp_dir = std::env::temp_dir().join("comP_test_clear_file_symbols");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let db = GraphDB::new(temp_dir.to_str().unwrap()).await.unwrap();
+        let fa = db.upsert_file("a.rs", "h1", "rust", 10).unwrap();
+        let fb = db.upsert_file("b.rs", "h2", "rust", 10).unwrap();
+
+        let na1 = db.insert_node(fa, "alpha_old", "fn", 1, 0, None, true, None).unwrap();
+        let nb = db.insert_node(fb, "beta", "fn", 1, 0, None, true, None).unwrap();
+        db.insert_edge(nb, na1, "calls").unwrap(); // b depends on a's old symbol
+        db.insert_edge(na1, nb, "calls").unwrap(); // and a depends back on b
+
+        db.clear_file_symbols(fa).unwrap();
+
+        let (_, node_count, edge_count) = db.get_stats().unwrap();
+        assert_eq!(node_count, 1, "only b's node should remain");
+        assert_eq!(edge_count, 0, "edges touching a's removed node (either direction) must go too");
+
+        // b's own row is untouched — clear_file_symbols must not touch other files.
+        let mut stmt = db.conn.lock().unwrap().prepare("SELECT id FROM nodes WHERE file_id = ?").unwrap()
+            .query_map([fb], |row| row.get::<_, i64>(0)).unwrap()
+            .collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(stmt, vec![nb]);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_reparsing_a_file_does_not_duplicate_its_nodes() {
+        // End-to-end version of the two tests above: upsert_file + clear_file_symbols
+        // together must mean a file's node count reflects only its latest parse.
+        let temp_dir = std::env::temp_dir().join("comP_test_reparse_no_duplicate_nodes");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let db = GraphDB::new(temp_dir.to_str().unwrap()).await.unwrap();
+
+        // First "parse": two symbols.
+        let file_id = db.upsert_file("a.rs", "hash-v1", "rust", 10).unwrap();
+        db.clear_file_symbols(file_id).unwrap();
+        db.insert_node(file_id, "old_fn_one", "fn", 1, 0, None, true, None).unwrap();
+        db.insert_node(file_id, "old_fn_two", "fn", 2, 0, None, true, None).unwrap();
+
+        // Second "parse" of changed content: one symbol, same file_id (renamed function).
+        let file_id_again = db.upsert_file("a.rs", "hash-v2", "rust", 12).unwrap();
+        assert_eq!(file_id, file_id_again);
+        db.clear_file_symbols(file_id_again).unwrap();
+        db.insert_node(file_id_again, "new_fn", "fn", 1, 0, None, true, None).unwrap();
+
+        let (files, nodes, _) = db.get_stats().unwrap();
+        assert_eq!(files, 1);
+        assert_eq!(nodes, 1, "old symbols must not linger alongside the new one");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
