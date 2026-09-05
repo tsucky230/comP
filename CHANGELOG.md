@@ -24,8 +24,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
   - VS Code の表示言語（`vscode.env.language`）で英語 / 日本語を切り替える最小限の仕組みを追加（`src/i18n.ts` の `t(en, ja)`、既定は英語）。`AgentSetup.ts` は `vscode` モジュールに依存させたくない（ユニットテストが VS Code 拡張ホスト無しで直接動く設計のため）ので、呼び出し側が解決したロケールを `AgentSetupOptions.locale` として注入する形にした
   - `package.json` の chat participant の説明文だけは実行時コードが届かないため、VS Code 標準の `package.nls.json` / `package.nls.ja.json` で対応
   - `docs/user/MCP_TOOLS.md`（`session_log` / `session_recall` の節が丸ごと日本語だった）と `SECURITY.md`（サポート版数表の一部ラベルのみ日本語だった）も英語に統一
+- **ブランチ切り替え時にインデックスを自動でフル再インデックスする**（`src/git/branchWatcher.ts` 新設、`src/extension.ts`）。従来 comP は git ブランチを一切認識しておらず、`FileSystemWatcher` も共有デバウンスタイマー1個を全ファイルで使い回すため、ブランチ切り替え相当の大量ファイル変更はほぼ握りつぶされ、インデックスが新旧どちらのブランチともズレた状態になっていた
+  - `.git/HEAD` を3秒間隔でポーリングして変更を検知する（`git` プロセスは起動せず、ファイル読み取りのみ）。detached HEAD ではコミットSHAをそのまま識別子として使う
+  - 検知したら既存の `forceReindex`（`clear_index()` + フル `index_workspace(None, ...)`）をそのまま自動発火する。増分更新用の新規RPCは検討したが見送った——全ファイルを「変更あり」として扱うフル再構築でないと、依存関係edgeの再解決が変更ファイルのアウトバウンド分しか行われず、無関係なファイルからの依存edgeが壊れる（詳細は次項）
+  - 手動の `comp.forceReindex` コマンドと違い、確認ダイアログは出さない（自動処理なのでユーザー操作を妨げない）。失敗時もトースト通知は出さずログのみ
+  - 「ブランチ名の列をインデックスに追加してハッシュ比較で無料スキップする」という当初案は、Gemini のレビューで技術的な誤りと判明したため見送った。`files.path` は `UNIQUE` で1ファイルにつき直近1回分のハッシュしか持てず、ブランチを往復しても毎回差分ファイル分の再パースコストが発生する（キャッシュにはならない）ため、複雑さに見合わないと判断
 
 ### Fixed
+
+- **編集保存のたびに `nodes`（シンボル）行が孤児化して溜まり続けるバグを修正**（`daemon/src/graph/mod.rs`、`daemon/src/indexer/mod.rs`）。ブランチ切り替え機能の実装中に発見。`upsert_file` が `INSERT OR REPLACE INTO files (path, ...)` を使っており、`path` の `UNIQUE` 制約に衝突すると SQLite内部では「既存行削除→新規挿入」として処理される。`files.id` は `AUTOINCREMENT` のため、ファイルを保存するたびに `file_id` が新しく採番され、旧IDを参照していた `nodes` 行が永久に孤児として残っていた（FK制約は無効、カスケードなし）。日常の編集保存で常に発生しており、ブランチ機能とは無関係の既存バグ
+  - `upsert_file` を `ON CONFLICT(path) DO UPDATE` による真のUPSERTに変更し、`file_id` を安定させた
+  - 新規メソッド `clear_file_symbols(file_id)` を追加（`delete_file` の edges→nodes削除カスケードを、`files` 行自体は消さない形で流用）し、`parse_and_extract` で新規nodesを挿入する前に旧nodes/edgesを明示的に削除するようにした
+  - **受け入れたトレードオフ**: 変更されたファイルに依存する未変更のファイルからのedgeは、依存元ファイル自体が別の理由で再パースされるまで欠落したままになる。Geminiのレビューでこの副作用を指摘され、「無限に肥大化し続ける現状よりはマシ」と判断した上で修正した
+  - 実際に動作するdaemonバイナリに対し、同一ファイルを4回連続で保存してもnode数が増え続けないこと、およびブランチを往復してもnode/file数が両方向で正しく元に戻ることを確認済み
 
 - **`repairStaleConfigs` が TOML 設定を扱えるようにした**（`src/mcp/AgentSetup.ts`）。この関数は VS Code 起動のたびに走り、拡張更新で `<publisher>.<name>-<version>` ディレクトリが消えたあとの陳腐化したデーモンパスを直している。JSON パーサに Codex の TOML を通すと、正常な設定を毎回 `invalid JSON` として報告しながら、本来直すべきパスは永久に直らず、**拡張を更新するたびに Codex から comP が無言で落ちる**状態になる。同じ判定順序（変数参照・相対パス・実在チェック）を TOML 上で再現した専用の修復経路を追加
 - テストで `AgentSetupManager` を組み立てる際に `codexHome` を注入するようにした。Codex は `CODEX_HOME` を読むため、注入しないと `CODEX_HOME` を設定している開発者の実設定をテストが書き換えうる（`homeDir` を注入しているのと同じ理由）

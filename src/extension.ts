@@ -19,6 +19,7 @@ import { SessionMemoryManager } from "./mcp/sessionMemory";
 import { registerChatParticipant } from "./mcp/chatParticipant";
 import { AgentSetupManager } from "./mcp/AgentSetup";
 import { isJapaneseLocale, t } from "./i18n";
+import { startBranchWatch } from "./git/branchWatcher";
 
 /** Global context */
 let daemonManager: DaemonManager | null = null;
@@ -68,6 +69,7 @@ function hasCompDirectory(): boolean {
 
 let watcherDisposable: vscode.Disposable | null = null;
 let codeLensDisposable: vscode.Disposable | null = null;
+let branchWatcherDisposable: vscode.Disposable | null = null;
 
 /**
  * Re-point MCP config files whose recorded daemon path no longer exists.
@@ -281,6 +283,59 @@ async function startDaemonStack(context: vscode.ExtensionContext): Promise<void>
   }
   watcherDisposable = setupFileWatchers(context, daemonManager, codeLensProvider);
 
+  if (branchWatcherDisposable) {
+    branchWatcherDisposable.dispose();
+    branchWatcherDisposable = null;
+  }
+  branchWatcherDisposable = setupBranchWatch(daemonManager);
+}
+
+/**
+ * Watch for git branch switches and trigger a full re-index automatically.
+ *
+ * WHY a full re-index rather than the incremental per-file path: a branch
+ * switch can change hundreds of files at once, and the FileSystemWatcher path
+ * (setupFileWatchers) isn't built for that — its single shared debounce timer
+ * only ends up indexing the last file in a burst. A full index_workspace() pass
+ * (what `forceReindex` already runs) re-resolves every file's edges in the same
+ * pass, so a stale dependency edge into a changed file never has a chance to
+ * appear — see the "syncIndex" idea rejected in the design notes: an
+ * incremental re-resolve only recomputes edges *from* files in the changed
+ * set, so edges *into* a changed file from unrelated, unchanged files would go
+ * missing until those files were reparsed for some other reason.
+ *
+ * WHY no confirmation dialog and no error toast: this is an automatic
+ * background reaction to something the user already did (switching branches),
+ * not a user-initiated action — popping "This will re-index everything,
+ * continue?" or an error toast on every switch would be pure noise. Failures
+ * are still logged and reflected in the status bar.
+ *
+ * Gated behind `comp.autoIndex` for the same reason setupFileWatchers is: a
+ * user who disabled auto-indexing does not want an automatic reindex from
+ * this path either.
+ */
+function setupBranchWatch(dm: DaemonManager): vscode.Disposable | null {
+  const autoIndex = vscode.workspace.getConfiguration("comp").get<boolean>("autoIndex", true);
+  if (!autoIndex) {
+    return null;
+  }
+
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) {
+    return null;
+  }
+
+  return startBranchWatch(workspaceRoot, async () => {
+    statusBar?.show("Indexing...");
+    try {
+      await dm.request("forceReindex");
+      const stats = await dm.getStats();
+      statusBar?.updateStats(stats.total_nodes || 0, stats.total_files || 0, "Ready", stats.efficiency || "0%");
+    } catch (error) {
+      statusBar?.show("Error");
+      console.error("[comP] Branch-switch re-index failed:", error);
+    }
+  });
 }
 
 /**
@@ -291,6 +346,10 @@ async function stopDaemonStack(): Promise<void> {
   if (watcherDisposable) {
     watcherDisposable.dispose();
     watcherDisposable = null;
+  }
+  if (branchWatcherDisposable) {
+    branchWatcherDisposable.dispose();
+    branchWatcherDisposable = null;
   }
   if (codeLensDisposable) {
     codeLensDisposable.dispose();
