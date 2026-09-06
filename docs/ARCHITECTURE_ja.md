@@ -101,11 +101,11 @@ graph TD
 
 ## 4. 対話履歴ストア (History Store)
 
-セッション切れ・デーモン再起動後も AI エージェントが過去の依頼と対応結果を参照できるよう、2 種類の永続ストアと Hook 自動化が連携します。comP は stdio 経由の MCP サーバーであり、**各 MCP クライアント（Claude Code、Cursor、将来的な Codex 連携など）が自分専用の `comp-daemon` プロセスを自分で起動する**構成のため（`src/mcp/AgentSetup.ts`）、同じワークスペースの `.comp/` を複数の独立した OS プロセスが同時に読み書きしうることが、以下の設計の前提になっています。
+セッション切れ・デーモン再起動後も AI エージェントが過去の依頼と対応結果を参照できるよう、2 種類の永続ストアと Hook 自動化が連携します。comP は stdio 経由の MCP サーバーであり、**各 MCP クライアント（Claude Code、Codex、Cursor など）が自分専用の `comp-daemon` プロセスを自分で起動する**構成のため（`src/mcp/AgentSetup.ts`）、同じワークスペースの `.comp/` を複数の独立した OS プロセスが同時に読み書きしうることが、以下の設計の前提になっています。
 
 ### 4.1 セッションメモリ (`.comp/session-memory/<agent_id>.json`)
 
-`run_pipeline` / `get_context` 呼び出しごとに `record_mcp_call` が自動追記する JSON ファイルです。**複数 LLM 共有対応でエージェント別ファイルに分割しました**（旧: 単一の `.comp/session-memory.json`。バージョン番号は次回リリース時に確定）。
+`run_pipeline` / `get_context` 呼び出しごとに `record_mcp_call` が自動追記する JSON ファイルです。**複数 LLM 共有対応でエージェント別ファイルに分割しました**（旧: 単一の `.comp/session-memory.json`。v0.11.1 で変更）。
 
 - WHY: 単一の共有ファイルを複数の独立プロセスが read-modify-write（全体読込 → メモリ上で追記 → `File::create` で全体上書き）すると、ロックなしではロストアップデート（片方のエントリが静かに消える）や、パース失敗時の `unwrap_or` による全体リセットが起こりうる。エージェントIDでファイルを分ければ各ファイルは構造的に単一ライターになり、ロックが一切不要になる。
 - `agent_id` は `COMP_AGENT_ID` 環境変数（`AppState::agent_id`、未設定時 `"unknown"`）から取り、ファイル名には `sanitize_agent_id` でパス区切り文字等を `_` に置換したものを使う（`daemon/src/mcp/mod.rs`）。

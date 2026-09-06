@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
+## [0.11.1] - 2026-09-06
+
+### Added
+
+- **セッションメモリを複数LLM共有可能に拡張**: `.comp/session-memory.json`（単一ファイル）をエージェント別ファイル `.comp/session-memory/<agent>.json` に分割。複数の `comp-daemon` プロセス（Claude Code / Codex などが各自起動）が同じファイルへロックなしで read-modify-write すると起きていたロストアップデート／破損を、エージェントIDでファイルを分けることで構造的に解消（`daemon/src/mcp/mod.rs`、`docs/ARCHITECTURE_ja.md`）
+  - `SessionCall` に `agent` フィールドを追加し、どの LLM が書いた記録かを追跡可能に
+  - `.comp/history/*.jsonl` への追記を `std::fs::File::lock()` による排他ロック付きの単一 `write_all` に統一（Windows の `LockFileEx` は共有ロック保持ハンドルからの書き込みを拒否するため、追記・コンパクションとも排他ロックに統一）
+  - 手動トリガー専用の `compact_history_file`（要約・重複排除用）を追加。排他ロック下で in-place 書き換えし、`.bak` へ事前スナップショットを残す
+  - `comp-daemon` に `append-history` CLI サブコマンドを追加（Stop hook が将来これ経由で書き込むことでロックを迂回する書き手を無くす想定。フック側の切り替えは別途）
+
+### Fixed
+
+- **CI の clippy エラーを修正**: `compact_history_file` が本番コード経路から未使用（手動トリガー機構が未実装）のため `#[allow(dead_code)]` を付与。doc comment 内の `+ atomic rename` の `+` が Markdown 箇条書きと解釈され後続行が未インデント継続行エラーになっていたのを文章の書き直しで解消（`daemon/src/mcp/mod.rs`）
+- **`daemon/Cargo.toml` のバージョン陳腐化を修正**: v0.9.2 のまま v0.9.3〜v0.11.0 の間更新されておらず、`get_stats` が自己申告する `daemon_version`（`CARGO_PKG_VERSION` 由来）が実際のリリースバージョンとズレていた
+- **ARCHITECTURE_ja.md の Codex 記述を修正**: 「将来的な Codex 連携」という記述が、v0.11.0 で Codex 対応が実装・リリース済みになった後も残っていたのを是正
+
+---
+
 ## [0.11.0] - 2026-09-05
 
 ### Added
