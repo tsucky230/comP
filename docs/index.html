@@ -273,6 +273,14 @@
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.1</div>
+          <div class="roadmap-content">
+            <h4>Session Memory Shared Across Multiple LLMs</h4>
+            <p><code>.comp/session-memory.json</code> is split into per-agent files (<code>.comp/session-memory/&lt;agent&gt;.json</code>) so multiple <code>comp-daemon</code> processes — one per MCP client such as Claude Code or Codex — no longer race on a single shared file with an unlocked read-modify-write. Each <code>SessionCall</code> now records which agent wrote it, and <code>.comp/history/*.jsonl</code> appends move to a single exclusively-locked write (Windows' <code>LockFileEx</code> rejects writes from a shared-lock handle, so both appends and compaction now use an exclusive lock). This release also fixes <code>daemon/Cargo.toml</code> having been stuck at an old version number since v0.9.3, and corrects documentation that still described Codex support as a future item after it had already shipped in v0.11.0.</p>
+            <span class="status-tag">✅ Released</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>

@@ -401,6 +401,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.9.4** | **Self-healing MCP config — daemon paths survive extension upgrades** | ✅ Released |
 | **v0.10.0** | **Zero-copy-paste agent setup — comP writes itself into every agent's real config** | ✅ Released |
 | **v0.11.0** | **Codex support, English/Japanese UI, automatic branch-switch reindexing** | ✅ Released |
+| **v0.11.1** | **Session memory shared across multiple LLMs, release version hygiene fixes** | ✅ Released |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---

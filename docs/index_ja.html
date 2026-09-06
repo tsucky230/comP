@@ -272,6 +272,14 @@
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.1</div>
+          <div class="roadmap-content">
+            <h4>セッションメモリの複数LLM共有対応</h4>
+            <p><code>.comp/session-memory.json</code>（単一ファイル）をエージェント別ファイル <code>.comp/session-memory/&lt;agent&gt;.json</code> に分割し、複数の <code>comp-daemon</code> プロセス（Claude Code や Codex など、MCPクライアントごとに1つ起動）が同じファイルへロックなしで read-modify-write することによるロストアップデートを構造的に解消しました。<code>SessionCall</code> にはどのエージェントが書いたかを示す <code>agent</code> フィールドを追加し、<code>.comp/history/*.jsonl</code> への追記は排他ロック付きの単一書き込みに統一しています（Windows の <code>LockFileEx</code> は共有ロック保持ハンドルからの書き込みを拒否するため）。あわせて、v0.9.3 以降更新されず古いバージョン番号のままだった <code>daemon/Cargo.toml</code>、および v0.11.0 でリリース済みになった後も「将来対応」と記載されたままだった Codex 関連のドキュメントも修正しました。</p>
+            <span class="status-tag">✅ リリース済み</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
