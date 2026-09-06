@@ -1,0 +1,54 @@
+#!/bin/sh
+set -e
+
+echo "[comP] Running pre-push hook..."
+
+VERSION=$(node -p "require('./package.json').version")
+echo "[comP] Checking release hygiene for version $VERSION..."
+
+FAIL=0
+
+# Check 1: daemon/Cargo.toml version must match package.json
+CARGO_VERSION=$(grep -m1 '^version' daemon/Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+if [ "$CARGO_VERSION" != "$VERSION" ]; then
+  echo "[comP] ❌ daemon/Cargo.toml version ($CARGO_VERSION) != package.json version ($VERSION)"
+  FAIL=1
+fi
+
+# Check 2: CHANGELOG.md must document this version
+if ! grep -q "## \[$VERSION\]" CHANGELOG.md; then
+  echo "[comP] ❌ CHANGELOG.md has no '## [$VERSION]' entry"
+  FAIL=1
+fi
+
+# Check 3: README / GitHub Pages (EN+JA) must mention this version somewhere
+for f in README.md README_ja.md docs/index.html docs/index_ja.html; do
+  if ! grep -q "$VERSION" "$f"; then
+    echo "[comP] ❌ $f does not mention v$VERSION"
+    FAIL=1
+  fi
+done
+
+if [ "$FAIL" -eq 1 ]; then
+  echo "[comP] Release hygiene check failed. Push blocked."
+  echo "[comP] Update the files above, or bump the version if this isn't a release push."
+  exit 1
+fi
+
+echo "[comP] Running npm audit..."
+npm audit --omit=dev || {
+  echo "[comP] ❌ npm audit found vulnerabilities. Push blocked."
+  exit 1
+}
+
+if command -v cargo-audit >/dev/null 2>&1; then
+  echo "[comP] Running cargo audit..."
+  (cd daemon && cargo audit) || {
+    echo "[comP] ❌ cargo audit found vulnerabilities. Push blocked."
+    exit 1
+  }
+else
+  echo "[comP] ⚠️  cargo-audit not installed, skipping Rust dependency audit (install with: cargo install cargo-audit)"
+fi
+
+echo "[comP] ✅ Pre-push checks passed"
