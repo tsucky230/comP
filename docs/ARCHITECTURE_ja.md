@@ -148,7 +148,8 @@ BM25 の対象言語フィルタには `jsonl` が含まれ（v0.9.3〜）、`ru
 - **ロック方式**: `std::fs::File::lock()`（Rust 1.89 で安定化された標準ライブラリの機能。追加の外部クレート依存は不要）で**排他ロック**を取得してから 1 行を単一の `write_all` で書き込む。
   - WHY 排他ロック: 当初 POSIX の `flock` を念頭に「追記は共有ロックで並行させ、コンパクションだけ排他ロックにする」設計を検討したが、**Windows の `LockFileEx` は POSIX の `flock` と異なり、共有ロックを保持したハンドルからの書き込みを `ERROR_LOCK_VIOLATION` (os error 33) で拒否する**ことが実装時に判明した（同一ハンドルでの自己書き込みでも拒否される）。そのため全ての書き手（追記・コンパクション）が排他ロックを取る設計に統一した。書き込みは1行分の一瞬で終わるため、複数エージェントが同時に書いても実質的な待ち合いは無視できる。
   - WHY `.read(true)` を追記専用オープンにも付与: Windows では `lock()`/`lock_shared()` の呼び出しに読み取り権限を持つハンドルが必要で、`append(true)` のみのハンドルは `ERROR_ACCESS_DENIED` (os error 5) になる（実機検証済み）。
-- **書き手の統一**: 以前は Stop hook (`history-record.sh`) が Node.js の `fs.appendFileSync` で直接ファイルへ書き込んでおり、このロック機構を経由しない「第3の書き手」だった。アドバイザリロックはロックを取ろうとする者同士しかブロックしないため、ロックを取らない書き手が1つでもいると排他制御は無意味になる。この問題を解消するため、Stop hook は `comp-daemon append-history` CLI サブコマンド経由に統一する予定（フル起動 (~48s) を避けるための軽量パス。実装済み・フック側の切り替えは保留中 — 稼働中デーモンの再ビルド要否をユーザーと調整の上で反映する）。
+- **書き手の統一**: 以前は Stop hook (`history-record.sh`) が Node.js の `fs.appendFileSync` で直接ファイルへ書き込んでおり、このロック機構を経由しない「第3の書き手」だった。アドバイザリロックはロックを取ろうとする者同士しかブロックしないため、ロックを取らない書き手が1つでもいると排他制御は無意味になる。この問題を解消するため、Stop hook は `comp-daemon append-history` CLI サブコマンド経由（フル起動 (~48s) を避けるための軽量パス）に統一した。
+- **フォールバック**: `comp-daemon` バイナリが未ビルド・パス解決失敗・実行時エラーの場合は、履歴を完全にロストさせないよう `fs.appendFileSync` による直接追記（ロック非経由）にフォールバックする — 排他制御の完全性より「記録が残ること」を優先する設計判断。フォールバック発生時は stderr に警告を出力する。フォールバック時に書かれる行は旧形式（`request`/`outcome`）のままだが、`SessionCall` の `#[serde(alias = "request")]` によりデシリアライズ時は通常のロック付き書き込みと区別なく読める。
 
 #### 4.2.2 コンパクション（定期整理）
 
@@ -165,7 +166,7 @@ LLM の自発性に依存せず harness 側で確実に記録・注入する仕�
 
 | Hook イベント | スクリプト | 動作 |
 | --- | --- | --- |
-| `Stop` | `history-record.sh` | `transcript_path` を解析し、直近の依頼・応答を `.comp/history/` へ追記（現状: Node.js 直書き。`comp-daemon append-history` 経由への切り替えは実装済みだが未反映 — 4.2.1 参照） |
+| `Stop` | `history-record.sh` | `transcript_path` を解析し、`comp-daemon append-history` 経由（失敗時は直接追記にフォールバック）で `.comp/history/` へ追記（4.2.1 参照） |
 | `UserPromptSubmit` | `context-inject.sh` | `.comp/history/` 直近 5 件を読み `additionalContext`（`<system-reminder>`）として自動注入 |
 
 ```mermaid
