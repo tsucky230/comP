@@ -78,6 +78,7 @@ lcov.info
 
 # ===== Development Tools & Caches =====
 .claude/
+.continue/
 .cache/
 CLAUDE.md
 .eslintcache
@@ -93,6 +94,7 @@ CLAUDE.md
 .vscode/launch.json
 .vscode/extensions.json
 .mcp.json
+.mcp.json.bak
 local.conf
 local.env
 

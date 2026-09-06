@@ -12,3 +12,11 @@
 
 **Note**: The hook system also auto-injects recent history into each prompt (`<system-reminder>`),
 but explicit `session_recall` is useful to manually review past work or search specific tasks.
+
+---
+
+## comP MCP Tool Usage
+
+At the start of every coding or documentation task, ALWAYS call `run_pipeline` FIRST.
+Do NOT read files, run grep/find/Bash searches, or explore the codebase manually before calling run_pipeline.
+run_pipeline indexes the entire codebase and returns exactly the relevant files — use it every time.
