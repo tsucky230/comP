@@ -29,6 +29,39 @@ for f in README.md README_ja.md docs/index.html docs/index_ja.html; do
   fi
 done
 
+# Check 4: SECURITY.md Supported Versions table must mark current minor version as supported
+MINOR_VERSION=$(echo "$VERSION" | sed -E 's/^([0-9]+\.[0-9]+)\..*/\1/')
+if ! grep -qE "^\| ${MINOR_VERSION}\.x *\| ✅" SECURITY.md; then
+  echo "[comP] ❌ SECURITY.md does not mark ${MINOR_VERSION}.x as ✅ supported"
+  FAIL=1
+fi
+
+# Check 5: README.md and README_ja.md structural sync (headings / table rows / code fences)
+# This is an approximate check: matching counts don't prove the prose is in sync,
+# but a mismatch reliably means one file is missing a section/row/block the other has.
+EN_H=$(grep -cE '^#{1,6} ' README.md); JA_H=$(grep -cE '^#{1,6} ' README_ja.md)
+EN_T=$(grep -cE '^\|.*\|$' README.md); JA_T=$(grep -cE '^\|.*\|$' README_ja.md)
+EN_F=$(grep -c '^```' README.md); JA_F=$(grep -c '^```' README_ja.md)
+if [ "$EN_H" != "$JA_H" ] || [ "$EN_T" != "$JA_T" ] || [ "$EN_F" != "$JA_F" ]; then
+  echo "[comP] ❌ README.md/README_ja.md structural mismatch (headings: $EN_H/$JA_H, table rows: $EN_T/$JA_T, code fences: $EN_F/$JA_F)"
+  echo "[comP]    One file may be missing a section/row/block the other has."
+  FAIL=1
+fi
+
+# Check 6: docs badge/install version must exactly match package.json (not just "mentioned somewhere")
+for f in docs/index.html docs/index_ja.html; do
+  BADGE_V=$(grep -oE 'data-version="[0-9]+\.[0-9]+\.[0-9]+"' "$f" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+  if [ "$BADGE_V" != "$VERSION" ]; then
+    echo "[comP] ❌ $f badge version ($BADGE_V) != package.json version ($VERSION)"
+    FAIL=1
+  fi
+  INSTALL_V=$(grep -oE 'comP-[0-9]+\.[0-9]+\.[0-9]+\.vsix' "$f" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+  if [ "$INSTALL_V" != "$VERSION" ]; then
+    echo "[comP] ❌ $f install command version ($INSTALL_V) != package.json version ($VERSION)"
+    FAIL=1
+  fi
+done
+
 if [ "$FAIL" -eq 1 ]; then
   echo "[comP] Release hygiene check failed. Push blocked."
   echo "[comP] Update the files above, or bump the version if this isn't a release push."

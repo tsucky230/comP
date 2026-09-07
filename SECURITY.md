@@ -4,11 +4,10 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 0.8.x   | ✅        |
-| 0.7.x   | ✅        |
-| 0.6.x   | ⚠️ Deprecated |
-| 0.5.x   | ❌        |
-| ≤0.4.x  | ❌        |
+| 0.11.x  | ✅        |
+| 0.10.x  | ✅        |
+| 0.9.x   | ⚠️ Deprecated |
+| ≤0.8.x  | ❌        |
 
 ## Reporting a Vulnerability
 
