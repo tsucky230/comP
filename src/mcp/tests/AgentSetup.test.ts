@@ -174,6 +174,17 @@ describe("AgentSetupManager", () => {
       expect(content).to.include("aider --version");
     });
 
+    it("Gemini CLI writes both the project and the global settings.json", async () => {
+      const result = await manager.generateConfig("Gemini CLI");
+
+      expect(result.success).to.be.true;
+      expect(writtenPaths(result)).to.deep.equal([
+        path.join(testWorkspace, ".gemini", "settings.json"),
+        path.join(fakeHome, ".gemini", "settings.json"),
+      ]);
+      expect(readJson(result.configPath).mcpServers.comp).to.exist;
+    });
+
     it("reports an unsupported agent instead of writing anything", async () => {
       const result = await manager.generateConfig("UnsupportedAgent");
 
@@ -233,6 +244,54 @@ describe("AgentSetupManager", () => {
 
       expect(readText(codexProject())).to.include(`COMP_WORKSPACE_ROOT = '${testWorkspace}'`);
       expect(readText(codexGlobal())).to.not.include("COMP_WORKSPACE_ROOT");
+    });
+  });
+
+  describe("COMP_AGENT_ID attribution", () => {
+    // WHY this matters: comP's session memory and history are shared across
+    // every MCP client pointed at the same workspace (docs/ARCHITECTURE_ja.md
+    // 4.1). Without COMP_AGENT_ID every client falls back to "unknown" and
+    // becomes indistinguishable from every other client in that shared memory.
+    it("gives each JSON-format agent its own lowercase-hyphenated id", async () => {
+      await manager.generateConfig("Cursor");
+      await manager.generateConfig("Claude Code");
+      await manager.generateConfig("GitHub Copilot");
+      await manager.generateConfig("Gemini CLI");
+
+      const cursor = readJson(path.join(testWorkspace, ".cursor", "mcp.json"));
+      const claudeCode = readJson(path.join(testWorkspace, ".mcp.json"));
+      const copilot = readJson(path.join(testWorkspace, ".vscode", "mcp.json"));
+      const gemini = readJson(path.join(testWorkspace, ".gemini", "settings.json"));
+
+      expect(cursor.mcpServers.comp.env.COMP_AGENT_ID).to.equal("cursor");
+      expect(claudeCode.mcpServers.comp.env.COMP_AGENT_ID).to.equal("claude-code");
+      expect(copilot.servers.comp.env.COMP_AGENT_ID).to.equal("github-copilot");
+      expect(gemini.mcpServers.comp.env.COMP_AGENT_ID).to.equal("gemini-cli");
+    });
+
+    it("is present even in a global config, unlike COMP_WORKSPACE_ROOT", async () => {
+      await manager.generateConfig("Cursor");
+
+      const global = readJson(path.join(fakeHome, ".cursor", "mcp.json"));
+      expect(global.mcpServers.comp.env.COMP_AGENT_ID).to.equal("cursor");
+      expect(global.mcpServers.comp.env).to.not.have.property("COMP_WORKSPACE_ROOT");
+    });
+
+    it("is carried by the Continue block format", async () => {
+      await manager.generateConfig("Continue");
+
+      const project = fs.readFileSync(
+        path.join(testWorkspace, ".continue", "mcpServers", "comp.yaml"),
+        "utf-8"
+      );
+      expect(project).to.include("COMP_AGENT_ID: 'continue'");
+    });
+
+    it("is carried by the Aider YAML format", async () => {
+      await manager.generateConfig("Aider");
+
+      const content = readText(path.join(testWorkspace, ".aider.conf.yml"));
+      expect(content).to.include("COMP_AGENT_ID: 'aider'");
     });
   });
 
@@ -589,7 +648,9 @@ describe("AgentSetupManager", () => {
       const content = readText(codexProject());
       expect(content).to.include("[mcp_servers.comp]");
       expect(content).to.include("args = []");
-      expect(content).to.match(/^env = \{ RUST_LOG = 'info', COMP_WORKSPACE_ROOT = '.+' \}$/m);
+      expect(content).to.match(
+        /^env = \{ RUST_LOG = 'info', COMP_AGENT_ID = 'codex', COMP_WORKSPACE_ROOT = '.+' \}$/m
+      );
       expect(content).to.not.include("[mcp_servers.comp.env]");
     });
 
@@ -846,6 +907,20 @@ describe("AgentSetupManager", () => {
       fs.mkdirSync(codexHome, { recursive: true });
 
       expect(manager.detectInstalledAgents()).to.include("Codex");
+    });
+
+    it("detects Gemini CLI from its settings.json", () => {
+      writeJson(path.join(fakeHome, ".gemini", "settings.json"), {});
+
+      expect(manager.detectInstalledAgents()).to.include("Gemini CLI");
+    });
+
+    it("does not mistake Antigravity's ~/.gemini/antigravity-ide/ for Gemini CLI", () => {
+      fs.mkdirSync(path.join(fakeHome, ".gemini", "antigravity-ide"), { recursive: true });
+
+      const detected = manager.detectInstalledAgents();
+      expect(detected).to.include("Antigravity");
+      expect(detected).to.not.include("Gemini CLI");
     });
   });
 

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`comp setupAgents` が Gemini CLI に対応**: `.gemini/settings.json`（プロジェクト・グローバル両方）へcomPのMCPサーバー登録を自動生成できるように（`src/mcp/AgentSetup.ts`）。Gemini CLIはネイティブにMCPサーバーへ対応しており、`GEMINI.md`への使い方注記の自動追記、既存機からの検出（`detectInstalledAgents`）にも対応
+- **全エージェント設定に `COMP_AGENT_ID` を付与**: これまで `comp setupAgents` が生成するどのクライアント向け設定にも `COMP_AGENT_ID` が書き込まれておらず、v0.11.1でエージェント別に分割したセッションメモリ（`.comp/session-memory/<agent_id>.json`）が実質全クライアントで `unknown.json` に集約されてしまっていた（comP自身の `.mcp.json` も含む）。`serverEntry`/`renderContinueBlock`/`aiderBlock`/`codexBlock` の4つの生成経路すべてに `agentId`（`claude-code`/`cursor`/`github-copilot`/`gemini-cli` 等、小文字ハイフン区切り）を通し、`COMP_WORKSPACE_ROOT` と異なりグローバル設定でも常に設定されるよう修正。このリポジトリ自身の `.mcp.json` にも追記した（要デーモン再起動）
+  - 既存設定ファイルへの遡及的な修正（`repairStaleConfigs`によるCOMP_AGENT_IDの後付け、Gemini CLI設定のstaleバイナリパス自動修復）は今回のスコープ外。`comp setupAgents` の再実行が必要
+
 ## [0.11.1] - 2026-09-06
 
 ### Added

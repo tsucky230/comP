@@ -45,8 +45,9 @@ the project-level registration in place.
 | Antigravity | — | `~/.gemini/antigravity-ide/mcp_config.json` |
 | GitHub Copilot | `.vscode/mcp.json` | — |
 | Aider | `.aider.conf.yml` | — |
+| Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` |
 
-Two rules govern these writes:
+Three rules govern these writes:
 
 - **Existing files are backed up.** Before any file is rewritten, comP copies it
   to `<file>.bak`. If the backup cannot be taken, the file is left alone.
@@ -54,6 +55,15 @@ Two rules govern these writes:
   project, so writing it into a config shared by every project would make your
   other projects index this one. Without it the daemon falls back to its working
   directory, which the MCP client sets per project.
+- **Every config carries `COMP_AGENT_ID`, in both scopes.** comP's session
+  memory and history are shared across every MCP client pointed at the same
+  workspace (see [ARCHITECTURE_ja.md](../ARCHITECTURE_ja.md), section 4.1).
+  This variable is how the daemon tells them apart — it is set to a
+  lowercase-hyphenated form of the agent name (`claude-code`, `cursor`,
+  `github-copilot`, `gemini-cli`, …) so that `session_recall` can show which
+  agent did what, instead of every client collapsing into `unknown`. Unlike
+  `COMP_WORKSPACE_ROOT` this is set even in a machine-wide config, because it
+  identifies the tool, not the project.
 
 Other MCP servers already listed in these files are preserved. If a file cannot
 be parsed, comP does not overwrite it — it reports the failure and opens a
@@ -159,6 +169,14 @@ Aider's MCP support differs between releases. If the block comP wrote to
 `.aider.conf.yml` is ignored, check your version with `aider --version` against
 the [Aider configuration docs](https://aider.chat/docs/config/aider_conf.html).
 
+### Gemini CLI
+
+Restart the `gemini` session.
+
+Verify with `/mcp list` inside a session, or `gemini mcp list` from the shell —
+`comp` should show as `Connected`. stdio servers only connect in a trusted
+folder; run `gemini trust` first if it shows as `Disconnected` instead.
+
 ---
 
 ## Troubleshooting
@@ -191,8 +209,9 @@ Files that are checked:
 
 A value is deliberately left alone when it is a relative path, when it contains a
 `${...}` variable, or when no replacement binary can be found. The YAML configs
-(`.continue/mcpServers/comp.yaml`, `.aider.conf.yml`) are not repaired — re-run
-**comP: Setup Agents** for those.
+(`.continue/mcpServers/comp.yaml`, `.aider.conf.yml`) and Gemini CLI's
+`.gemini/settings.json` are not repaired yet — re-run **comP: Setup Agents** for
+those.
 
 `COMP_WORKSPACE_ROOT` is refreshed in the same pass for workspace-scoped files, so
 moving a project or opening the same checkout on another machine no longer breaks
