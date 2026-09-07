@@ -20,6 +20,11 @@ daemon/target/**
 tsconfig.json
 .eslintrc.json
 .markdownlintrc.json
+.markdownlint.json
+.mocharc.json
+.textlintrc.json
+.mcp.json
+.mcp.json.bak
 webpack.config.js
 jest.config.js
 
@@ -81,6 +86,8 @@ Thumbs.db
 # ===== Local Data/Configs =====
 **/.comp/
 .claude/
+.codex/
+.continue/
 .husky/
 scripts/
 temp/

@@ -78,6 +78,7 @@ lcov.info
 
 # ===== Development Tools & Caches =====
 .claude/
+.codex/
 .continue/
 .cache/
 CLAUDE.md

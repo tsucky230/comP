@@ -81,6 +81,26 @@ npm run compile
 npm run daemon:build
 ```
 
+### Packaging a Local VSIX (for testing)
+
+Plain `vsce package` only bundles the daemon binary for your current platform if
+it already has the CI's platform-specific filename (`comp-daemon-win.exe`,
+`comp-daemon-linux`, `comp-daemon-macos`). A local `cargo build --release`
+produces `comp-daemon`/`comp-daemon.exe` instead, so `.vscodeignore`'s allowlist
+won't match it and the resulting VSIX will silently ship without a daemon
+binary — the extension will fail to start on any workspace that doesn't
+already have a matching dev build.
+
+To build and package a VSIX that actually works when installed:
+
+```bash
+npm run package:local
+```
+
+This runs `daemon:build`, copies the binary to the platform-specific filename
+via `scripts/package-daemon-binary.js`, then runs `vsce package`. Always use
+this (not a bare `vsce package`) when testing a locally built VSIX.
+
 ### Watch Mode (Recommended for Development)
 
 ```bash

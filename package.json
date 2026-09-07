@@ -134,7 +134,8 @@
     "lint:md:fix": "markdownlint-cli2 \"**/*.md\" \"!node_modules/**\" \"!temp/**\" \"!.venv/**\" \"!.comp/**\" \"!.claude/**\" \"!docs/conversation_log.md\" \"!docs/work_plan.md\" --fix",
     "lint:ts": "tsc --noEmit",
     "daemon:build": "cd daemon && cargo build --release",
-    "daemon:test": "cd daemon && cargo test --all -- --test-threads=1"
+    "daemon:test": "cd daemon && cargo test --all -- --test-threads=1",
+    "package:local": "npm run daemon:build && node scripts/package-daemon-binary.js && vsce package"
   },
   "devDependencies": {
     "@types/chai": "^4.3.11",
