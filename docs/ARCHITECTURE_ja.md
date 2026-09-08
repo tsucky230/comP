@@ -107,9 +107,19 @@ graph TD
 
 `run_pipeline` / `get_context` 呼び出しごとに `record_mcp_call` が自動追記する JSON ファイルです。**複数 LLM 共有対応でエージェント別ファイルに分割しました**（旧: 単一の `.comp/session-memory.json`。v0.11.1 で変更）。
 
-- WHY: 単一の共有ファイルを複数の独立プロセスが read-modify-write（全体読込 → メモリ上で追記 → `File::create` で全体上書き）すると、ロックなしではロストアップデート（片方のエントリが静かに消える）や、パース失敗時の `unwrap_or` による全体リセットが起こりうる。エージェントIDでファイルを分ければ各ファイルは構造的に単一ライターになり、ロックが一切不要になる。
+- WHY: 単一の共有ファイルを複数の独立プロセスが read-modify-write（全体読込 → メモリ上で追記 → `File::create` で全体上書き）すると、ロックなしではロストアップデート（片方のエントリが静かに消える）が起こりうる。エージェントIDでファイルを分ければ「同一エージェントが同時に複数プロセスを起動しない」限りは各ファイルが単一ライターになる。
 - `agent_id` は `COMP_AGENT_ID` 環境変数（`AppState::agent_id`、未設定時 `"unknown"`）から取り、ファイル名には `sanitize_agent_id` でパス区切り文字等を `_` に置換したものを使う（`daemon/src/mcp/mod.rs`）。
 - `session_recall` は `.comp/session-memory/*.json` を**全ファイル走査してマージ**し、タイムスタンプ降順で返す（読み取り専用の fan-in であり、書き込み競合はない）。
+
+#### 4.1.1 破損・二重起動時の自動リカバリ（`record_mcp_call`）
+
+session-memory は history jsonl と異なり **他に控えがない一次データ**であるため、破損時に黙って空へリセットすることは許されません（2026-09 のレビューで判明した欠陥）。旧実装は「パース失敗時に `unwrap_or(空)` へフォールバックし、その空の状態で `File::create` により全上書きする」という設計で、破損に遭遇するたびに過去の全記録を無警告で永久に失っていました。現在の `record_mcp_call` は以下の3点で修正済みです。
+
+- **隔離（quarantine）**: JSON パースに失敗したファイルは空へリセットする前に `<agent>.corrupt-<epoch_ms>.json` へ `rename` し、`log::warn!` を出力してから空の状態で処理を続行します。壊れたバイト列自体は消えず、手動復旧の対象として残ります（`load_session_memory_or_quarantine`）。
+- **アトミック書き込み**: 書き込みは対象ファイルへの直接 `File::create`（即座に truncate される）をやめ、同一ディレクトリ内の一時ファイルへ書き込んでから `rename` で確定させる方式に変更しました（`write_session_memory_atomically`）。同一ディレクトリ内の rename は POSIX・Windows いずれでもアトミックなため、クラッシュ時に `path` が中途半端な内容を持つことがありません。
+- **サイドカーロック**: 「エージェントIDでファイルを分ければロック不要」という前提は、同一 `agent_id` のプロセスが同時に2つ以上起動しない場合にのみ成立します（例: 同一ワークスペースを開いた2つの Claude Code ウィンドウは同じ `agent_id` を持ちます）。この場合の read-modify-write 競合（ロストアップデート）を防ぐため、`<path>.lock` というサイドカーファイルに対する排他ロック（`File::lock()`）で read-modify-write 全体を囲んでいます。**対象ファイル自体はロックしません** — 書き込みの最終ステップが `path` への `rename` であり、Windows では `LockFileEx` 由来のロックを保持したハンドルへの rename は拒否されうるため（4.2.1 節で既出の Windows 固有の罠と同種）、rename 対象は常にロック無しの状態に保つ設計です（Gemini レビュー指摘）。
+- **読み込みI/Oエラーと「壊れている」の区別**: `load_session_memory_or_quarantine` は `std::fs::read` 自体が失敗した場合（権限エラー・他プロセスによる一時的な占有等）を JSON パース失敗と同じに扱いません。パース失敗は「中身が壊れていると確定した」ケースなので空へリセットして問題ありませんが、読み込みI/Oエラーは「中身は健全かもしれないが今読めなかった」だけなので、ここで空として処理を続行すると後続のアトミック書き込みが健全なファイルを空で上書きしてしまいます。そのため読み込みI/Oエラーは `Result` として呼び出し元（`record_mcp_call`）へ伝播し、書き込みを一切行わず処理全体を失敗させます（Gemini 受け入れチェック指摘）。
+- **書き込み中断時のtmp残留防止**: `write_session_memory_atomically` は一時ファイルの作成からシリアライズ・flush・fsyncまでを `write_tmp_session_memory` に切り出し、このいずれかで失敗した場合も（従来は rename 失敗時のみだった）一時ファイルを削除してから `Err` を返します（Gemini 受け入れチェック指摘）。
 
 各エントリ (`SessionCall`) は以下のフィールドを持ちます。
 
@@ -227,6 +237,20 @@ CREATE TABLE IF NOT EXISTS edges (
     FOREIGN KEY(to_node) REFERENCES nodes(id) ON DELETE CASCADE
 );
 ```
+
+### 破損時の自動リカバリ（`GraphDB::new`）
+
+`index.db` は session-memory / history と違い、ワークスペースを再インデックスすれば **100% 再生成できる派生データ**です。そのため破損時は他の2ストアと異なり、隔離だけでなく自動的に作り直してよいという判断です（2026-09 のレビューで判明した欠陥への対応）。
+
+旧実装は `Connection::open(db_path)?` を素通しするだけで、ファイルが壊れていた場合そのエラーが `AppState::new` → `main()` まで伝播し、**MCPサーバーが起動する前に daemon プロセスごと終了していました**。エージェント側からは「MCP server not found」としか見えず、原因が index.db の破損であることを診断する手段がありませんでした。
+
+現在は `GraphDB::new` が以下の手順を踏みます。
+
+1. `open_and_init` で通常どおり開き、`PRAGMA quick_check` を実行してから `Schema::apply_all` でスキーマを適用する。SQLite は破損したファイルでも `Connection::open` 自体は遅延評価で成功することが多いため、スキーマ変更前に明示的な整合性チェックを挟んでいる。
+2. これが失敗した場合、`quarantine_db_files` が `index.db` 本体を `index.db.corrupt-<epoch_ms>` へ退避する。WALモードが常時有効（`schema.rs::PRAGMA_INIT`）なため、`-wal` / `-shm` サイドカーが存在すれば同時に退避する — 本体だけ退避して `-wal` を放置すると、新規作成した空の `index.db` に対して SQLite が古い WAL の再生を試み、即座に再破損する無限ループに陥るため（Gemini レビュー指摘）。
+3. 退避後に `open_and_init` をもう一度実行し、新規の空DBを作成する。ここでも失敗する場合（権限・ディスク不足等）はそのままエラーを返す — この場合の degraded 起動対応は未実装（Phase 2 で対応予定）。
+4. 復旧が成功した場合、`metadata` テーブルに `recovered_from_corruption_at`（epoch ms）を記録する。`run_pipeline` / `get_stats` のレスポンスに `index_recovered_from_corruption_at` として同じ値が含まれる（通常時はフィールド自体が存在しない）。これはバックグラウンド再インデックスが完了するまでの間、件数ゼロ（または一部のみ）の応答を「破損から復旧した直後で再構築中」なのか「本当に何も無い」のか区別できるようにするためで、区別できないと復旧直後にファイルが消えたと誤認したエージェントが不要な再生成・削除といった破壊的操作を行う危険がある（Gemini レビュー指摘）。
+5. このフラグは `total_files == 0` のような件数ベースでは判定しない。`GraphDB::clear_recovery_marker()` が明示的に呼ばれるまで `metadata` に残り続ける設計で、`main.rs` のバックグラウンド再インデックス完了時、および `handle_force_reindex` 完了時に呼ばれる。件数ベースの判定では「再インデックスが一部完了してファイルが1件でも書かれた瞬間」にフラグが消えてしまい、エージェントが「残りのファイルは削除された」と誤認する恐れがあった（Gemini 設計レビュー指摘）。完了ベースにすることで、再構築が完全に終わるまでフラグが正しく出続ける。
 
 ---
 

@@ -128,6 +128,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Initial indexing complete: indexed {}/{} files, {} symbols",
                         indexed, total, symbols
                     );
+                    // WHY here, unconditionally: this pass runs on every startup,
+                    // not just ones following a corruption recovery — clearing an
+                    // absent marker is a no-op. If `GraphDB::new` just rebuilt from
+                    // a quarantined file, `get_stats`/`run_pipeline` kept surfacing
+                    // `index_recovered_from_corruption_at` throughout this whole
+                    // catch-up pass (see graph/mod.rs's `clear_recovery_marker` doc);
+                    // now that it has actually completed, the index is back to a
+                    // trustworthy state and the marker should stop appearing.
+                    if let Err(e) = state_for_idx.graph_db.clear_recovery_marker() {
+                        log::warn!("failed to clear index recovery marker after re-index: {}", e);
+                    }
                 }
                 Err(e) => log::error!("Initial indexing failed: {}", e),
             }

@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ### Added
 
+- **session-memory / index.db の破損自動リカバリ**: `.comp/session-memory/<agent_id>.json` のパース失敗時、従来は `unwrap_or(空)` で黙ってリセットし過去の全記録を無警告で失っていたのを、`<agent>.corrupt-<epoch_ms>.json` へ隔離してから空で再開する方式に変更。書き込みも `File::create` による直接 truncate からtmp+rename方式のアトミック書き込みに変更し、同一 `agent_id` の二重起動に対する `.lock` サイドカーロックを追加（`daemon/src/mcp/mod.rs`）
+- **`.comp/index.db` の破損自動検知・再作成**: `GraphDB::new` が `PRAGMA quick_check` で破損を検知した場合、従来はエラーが `main()` まで伝播し **MCPサーバー起動前にdaemonプロセスごと終了していた** のを、破損ファイル（WALモード常時有効のため `-wal`/`-shm` サイドカーも含む）を `index.db.corrupt-<epoch_ms>` 等へ退避してから自動的に空DBを再作成するよう変更（`daemon/src/graph/mod.rs`）
+  - 復旧直後は `run_pipeline` / `get_stats` のレスポンスに `index_recovered_from_corruption_at`（epoch ms）を含め、バックグラウンド再インデックスが完了するまでエージェントが「件数ゼロ＝ファイル削除」と誤認しないようにした。このフラグは件数ベースではなく、次回の `index_workspace` 完全完走時（`main.rs` の起動時再インデックス、または `comP: Force Re-index`）に明示的にクリアされる
+  - Gemini クロスレビュー・受け入れチェックにより、読み込みI/Oエラー（パース失敗ではなく権限エラー等）を誤って「空」扱いしていた欠陥、tmpファイルのリーク、復旧フラグの件数ベース判定が部分再インデックス中に誤って消える欠陥を検出・修正済み
 - **`comp setupAgents` が Gemini CLI に対応**: `.gemini/settings.json`（プロジェクト・グローバル両方）へcomPのMCPサーバー登録を自動生成できるように（`src/mcp/AgentSetup.ts`）。Gemini CLIはネイティブにMCPサーバーへ対応しており、`GEMINI.md`への使い方注記の自動追記、既存機からの検出（`detectInstalledAgents`）にも対応
 - **全エージェント設定に `COMP_AGENT_ID` を付与**: これまで `comp setupAgents` が生成するどのクライアント向け設定にも `COMP_AGENT_ID` が書き込まれておらず、v0.11.1でエージェント別に分割したセッションメモリ（`.comp/session-memory/<agent_id>.json`）が実質全クライアントで `unknown.json` に集約されてしまっていた（comP自身の `.mcp.json` も含む）。`serverEntry`/`renderContinueBlock`/`aiderBlock`/`codexBlock` の4つの生成経路すべてに `agentId`（`claude-code`/`cursor`/`github-copilot`/`gemini-cli` 等、小文字ハイフン区切り）を通し、`COMP_WORKSPACE_ROOT` と異なりグローバル設定でも常に設定されるよう修正。このリポジトリ自身の `.mcp.json` にも追記した（要デーモン再起動）
   - 既存設定ファイルへの遡及的な修正（`repairStaleConfigs`によるCOMP_AGENT_IDの後付け、Gemini CLI設定のstaleバイナリパス自動修復）は今回のスコープ外。`comp setupAgents` の再実行が必要

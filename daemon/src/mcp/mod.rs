@@ -108,6 +108,137 @@ fn format_capped_list(items: &[String], cap: usize) -> String {
     out
 }
 
+/// Path to the sidecar lock file guarding read-modify-write access to a
+/// session-memory file.
+///
+/// WHY a sidecar rather than locking `path` itself: the write step
+/// (`write_session_memory_atomically`) ends with a same-directory rename onto
+/// `path`, and on Windows a `LockFileEx`-based lock (what `File::lock()` uses)
+/// held on the destination can block replacing it — the rename must run with
+/// `path` completely unlocked. Locking a separate `.lock` file for the whole
+/// critical section still serializes concurrent writers (see
+/// `record_mcp_call`) without ever touching `path`'s own lock state.
+fn session_memory_lock_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".lock");
+    std::path::PathBuf::from(s)
+}
+
+/// Load `path` as a `SessionMemory`, or quarantine it and start fresh if it
+/// exists but is not valid JSON.
+///
+/// WHY quarantine instead of the previous `unwrap_or(empty)`: session-memory
+/// has no other copy anywhere — silently resetting a file that failed to parse
+/// (e.g. after a crash mid-write, before this function's caller made writes
+/// atomic) permanently destroyed every past record for that agent with no
+/// warning to anyone. Renaming the unreadable file aside keeps the bytes
+/// available for manual recovery while still letting the caller proceed.
+///
+/// WHY a plain I/O error from `std::fs::read` (permission denied, the path
+/// transiently locked by another process, etc.) is propagated as `Err` rather
+/// than also treated as "empty": unlike a parse failure, an I/O error says
+/// nothing about whether the file's *content* is bad — it may well be a
+/// perfectly intact document that just couldn't be read this instant. Treating
+/// that as empty would let the caller's atomic write overwrite a healthy file
+/// with a near-empty one once the transient condition clears, recreating the
+/// exact data-loss bug this function exists to close via a different trigger
+/// (Gemini acceptance-check finding, Phase 1).
+fn load_session_memory_or_quarantine(path: &std::path::Path) -> Result<SessionMemory> {
+    if !path.exists() {
+        return Ok(SessionMemory { sessions: Vec::new() });
+    }
+    let raw = std::fs::read(path)?;
+    match serde_json::from_slice(&raw) {
+        Ok(memory) => Ok(memory),
+        Err(e) => {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let quarantine = path.with_extension(format!("corrupt-{}.json", ts));
+            log::warn!(
+                "session-memory file {} is not valid JSON ({}); quarantining to {} and starting empty",
+                path.display(), e, quarantine.display()
+            );
+            if let Err(rename_err) = std::fs::rename(path, &quarantine) {
+                log::warn!(
+                    "failed to quarantine corrupt session-memory file {}: {}",
+                    path.display(), rename_err
+                );
+            }
+            Ok(SessionMemory { sessions: Vec::new() })
+        }
+    }
+}
+
+/// Persist `memory` to `path` atomically: write to a temp file in the same
+/// directory, flush+fsync it, then rename it into place.
+///
+/// WHY: the previous implementation called `File::create(&path)` directly,
+/// which truncates immediately — a crash or panic partway through
+/// `to_writer_pretty` left `path` holding a truncated, unparseable JSON
+/// document indistinguishable from real corruption on the next read. A
+/// same-directory rename is atomic on both POSIX and Windows (same volume), so
+/// `path` only ever contains either the previous complete document or the new
+/// complete one, never a partial write.
+fn write_session_memory_atomically(path: &std::path::Path, memory: &SessionMemory) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("session-memory path {} has no parent directory", path.display()))?;
+    let tmp_path = parent.join(format!(
+        ".{}.tmp-{}-{}",
+        path.file_name().and_then(|f| f.to_str()).unwrap_or("session-memory"),
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+    ));
+
+    // WHY cleanup on Err here too, not just on the rename failure below: a
+    // failure partway through writing the temp file itself (serialize error,
+    // or an I/O error from flush/fsync) previously left the half-written tmp
+    // file behind forever, since only the rename step's failure path removed
+    // it (Gemini acceptance-check finding, Phase 1).
+    if let Err(e) = write_tmp_session_memory(&tmp_path, memory) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+
+    // WHY retry a few times: a small, non-zero chance exists that some other
+    // process (e.g. session_recall's plain, unlocked read) has `path` open at
+    // the exact instant of rename. Rust opens files on Windows with
+    // FILE_SHARE_DELETE, so this is a transient condition, not a lock conflict
+    // (this function never takes a lock on `path` itself — only its `.lock`
+    // sidecar, held by the caller — precisely so the rename target is never
+    // locked by us).
+    let mut attempt = 0u32;
+    loop {
+        match std::fs::rename(&tmp_path, path) {
+            Ok(()) => return Ok(()),
+            Err(_) if attempt < 4 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10 * attempt as u64));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp_path);
+                return Err(anyhow!("failed to persist session-memory to {}: {}", path.display(), e));
+            }
+        }
+    }
+}
+
+/// Write `memory` as pretty JSON to `tmp_path`, fully flushed and fsynced.
+/// Isolated from the rename step so `write_session_memory_atomically` can
+/// clean up `tmp_path` on any failure here without duplicating the writer
+/// setup at each call site.
+fn write_tmp_session_memory(tmp_path: &std::path::Path, memory: &SessionMemory) -> Result<()> {
+    use std::io::Write;
+    let file = std::fs::File::create(tmp_path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    serde_json::to_writer_pretty(&mut writer, memory)?;
+    writer.flush()?;
+    writer.get_ref().sync_all()?;
+    Ok(())
+}
+
 fn record_mcp_call(
     workspace_root: &str,
     agent_id: &str,
@@ -123,13 +254,24 @@ fn record_mcp_call(
         std::fs::create_dir_all(parent)?;
     }
 
-    let mut memory: SessionMemory = if path.exists() {
-        let file = std::fs::File::open(&path)?;
-        let reader = std::io::BufReader::new(file);
-        serde_json::from_reader(reader).unwrap_or(SessionMemory { sessions: Vec::new() })
-    } else {
-        SessionMemory { sessions: Vec::new() }
-    };
+    // Exclusive lock over the whole read-modify-write below: without it, two
+    // independent processes sharing the same agent_id (e.g. two Claude Code
+    // windows on this workspace) can both read the same starting state and
+    // each write back a version missing the other's call — a lost update. The
+    // per-agent split this file lives under only makes the *common* case
+    // single-writer; this lock covers the case where that assumption doesn't
+    // hold.
+    let lock_path = session_memory_lock_path(&path);
+    // WHY .append(true) rather than .write(true): this handle's only purpose is
+    // to hold the OS lock below — nothing is ever written through it — so
+    // .append avoids clippy::suspicious_open_options' ambiguity over whether a
+    // plain .write(true) without .truncate(...) is intentional. Matches the
+    // same .read(true) requirement documented on append_history_line's lock
+    // handle (Windows needs read access on a handle to call .lock()).
+    let lock_file = std::fs::OpenOptions::new().create(true).read(true).append(true).open(&lock_path)?;
+    lock_file.lock()?;
+
+    let mut memory = load_session_memory_or_quarantine(&path)?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -171,11 +313,8 @@ fn record_mcp_call(
         });
     }
 
-    let file = std::fs::File::create(&path)?;
-    let writer = std::io::BufWriter::new(file);
-    serde_json::to_writer_pretty(writer, &memory)?;
-
-    Ok(())
+    write_session_memory_atomically(&path, &memory)
+    // `lock_file` drops here, releasing the sidecar lock.
 }
 
 /// Append one already-serialized JSONL line to `hist_path`, holding a short-lived
@@ -931,7 +1070,7 @@ impl MCPServer {
             .map(|(path, edge_count)| json!({ "path": path, "edge_count": edge_count }))
             .collect();
 
-        Ok(json!({
+        let mut response = json!({
             "task": task,
             "pivot_files": pivot_files,
             "related_files": related_files,
@@ -950,7 +1089,20 @@ impl MCPServer {
                 "pivot_file_types": pivot_file_types,
                 "git_diff_boosted": git_diff_boosted_count
             }
-        }))
+        });
+        // WHY conditional, not always-present: a corruption-triggered rebuild
+        // (GraphDB::new quarantining index.db, see graph/mod.rs) starts from zero
+        // rows, which otherwise looks identical to "this workspace genuinely has
+        // nothing indexed" — an agent seeing empty pivot_files after a real query
+        // could wrongly conclude files were deleted and act on that (Gemini review
+        // finding #3). The marker clears itself once the next full
+        // index_workspace pass completes (main.rs's background indexing task; see
+        // graph/mod.rs::clear_recovery_marker's doc for why that — not raw
+        // file_count — is the right point to stop surfacing this).
+        if let Ok(Some(ts)) = self.state.graph_db.recovery_marker() {
+            response["index_recovered_from_corruption_at"] = json!(ts);
+        }
+        Ok(response)
     }
 
     /// Read `default_budget_tokens` from `.comp/config.json`.
@@ -1381,6 +1533,14 @@ impl MCPServer {
             .index_workspace(None, &self.state.graph_db)
             .await?;
 
+        // A full index_workspace pass just completed — see
+        // graph/mod.rs::clear_recovery_marker's doc for why this is the contract
+        // for when index_recovered_from_corruption_at should stop appearing.
+        // No-op if the marker was never set.
+        if let Err(e) = self.state.graph_db.clear_recovery_marker() {
+            log::warn!("failed to clear index recovery marker after force reindex: {}", e);
+        }
+
         let (files, nodes, edges) = self.state.graph_db.get_stats()?;
         info!(
             "handle_force_reindex: complete - {}/{} files, {} symbols, {} nodes, {} edges",
@@ -1470,7 +1630,7 @@ impl MCPServer {
         info!("handle_get_stats: returning stats - files: {}, nodes: {}, edges: {}",
               file_count, node_count, edge_count);
 
-        Ok(json!({
+        let mut response = json!({
             // Lets clients detect a stale running binary after an upgrade
             // (Windows locks the exe, so rebuilds don't take effect until restart).
             "daemon_version": env!("CARGO_PKG_VERSION"),
@@ -1482,7 +1642,19 @@ impl MCPServer {
             "queries_count": queries,
             "efficiency": efficiency,
             "avg_tokens_per_query": avg_tokens_per_query
-        }))
+        });
+        // See handle_run_pipeline's identical check: a corruption-triggered
+        // rebuild starts from zero rows, indistinguishable from "nothing indexed
+        // yet" unless this is surfaced explicitly. The marker clears itself once
+        // the next full index_workspace pass completes (see main.rs's background
+        // indexing task and graph/mod.rs::clear_recovery_marker's doc) — so
+        // unlike gating on file_count == 0 here, this stays accurate throughout
+        // a partial re-index instead of disappearing the moment the first file
+        // lands (Gemini design-review finding).
+        if let Ok(Some(ts)) = self.state.graph_db.recovery_marker() {
+            response["index_recovered_from_corruption_at"] = json!(ts);
+        }
+        Ok(response)
     }
 
     /// MCP initialize handshake — returns server capabilities
@@ -2671,6 +2843,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_get_stats_surfaces_index_recovery() {
+        // A corruption-triggered rebuild starts from zero rows, which is
+        // otherwise indistinguishable from "this workspace has nothing indexed
+        // yet" — get_stats must say so explicitly (Gemini review finding #3).
+        let temp_dir = std::env::temp_dir().join("comP_test_get_stats_recovery_flag");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let comp_dir = temp_dir.join(".comp");
+        std::fs::create_dir_all(&comp_dir).unwrap();
+        std::fs::write(comp_dir.join("index.db"), b"not a sqlite database").unwrap();
+
+        let state = Arc::new(
+            crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent")
+                .await
+                .expect("AppState::new must recover from a corrupt index.db"),
+        );
+        let server = MCPServer::new(state);
+
+        let response = server.handle_get_stats().await.unwrap();
+        assert!(
+            response["index_recovered_from_corruption_at"].is_number(),
+            "get_stats must flag a just-recovered index so an agent doesn't mistake it for an empty workspace"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_stats_recovery_flag_clears_on_marker_not_on_file_count() {
+        // Gemini design-review finding: gating the flag on total_files == 0
+        // would make it disappear the instant a partial re-index writes its
+        // first row, even though the re-index is far from done. The contract is
+        // instead "clears only once clear_recovery_marker() is called" (main.rs
+        // calls it after a full index_workspace pass completes) — demonstrated
+        // here by clearing it directly while file_count is still 0, proving the
+        // flag's presence tracks the marker, not the row count.
+        let temp_dir = std::env::temp_dir().join("comP_test_get_stats_recovery_flag_clears_on_marker");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let comp_dir = temp_dir.join(".comp");
+        std::fs::create_dir_all(&comp_dir).unwrap();
+        std::fs::write(comp_dir.join("index.db"), b"not a sqlite database").unwrap();
+
+        let state = Arc::new(
+            crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent")
+                .await
+                .expect("AppState::new must recover from a corrupt index.db"),
+        );
+        let server = MCPServer::new(state.clone());
+
+        let response = server.handle_get_stats().await.unwrap();
+        assert!(response["index_recovered_from_corruption_at"].is_number());
+        assert_eq!(response["total_files"], 0);
+
+        state.graph_db.clear_recovery_marker().unwrap();
+
+        let response = server.handle_get_stats().await.unwrap();
+        assert!(
+            response.get("index_recovered_from_corruption_at").is_none(),
+            "the flag must be gone once the marker is cleared, even though total_files is still 0"
+        );
+        assert_eq!(response["total_files"], 0, "file_count is unaffected by clearing the marker");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_stats_omits_recovery_flag_when_never_recovered() {
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state);
+
+        let response = server.handle_get_stats().await.unwrap();
+        assert!(
+            response.get("index_recovered_from_corruption_at").is_none(),
+            "the flag must not appear at all for a database that was never recovered"
+        );
+    }
+
+    #[tokio::test]
     async fn test_session_recall() {
         let temp_dir = std::env::temp_dir().join("comP_test_session_recall");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -2747,6 +2996,195 @@ mod tests {
         assert!(markdown.contains("(+7 more)"), "file overflow count must be shown");
 
         std::env::remove_var("COMP_WORKSPACE_ROOT");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_record_mcp_call_quarantines_corrupt_file_instead_of_resetting_silently() {
+        // Before this fix, a session-memory file that failed to parse was reset
+        // to empty with `unwrap_or(SessionMemory { sessions: vec![] })` and then
+        // overwritten — permanently destroying every past record for that agent
+        // with no warning. The file has no other copy, so recovery must preserve
+        // the unreadable bytes instead of discarding them.
+        let temp_dir = std::env::temp_dir().join("comP_test_record_call_quarantine");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let path = get_session_memory_path(temp_dir.to_str().unwrap(), "test-agent");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"{ not valid json").unwrap();
+
+        record_mcp_call(
+            temp_dir.to_str().unwrap(),
+            "test-agent",
+            "sess-1",
+            "new task after corruption".to_string(),
+            vec![],
+            vec![],
+            5,
+        ).unwrap();
+
+        // The live file must now hold a valid, fresh record instead of staying broken.
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("new task after corruption"));
+        let parsed: SessionMemory = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.sessions.len(), 1);
+
+        // The original unreadable bytes must survive somewhere, not be silently discarded.
+        let quarantined: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
+            .collect();
+        assert_eq!(quarantined.len(), 1, "exactly one quarantined copy of the corrupt file must remain");
+        let quarantined_content = std::fs::read_to_string(quarantined[0].path()).unwrap();
+        assert_eq!(quarantined_content, "{ not valid json");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_record_mcp_call_leaves_no_tmp_file_behind() {
+        // The previous implementation wrote via a bare `File::create` on the live
+        // path (truncate-then-fill, not atomic). The new path writes to a temp
+        // file and renames it into place; nothing should remain behind it.
+        let temp_dir = std::env::temp_dir().join("comP_test_record_call_no_tmp");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        record_mcp_call(temp_dir.to_str().unwrap(), "test-agent", "sess-1", "task".to_string(), vec![], vec![], 1).unwrap();
+
+        let path = get_session_memory_path(temp_dir.to_str().unwrap(), "test-agent");
+        let leftovers: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temp file should remain after a successful write: {:?}", leftovers);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_record_mcp_call_survives_concurrent_writers_same_agent() {
+        // Simulates two independent processes sharing one agent_id (e.g. two
+        // Claude Code windows open on the same workspace) writing at once. Before
+        // the sidecar lock, this was a classic lost-update race: both read the
+        // same starting state and the second writer's save silently erased the
+        // first writer's session.
+        let temp_dir = std::env::temp_dir().join("comP_test_record_call_concurrent");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap().to_string();
+
+        const WRITERS: usize = 8;
+        let mut handles = Vec::new();
+        for i in 0..WRITERS {
+            let root = root.clone();
+            handles.push(std::thread::spawn(move || {
+                record_mcp_call(
+                    &root, "shared-agent", &format!("sess-{}", i), format!("task {}", i), vec![], vec![], i as u64,
+                ).unwrap();
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let path = get_session_memory_path(&root, "shared-agent");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let memory: SessionMemory = serde_json::from_str(&content).unwrap();
+        assert_eq!(memory.sessions.len(), WRITERS, "every writer's session must survive concurrent writes");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_record_mcp_call_propagates_read_errors_instead_of_overwriting_unreadable_file() {
+        // Gemini acceptance-check finding (Phase 1): a plain I/O read error (here,
+        // simulated portably by making the session-memory path a directory instead
+        // of a file) is NOT a parse failure — the underlying content, if any, might
+        // be perfectly intact. Treating it as "empty" would let the atomic write
+        // below silently overwrite a healthy file once the transient condition
+        // clears, recreating the exact data-loss bug this module exists to close.
+        let temp_dir = std::env::temp_dir().join("comP_test_record_call_read_error");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let path = get_session_memory_path(temp_dir.to_str().unwrap(), "test-agent");
+        std::fs::create_dir_all(&path).unwrap(); // path itself is a directory, not a file
+
+        let result = record_mcp_call(
+            temp_dir.to_str().unwrap(), "test-agent", "sess-1", "task".to_string(), vec![], vec![], 1,
+        );
+
+        assert!(result.is_err(), "a read error must propagate instead of being treated as an empty file");
+        assert!(path.is_dir(), "the unreadable path must be left untouched, not replaced with a fresh document");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_write_tmp_session_memory_fails_cleanly_without_partial_output() {
+        // Gemini acceptance-check finding (Phase 1): write_session_memory_atomically
+        // must clean up the temp file if writing it fails partway through, not just
+        // when the final rename fails. Using a directory as the "file" target is a
+        // portable way to force File::create to fail deterministically.
+        let temp_dir = std::env::temp_dir().join("comP_test_write_tmp_session_memory_failure");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let blocked_path = temp_dir.join("blocked");
+        std::fs::create_dir_all(&blocked_path).unwrap(); // a directory, not a file
+
+        let memory = SessionMemory { sessions: Vec::new() };
+        let result = write_tmp_session_memory(&blocked_path, &memory);
+        assert!(result.is_err(), "File::create must fail when the target path is a directory");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_write_session_memory_atomically_propagates_tmp_write_failure() {
+        // Exercises write_session_memory_atomically's own error-handling wrapper
+        // around write_tmp_session_memory (not just the inner helper in
+        // isolation, which the previous test covers) — a failure here must
+        // short-circuit before ever attempting the rename step, and the live
+        // path must stay untouched.
+        let temp_dir = std::env::temp_dir().join("comP_test_write_session_memory_atomic_tmp_failure");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        // Deliberately do not create temp_dir: `path`'s parent doesn't exist, so
+        // File::create(tmp_path) inside write_tmp_session_memory fails.
+        let path = temp_dir.join("nonexistent-dir").join("agent.json");
+        let memory = SessionMemory { sessions: Vec::new() };
+
+        let result = write_session_memory_atomically(&path, &memory);
+        assert!(result.is_err(), "a tmp-write failure must propagate as Err, not be swallowed");
+        assert!(!path.exists(), "nothing must be written at the live path when the tmp write fails");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_write_session_memory_atomically_cleans_up_tmp_when_rename_repeatedly_fails() {
+        // Forces the rename step itself (not the tmp write) to fail persistently
+        // by making the live path a directory, which std::fs::rename refuses to
+        // replace with a file — exercises the retry-then-give-up branch and its
+        // cleanup, not just the happy-path rename.
+        let temp_dir = std::env::temp_dir().join("comP_test_write_session_memory_rename_failure");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let path = temp_dir.join("agent.json");
+        std::fs::create_dir_all(&path).unwrap(); // path is a directory; rename onto it must fail
+
+        let memory = SessionMemory { sessions: Vec::new() };
+        let result = write_session_memory_atomically(&path, &memory);
+        assert!(result.is_err(), "a persistently failing rename must surface as Err after retries");
+
+        let leftovers: Vec<String> = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "the tmp file must be cleaned up even when rename never succeeds: {:?}", leftovers);
+
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 

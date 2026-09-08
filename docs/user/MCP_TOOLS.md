@@ -45,6 +45,10 @@ Response fields (v0.9.2+):
 
 - Token estimates per pivot file are based on the real indexed file size (`chars / 4`), no longer on symbol-count heuristics
 
+Response fields (unreleased):
+
+- `index_recovered_from_corruption_at` (number, epoch ms) — present while `.comp/index.db` is in the catch-up window after an automatic rebuild from a corrupted file (see `get_stats` below for the full explanation). Absent under normal operation, and again once the catch-up re-index finishes.
+
 ---
 
 ### `get_context`
@@ -113,6 +117,10 @@ Return total file, node, and edge counts (index health check).
 Response fields (v0.9.2+):
 
 - `daemon_version` (string) — version of the running daemon binary. Compare against the installed release to detect a stale daemon that kept running across an upgrade (on Windows the running exe stays locked, so rebuilds do not take effect until the daemon restarts).
+
+Response fields (unreleased):
+
+- `index_recovered_from_corruption_at` (number, epoch ms) — present while `.comp/index.db` is in the catch-up window after being found unreadable at daemon startup and automatically rebuilt from scratch (the corrupted file is moved aside to `index.db.corrupt-<epoch_ms>`, never deleted). A rebuilt index starts at zero files/nodes/edges, which otherwise looks identical to "this workspace has nothing indexed" — check this field before assuming an empty or partial result means files were deleted. The field disappears once the next full re-index pass finishes (automatically on startup, or via `comP: Force Re-index`) — not simply once file counts become non-zero, since a re-index in progress can have written only some of the workspace's files at the moment of a given call. Absent entirely for a daemon that has never had to recover.
 
 ---
 

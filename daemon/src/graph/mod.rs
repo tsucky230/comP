@@ -35,6 +35,19 @@ impl GraphDB {
     /// 1. Create .comp/ directory if not exists
     /// 2. Create/open index.db SQLite database
     /// 3. Initialize schema (tables, indexes)
+    ///
+    /// `index.db` is entirely derived data (re-buildable from the workspace by
+    /// re-indexing), unlike session-memory/history which have no other copy. So
+    /// unlike those stores, a corrupt `index.db` is safe to move aside and
+    /// replace automatically rather than merely quarantined-and-reported: if
+    /// `open_and_init` fails here (SQLite reports the file as unreadable/not a
+    /// database — this used to propagate straight out of `new()` and take the
+    /// whole daemon process down before the MCP server ever started, since the
+    /// caller chain is `main()`'s `AppState::new(...).await?`), the old files are
+    /// quarantined next to a freshly created replacement and `recovery_marker()`
+    /// records that this happened so callers (e.g. `get_stats`) can tell an agent
+    /// the index is temporarily empty rather than silently returning zero counts
+    /// that look like "nothing indexed yet".
     pub async fn new(workspace_root: &str) -> Result<Self> {
         use std::fs;
         use std::path::Path;
@@ -43,22 +56,143 @@ impl GraphDB {
         let comp_dir = Path::new(workspace_root).join(".comp");
         fs::create_dir_all(&comp_dir)?;
 
-        // Open/create database
         let db_path = comp_dir.join("index.db");
-        let conn = Connection::open(db_path)?;
-        let db = GraphDB { conn: Mutex::new(conn) };
 
-        // Initialize schema
-        db.init_schema()?;
-
-        Ok(db)
+        match Self::open_and_init(&db_path) {
+            Ok(conn) => Ok(GraphDB { conn: Mutex::new(conn) }),
+            Err(open_err) => {
+                log::warn!(
+                    "index.db at {} appears corrupt ({}); quarantining and rebuilding from scratch",
+                    db_path.display(),
+                    open_err
+                );
+                Self::quarantine_db_files(&db_path);
+                let conn = Self::open_and_init(&db_path).map_err(|e| {
+                    anyhow::anyhow!("index.db rebuild after quarantine also failed: {}", e)
+                })?;
+                let db = GraphDB { conn: Mutex::new(conn) };
+                db.mark_recovered_from_corruption()?;
+                Ok(db)
+            }
+        }
     }
 
-    /// Initialize database schema (creates tables and indexes)
-    fn init_schema(&self) -> Result<()> {
-        // Apply all migrations from schema.rs
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
+    /// Open (creating if absent) the SQLite file at `db_path` and apply the
+    /// schema, failing loudly if the file exists but is not a usable SQLite
+    /// database.
+    ///
+    /// WHY `PRAGMA quick_check` before touching the schema: SQLite opens a
+    /// corrupt file lazily without error — `Connection::open` alone would
+    /// succeed on garbage bytes, and the first real read (previously, whatever
+    /// `Schema::apply_all`'s DDL happened to touch first) is what actually
+    /// surfaced `SQLITE_CORRUPT` / "file is not a database". Running the check
+    /// explicitly up front keeps the corrupt-vs-fresh decision in one place
+    /// instead of depending on which DDL statement happens to trip first.
+    fn open_and_init(db_path: &std::path::Path) -> Result<Connection> {
+        let conn = Connection::open(db_path)?;
+        let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        if check != "ok" {
+            return Err(anyhow::anyhow!("PRAGMA quick_check reported: {}", check));
+        }
         Schema::apply_all(&conn)?;
+        Ok(conn)
+    }
+
+    /// Move `index.db` and its `-wal`/`-shm` siblings (if present) aside to
+    /// `<name>.corrupt-<epoch_ms>` rather than deleting them, so a corrupted
+    /// file stays available for manual inspection instead of vanishing.
+    ///
+    /// WHY all three files move together: WAL mode is always on (see
+    /// `schema.rs::PRAGMA_INIT`), so a real `index.db` can have `-wal`/`-shm`
+    /// siblings holding not-yet-checkpointed pages. Quarantining only the `.db`
+    /// file and leaving a stale `-wal` next to the freshly created replacement
+    /// would make SQLite try to replay that leftover WAL against the new,
+    /// unrelated database on next open — corrupting it again immediately and
+    /// turning this into an infinite quarantine-and-recreate loop.
+    ///
+    /// Best-effort: a failure to rename a given sibling is logged, not
+    /// propagated — the caller's subsequent `open_and_init` on a fresh path is
+    /// what determines overall success, and refusing to recover at all just
+    /// because (for example) a `-shm` file happened to be transiently locked by
+    /// another reader would defeat the point of this function.
+    fn quarantine_db_files(db_path: &std::path::Path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        for suffix in ["", "-wal", "-shm"] {
+            let src = Self::sibling_path(db_path, suffix);
+            if !src.exists() {
+                continue;
+            }
+            let dst = Self::sibling_path(db_path, &format!("{}.corrupt-{}", suffix, ts));
+            if let Err(e) = std::fs::rename(&src, &dst) {
+                log::warn!("failed to quarantine {}: {}", src.display(), e);
+            }
+        }
+    }
+
+    /// `db_path` with `suffix` appended to its filename (not its extension) —
+    /// e.g. `sibling_path(".../index.db", "-wal")` => `.../index.db-wal`, the
+    /// real SQLite WAL sidecar naming convention.
+    fn sibling_path(db_path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+        let mut s = db_path.as_os_str().to_os_string();
+        s.push(suffix);
+        std::path::PathBuf::from(s)
+    }
+
+    /// Record that this database was just rebuilt from a quarantined file, so
+    /// `recovery_marker()` can report it.
+    fn mark_recovered_from_corruption(&self) -> Result<()> {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
+        conn.execute(
+            "INSERT INTO metadata (key, value) VALUES ('recovered_from_corruption_at', ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [ts.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Epoch-ms timestamp of the most recent automatic corruption recovery for
+    /// this database, or `None` if `index.db` has never been rebuilt from a
+    /// quarantined file. Callers (e.g. `get_stats`, `run_pipeline`) surface this
+    /// so an agent can tell "just rebuilt, background re-indexing in progress"
+    /// apart from "workspace genuinely has nothing indexed yet" — both look
+    /// identical as raw zero counts otherwise.
+    pub fn recovery_marker(&self) -> Result<Option<u64>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
+        let value: Option<String> = conn
+            .query_row(
+                "SELECT value FROM metadata WHERE key = 'recovered_from_corruption_at'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        Ok(value.and_then(|v| v.parse::<u64>().ok()))
+    }
+
+    /// Clear the `recovered_from_corruption_at` marker, if one is set.
+    ///
+    /// WHY this must be called explicitly rather than `recovery_marker()` ever
+    /// expiring on its own: the marker exists so `get_stats`/`run_pipeline` can
+    /// tell a genuinely empty workspace apart from an index that just got
+    /// rebuilt from a quarantined file and is still catching up. Gating that
+    /// purely on `total_files == 0` breaks the moment a partial re-index has
+    /// written even one row — an agent could then read "only N files" as "the
+    /// rest were deleted" while the re-index is still running (Gemini
+    /// design-review finding). Calling this once the *next* `index_workspace`
+    /// pass completes (main.rs's background indexing task, which runs on every
+    /// startup regardless of whether recovery happened) keeps the marker
+    /// present for the entire catch-up window and removes it only once the
+    /// index is actually back to a trustworthy state — a no-op, not an error,
+    /// on a database that was never recovered in the first place.
+    pub fn clear_recovery_marker(&self) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
+        conn.execute("DELETE FROM metadata WHERE key = 'recovered_from_corruption_at'", [])?;
         Ok(())
     }
 
@@ -808,6 +942,152 @@ mod tests {
         let db = GraphDB::new(temp_dir.to_str().unwrap()).await.unwrap();
         let (files, nodes, edges) = db.get_stats().unwrap();
         assert_eq!((files, nodes, edges), (0, 0, 0), "fresh DB must be empty");
+        assert_eq!(db.recovery_marker().unwrap(), None, "a fresh DB was never recovered from corruption");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_graphdb_recovers_from_corrupt_database_file() {
+        // Before this fix, a corrupt index.db propagated its open error all the
+        // way out of AppState::new -> main(), killing the daemon process before
+        // the MCP server ever started (see docs/ARCHITECTURE_ja.md 4). Recovery
+        // must instead quarantine the bad file and hand back a usable, empty DB.
+        let temp_dir = std::env::temp_dir().join("comP_test_graphdb_corrupt_recovery");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let comp_dir = temp_dir.join(".comp");
+        std::fs::create_dir_all(&comp_dir).unwrap();
+        let db_path = comp_dir.join("index.db");
+        std::fs::write(&db_path, b"this is not a sqlite database").unwrap();
+
+        let db = GraphDB::new(temp_dir.to_str().unwrap())
+            .await
+            .expect("GraphDB::new must recover instead of failing");
+
+        let (files, nodes, edges) = db.get_stats().unwrap();
+        assert_eq!((files, nodes, edges), (0, 0, 0), "the rebuilt DB starts empty");
+        assert!(db.recovery_marker().unwrap().is_some(), "recovery must be recorded");
+
+        // The corrupt original must be quarantined next to the fresh replacement,
+        // not deleted and not left in place under the live path.
+        assert!(db_path.exists(), "a fresh, working index.db must exist at the live path");
+        let quarantined: Vec<_> = std::fs::read_dir(&comp_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("index.db.corrupt-"))
+            .collect();
+        assert_eq!(quarantined.len(), 1, "exactly one quarantined copy of the corrupt file must remain");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_clear_recovery_marker_removes_it_and_is_a_noop_when_absent() {
+        let temp_dir = std::env::temp_dir().join("comP_test_clear_recovery_marker");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let comp_dir = temp_dir.join(".comp");
+        std::fs::create_dir_all(&comp_dir).unwrap();
+        std::fs::write(comp_dir.join("index.db"), b"garbage, not a sqlite file").unwrap();
+
+        let db = GraphDB::new(temp_dir.to_str().unwrap()).await.unwrap();
+        assert!(db.recovery_marker().unwrap().is_some(), "recovery must be recorded before clearing");
+
+        db.clear_recovery_marker().expect("clearing an existing marker must succeed");
+        assert_eq!(db.recovery_marker().unwrap(), None, "marker must be gone after clearing");
+
+        // A second call on an already-clear marker must not error — every normal
+        // (non-recovered) daemon startup calls this unconditionally.
+        db.clear_recovery_marker().expect("clearing an absent marker must be a no-op, not an error");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_graphdb_recovered_database_is_fully_functional() {
+        // Recovering must not merely open without erroring — the rebuilt schema
+        // (tables, indexes, metadata defaults from Schema::apply_all) must accept
+        // real writes, since the whole point of recovery is that a subsequent
+        // background re-index can repopulate it.
+        let temp_dir = std::env::temp_dir().join("comP_test_graphdb_recovered_db_usable");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let comp_dir = temp_dir.join(".comp");
+        std::fs::create_dir_all(&comp_dir).unwrap();
+        std::fs::write(comp_dir.join("index.db"), b"garbage, not a sqlite file").unwrap();
+
+        let db = GraphDB::new(temp_dir.to_str().unwrap())
+            .await
+            .expect("GraphDB::new must recover instead of failing");
+
+        let file_id = db.upsert_file("a.rs", "hash1", "rust", 10).expect("recovered DB must accept writes");
+        db.insert_node(file_id, "alpha", "fn", 1, 0, None, true, None).expect("recovered DB must accept node inserts");
+
+        let (files, nodes, _) = db.get_stats().unwrap();
+        assert_eq!((files, nodes), (1, 1), "a re-index against the recovered DB must be reflected in get_stats");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_graphdb_recovery_survives_stale_wal_and_shm_present() {
+        // End-to-end sanity check: recovery must succeed even when -wal/-shm
+        // siblings exist alongside the corrupt main file (not just when index.db
+        // is corrupt in isolation). The precise fate of the sidecars themselves —
+        // SQLite's own failed-open handling can consume/reset them before our
+        // code ever runs — is covered deterministically by
+        // test_quarantine_db_files_moves_db_wal_and_shm_together below, which
+        // tests the quarantine mechanism directly instead of through SQLite.
+        let temp_dir = std::env::temp_dir().join("comP_test_graphdb_wal_shm_quarantine");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let comp_dir = temp_dir.join(".comp");
+        std::fs::create_dir_all(&comp_dir).unwrap();
+        let db_path = comp_dir.join("index.db");
+        let wal_path = comp_dir.join("index.db-wal");
+        let shm_path = comp_dir.join("index.db-shm");
+        std::fs::write(&db_path, b"corrupt main file").unwrap();
+        std::fs::write(&wal_path, b"stale wal contents").unwrap();
+        std::fs::write(&shm_path, b"stale shm contents").unwrap();
+
+        let db = GraphDB::new(temp_dir.to_str().unwrap())
+            .await
+            .expect("GraphDB::new must recover even with stale -wal/-shm present");
+        let (files, _, _) = db.get_stats().unwrap();
+        assert_eq!(files, 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_quarantine_db_files_moves_db_wal_and_shm_together() {
+        // Direct test of the quarantine mechanism itself (Gemini review finding
+        // #2), independent of what SQLite happens to do on a failed open: all
+        // three sidecars must move aside together, none deleted, none left
+        // behind under their live names. Leaving a stale -wal next to a freshly
+        // recreated index.db would make SQLite try to replay it on next open,
+        // re-corrupting the brand-new file.
+        let temp_dir = std::env::temp_dir().join("comP_test_quarantine_db_files_direct");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let db_path = temp_dir.join("index.db");
+        let wal_path = temp_dir.join("index.db-wal");
+        let shm_path = temp_dir.join("index.db-shm");
+        std::fs::write(&db_path, b"corrupt main file").unwrap();
+        std::fs::write(&wal_path, b"stale wal contents").unwrap();
+        std::fs::write(&shm_path, b"stale shm contents").unwrap();
+
+        GraphDB::quarantine_db_files(&db_path);
+
+        assert!(!db_path.exists(), "the corrupt main file must not remain at the live path");
+        assert!(!wal_path.exists(), "the stale -wal must not remain at the live path");
+        assert!(!shm_path.exists(), "the stale -shm must not remain at the live path");
+
+        let entries: Vec<String> = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(entries.iter().any(|n| n.starts_with("index.db.corrupt-")), "main file must be quarantined: {:?}", entries);
+        assert!(entries.iter().any(|n| n.starts_with("index.db-wal.corrupt-")), "-wal must be quarantined: {:?}", entries);
+        assert!(entries.iter().any(|n| n.starts_with("index.db-shm.corrupt-")), "-shm must be quarantined: {:?}", entries);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
