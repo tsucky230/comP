@@ -166,9 +166,26 @@ BM25 の対象言語フィルタには `jsonl` が含まれ（v0.9.3〜）、`ru
 `compact_history_file`（`daemon/src/mcp/mod.rs`）は、肥大化した JSONL を要約・重複排除するための関数です。
 
 - 排他ロックを取得したまま「全体読込 → 呼び出し元が渡した `compact_fn` で圧縮 → 同じファイルへ seek(0) + 上書き + truncate」を行う。**新ファイル書き出し + atomic rename 方式は採用していない**（Windows では開いているハンドルへのリネームが失敗しうる上、ロック解放とリネームの間に隙間ができ、その隙間に入った追記が消える恐れがあるため）。
-- `compact_fn` が失敗した場合は元ファイルを一切変更せず、`.bak` も書かない。成功時のみ、上書き前に元の内容を `<file>.jsonl.bak` として保存する（誤要約からの手動ロールバック用）。
+- `compact_fn` が失敗した場合は元ファイルを一切変更せず、`.bak` も書かない。成功時のみ、上書き前に元の内容を `<file>.jsonl.bak` として保存する（誤要約からの手動ロールバック用）。`.bak` は世代管理される（後述 4.2.3）。
 - 圧縮の**方針**（重複排除するか、N日以上前を破棄するか、LLM に要約させるか等）はこの関数の関知するところではなく、呼び出し元が `compact_fn` として注入する。
-- 手動トリガーのみ想定（デーモンが自発的に実行することはない）。実行主体は当面 Claude Code のみとする運用ルールを継続する。
+- 手動トリガーのみ想定（デーモンが自発的に実行することはない）。実行主体は当面 Claude Code のみとする運用ルールを継続する。呼び出し口（CLIサブコマンド等）はまだ配線されていない（Phase 3 で対応予定）。
+
+#### 4.2.3 破損行の修復と`.bak`世代管理（Phase 2）
+
+2026-09 のレビューで、`session_recall`（4.1 節参照）がパース失敗した JSONL 行を黙ってスキップしていること、および `compact_history_file` の `.bak` が1世代しか持たず2回目の圧縮で前回分が失われることが判明し、以下を修正しました。
+
+- **`session_recall` の可視化**: パース失敗したセッションメモリファイル・履行不能な履歴行をカウントし、`⚠ N session-memory file(s) and M history line(s) could not be read` という警告行を出力の先頭に追加する。黙ってスキップする挙動自体は変えない（recall は読み取り専用であり、ここで書き込み系の修復は行わない）。
+- **`repair_history_file`**: `compact_history_file` と同じロック規律（排他ロックで read-modify-write 全体を囲む）で、JSONL を「パース可能な行」と「不可能な行」に分離する。パース可能な行だけを元のファイルへ書き戻し、不可能な行は `<file>.jsonl.quarantine` へ**追記**する（複数回の修復で過去の隔離内容を失わない）。修復前の内容は `.bak`（世代管理付き）としても保存する — 「不可能」と判定した行が実は将来のスキーマ追加であった場合のロールバック手段として。
+- **`write_generational_backup`**: `compact_history_file` と `repair_history_file` が共有するヘルパー。既存の `.bak` を上書きする前に `<file>.bak.<epoch_ms>` へ退避してから新しい `.bak` を書く。
+
+#### 4.2.4 `comp-daemon doctor` CLI サブコマンド（Phase 2）
+
+`comp-daemon doctor <workspace_root> [--repair]` は、3ストア（session-memory・history・index.db）の健全性を検査する軽量 CLI です。`append-history` サブコマンドと同じ枠組み（`try_run_cli_subcommand`）で、**フル起動（GraphDB オープン・背景再インデックス ~48秒）を一切行いません**。
+
+- `--repair` 無し: 読み取りのみ。各ストアの正常/異常件数を報告し、何も変更しない。
+- `--repair` 有り: session-memory の破損ファイルを隔離、history の破損行を `repair_history_file` で修復、`index.db` は `PRAGMA quick_check` のみ実行し異常なら `GraphDB::quarantine_db_files`（`pub(crate)` に変更済み）で退避する。**`index.db` の再作成は行わない** — 次に実際の daemon が起動した時点で `GraphDB::new` が自然に作り直すため、`doctor` 側が非同期の `GraphDB::new` を呼ぶ必要がない。
+- **busy/locked と真の破損の区別**: `index.db` は他の `comp-daemon` プロセス（VSCode拡張機能側など）が通常運用中に開いていることが普通にある。素の `Connection::open` には busy_timeout が設定されないため、実装当初は「今たまたび使用中で一時的にロックされているだけの健全なDB」を「破損」と誤判定し、`--repair` で誤って退避してしまう欠陥があった（Claude自身の再レビューで発見）。対策として `PRAGMA busy_timeout=5000` を明示的に設定した上で、`quick_check` の失敗が `SQLITE_BUSY`/`SQLITE_LOCKED` の場合は `"check_failed"`（判定不能。`--repair` でも退避しない）として扱い、それ以外の失敗（`SQLITE_NOTADB` 等、真の破損シグナル）のみ `"corrupt"` として扱う。この分類ロジック（`classify_quick_check_result`）は実際のロック競合を起こさず合成した `rusqlite::Error` でテストしている。
+- 終了コード: 未解決の異常（`--repair` 無しで異常を検出、`index.db` の検査自体が失敗、または `check_failed`）がある場合は `1`、それ以外は `0`。
 
 ### 4.3 Hook 自動化
 
@@ -248,9 +265,16 @@ CREATE TABLE IF NOT EXISTS edges (
 
 1. `open_and_init` で通常どおり開き、`PRAGMA quick_check` を実行してから `Schema::apply_all` でスキーマを適用する。SQLite は破損したファイルでも `Connection::open` 自体は遅延評価で成功することが多いため、スキーマ変更前に明示的な整合性チェックを挟んでいる。
 2. これが失敗した場合、`quarantine_db_files` が `index.db` 本体を `index.db.corrupt-<epoch_ms>` へ退避する。WALモードが常時有効（`schema.rs::PRAGMA_INIT`）なため、`-wal` / `-shm` サイドカーが存在すれば同時に退避する — 本体だけ退避して `-wal` を放置すると、新規作成した空の `index.db` に対して SQLite が古い WAL の再生を試み、即座に再破損する無限ループに陥るため（Gemini レビュー指摘）。
-3. 退避後に `open_and_init` をもう一度実行し、新規の空DBを作成する。ここでも失敗する場合（権限・ディスク不足等）はそのままエラーを返す — この場合の degraded 起動対応は未実装（Phase 2 で対応予定）。
+3. 退避後に `open_and_init` をもう一度実行し、新規の空DBを作成する。ここでも失敗する場合（権限・ディスク不足等、`.comp/` 自体が書き込み不可なケース）は `AppState::new` がエラーを返す。
 4. 復旧が成功した場合、`metadata` テーブルに `recovered_from_corruption_at`（epoch ms）を記録する。`run_pipeline` / `get_stats` のレスポンスに `index_recovered_from_corruption_at` として同じ値が含まれる（通常時はフィールド自体が存在しない）。これはバックグラウンド再インデックスが完了するまでの間、件数ゼロ（または一部のみ）の応答を「破損から復旧した直後で再構築中」なのか「本当に何も無い」のか区別できるようにするためで、区別できないと復旧直後にファイルが消えたと誤認したエージェントが不要な再生成・削除といった破壊的操作を行う危険がある（Gemini レビュー指摘）。
 5. このフラグは `total_files == 0` のような件数ベースでは判定しない。`GraphDB::clear_recovery_marker()` が明示的に呼ばれるまで `metadata` に残り続ける設計で、`main.rs` のバックグラウンド再インデックス完了時、および `handle_force_reindex` 完了時に呼ばれる。件数ベースの判定では「再インデックスが一部完了してファイルが1件でも書かれた瞬間」にフラグが消えてしまい、エージェントが「残りのファイルは削除された」と誤認する恐れがあった（Gemini 設計レビュー指摘）。完了ベースにすることで、再構築が完全に終わるまでフラグが正しく出続ける。
+
+#### 5.1 degraded 起動とMutex poisoned対応（Phase 2）
+
+上記手順3（退避後の再作成も失敗するケース）と、`GraphDB::conn`（`Mutex<Connection>`）がpoisoned状態になるケースについて、2026-09のレビューで「エージェント側が原因を診断できない」という問題が指摘され、以下を実装しました。
+
+- **degraded 起動（C5）**: `AppState::new` が失敗した場合、`main()` は即座にプロセスを終了せず `mcp::run_degraded_server(reason)` を起動する。これは `GraphDB` を一切使わない最小限の JSON-RPC stdio ループで、`initialize` ハンドシェイクと `tools/list`（空配列）には正常応答し、それ以外の全呼び出しには失敗理由（`reason`）を含む JSON-RPC エラーを返す。これにより、エージェント側には単なる「MCP server not found」ではなく具体的な原因（例: `.comp/` への書き込み権限がない）が伝わる。
+- **Mutex poisoned（C6）**: `GraphDB` の全メソッドは `self.conn.lock()` 失敗時に `"DB mutex poisoned: {}"` という固定文言のエラーを返す（lock保持中のパニックが原因で、同一プロセス内では以後ずっと同じエラーが出続ける）。`MCPServer::run` のディスパッチループは、ハンドラの返り値がこの文言を含むエラーだった場合、通常のJSON-RPCエラー応答を返す代わりに`std::process::exit(1)`でプロセスを終了する。VSCode拡張機能の `DaemonManager` にはクラッシュ時の自動再起動機構が既にあるため（2章参照）、エージェント側は「静かに壊れたまま動き続けるdaemon」ではなく新しい正常なプロセスに再接続できる。判定ロジックは `is_poisoned_mutex_error` として切り出され、`std::process::exit` 自体はテストできないため単体テストはこの判定関数のみを対象にしている。
 
 ---
 

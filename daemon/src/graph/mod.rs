@@ -115,7 +115,7 @@ impl GraphDB {
     /// what determines overall success, and refusing to recover at all just
     /// because (for example) a `-shm` file happened to be transiently locked by
     /// another reader would defeat the point of this function.
-    fn quarantine_db_files(db_path: &std::path::Path) {
+    pub(crate) fn quarantine_db_files(db_path: &std::path::Path) {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())

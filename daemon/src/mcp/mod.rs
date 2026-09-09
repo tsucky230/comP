@@ -421,8 +421,7 @@ fn compact_history_file(
 
     // Snapshot pre-compaction content before mutating anything: compact_fn is a
     // lossy step, and this is the manual recovery path if it summarized badly.
-    let backup_path = hist_path.with_extension("jsonl.bak");
-    std::fs::write(&backup_path, &original)?;
+    write_generational_backup(&hist_path.with_extension("jsonl.bak"), &original)?;
 
     file.seek(SeekFrom::Start(0))?;
     file.write_all(&compacted)?;
@@ -431,12 +430,111 @@ fn compact_history_file(
     Ok(())
 }
 
+/// Write `content` to `backup_path`, first preserving any file already there
+/// under a `.<epoch_ms>` generation suffix instead of silently overwriting it.
+///
+/// WHY: a rollback snapshot is worthless if the *next* mutating operation can
+/// destroy it before anyone restores from it — `compact_history_file` and
+/// `repair_history_file` both take exactly this kind of "snapshot before a
+/// lossy rewrite" backup, and a second run of either used to clobber the
+/// first run's only copy (Phase 2, B6). Propagated as an error rather than
+/// best-effort: proceeding to overwrite the one remaining backup on a rename
+/// failure would defeat the whole point of taking one.
+fn write_generational_backup(backup_path: &std::path::Path, content: &[u8]) -> Result<()> {
+    if backup_path.exists() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let extension = backup_path.extension().and_then(|e| e.to_str()).unwrap_or("bak");
+        let prior = backup_path.with_extension(format!("{}.{}", extension, ts));
+        std::fs::rename(backup_path, &prior)?;
+    }
+    std::fs::write(backup_path, content)?;
+    Ok(())
+}
+
+/// Outcome of repairing one `.jsonl` history file: how many lines parsed
+/// successfully and were kept, and how many were unparseable and moved aside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RepairReport {
+    good_lines: usize,
+    bad_lines: usize,
+}
+
+/// Rewrite `hist_path` to contain only its successfully-parseable lines,
+/// appending every unparseable line to `<hist_path>.quarantine` (created if
+/// absent, never truncated — repeated repair runs accumulate quarantined
+/// lines rather than losing earlier ones) instead of discarding it.
+///
+/// Holds the same exclusive lock for the entire read+separate+write as
+/// `compact_history_file`, for the same reason: no concurrent appender must be
+/// able to land between the read and the write and be silently dropped by the
+/// rewrite.
+///
+/// WHY a dedicated function rather than reusing `compact_history_file`: that
+/// function's `compact_fn` contract is "bytes in, replacement bytes out" for a
+/// single file — repair has two outputs (the lines that stay, and the ones
+/// that get quarantined), which does not fit that shape without capturing a
+/// side channel out of a `FnOnce` closure.
+///
+/// A `.bak` of the pre-repair content is written first (generation-preserving,
+/// like `compact_history_file`'s) — a line this function classifies as "bad"
+/// might just be a schema this version of `SessionCall` doesn't know about yet,
+/// and that should stay recoverable, not merely quarantined-by-value.
+fn repair_history_file(hist_path: &std::path::Path) -> Result<RepairReport> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(hist_path)?;
+    file.lock()?;
+
+    let mut original = Vec::new();
+    file.read_to_end(&mut original)?;
+
+    let mut good = Vec::new();
+    let mut bad = Vec::new();
+    let mut report = RepairReport { good_lines: 0, bad_lines: 0 };
+    for line in String::from_utf8_lossy(&original).lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if serde_json::from_str::<SessionCall>(line).is_ok() {
+            good.extend_from_slice(line.as_bytes());
+            good.push(b'\n');
+            report.good_lines += 1;
+        } else {
+            bad.extend_from_slice(line.as_bytes());
+            bad.push(b'\n');
+            report.bad_lines += 1;
+        }
+    }
+
+    if report.bad_lines == 0 {
+        // Nothing to change; skip the backup/quarantine/rewrite entirely so a
+        // clean file's mtime and a never-created .bak stay undisturbed.
+        return Ok(report);
+    }
+
+    write_generational_backup(&hist_path.with_extension("jsonl.bak"), &original)?;
+
+    let quarantine_path = hist_path.with_extension("jsonl.quarantine");
+    let mut quarantine_file = std::fs::OpenOptions::new().create(true).append(true).open(&quarantine_path)?;
+    quarantine_file.write_all(&bad)?;
+
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&good)?;
+    file.set_len(good.len() as u64)?;
+
+    Ok(report)
+}
+
 /// Parsed form of a recognized CLI subcommand (`args[1..]`, i.e. excluding the
 /// binary path). Kept separate from execution (`run_append_history`) so parsing
 /// alone is unit-testable without touching stdin or the filesystem.
 #[derive(Debug, PartialEq, Eq)]
 enum CliSubcommand {
     AppendHistory { workspace_root: String, agent_id: String },
+    Doctor { workspace_root: String, repair: bool },
 }
 
 /// Parse `args` (as given to `main`, so `args[0]` is the binary path) into a
@@ -445,14 +543,25 @@ enum CliSubcommand {
 ///
 /// # Subcommands
 /// - `append-history <workspace_root> <agent_id>`
+/// - `doctor <workspace_root> [--repair]`
 fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
-    if args.len() != 4 || args[1] != "append-history" {
-        return None;
+    if args.len() == 4 && args[1] == "append-history" {
+        return Some(CliSubcommand::AppendHistory {
+            workspace_root: args[2].clone(),
+            agent_id: args[3].clone(),
+        });
     }
-    Some(CliSubcommand::AppendHistory {
-        workspace_root: args[2].clone(),
-        agent_id: args[3].clone(),
-    })
+    if args.len() >= 3 && args[1] == "doctor" {
+        let repair = args.len() == 4 && args[3] == "--repair";
+        if args.len() > 4 || (args.len() == 4 && !repair) {
+            return None;
+        }
+        return Some(CliSubcommand::Doctor {
+            workspace_root: args[2].clone(),
+            repair,
+        });
+    }
+    None
 }
 
 /// Read one JSON object `{ "request": string, "outcome": string | null }` from
@@ -519,16 +628,18 @@ fn run_append_history(
 /// normal daemon startup. Returns `None` if `args` did not match any subcommand,
 /// meaning the caller should proceed with normal MCP server startup.
 ///
-/// WHY this exists as a CLI subcommand rather than requiring callers to speak
-/// JSON-RPC over stdio: .claude/hooks/history-record.sh fires once per Claude Code
-/// turn and needs a fast, one-shot write — spinning up the full MCP server
-/// (GraphDB open + background indexing, ~48s) for that would be wrong. See
-/// append_history_line's doc for why this path must be the only JSONL writer.
+/// WHY `append-history` exists as a CLI subcommand rather than requiring
+/// callers to speak JSON-RPC over stdio: .claude/hooks/history-record.sh fires
+/// once per Claude Code turn and needs a fast, one-shot write — spinning up
+/// the full MCP server (GraphDB open + background indexing, ~48s) for that
+/// would be wrong. See append_history_line's doc for why this path must be the
+/// only JSONL writer. `doctor` is a CLI subcommand for the same reason: a
+/// manual health check/repair should not require (or trigger) a full startup.
 ///
 /// Thin by design: real parsing lives in `parse_cli_subcommand`, real logic in
-/// `run_append_history` — both independently unit-tested. This function only
-/// wires them to real stdin and an exit code, which is why it isn't itself
-/// covered by a dedicated unit test.
+/// `run_append_history` / `run_doctor` — all independently unit-tested. This
+/// function only wires them to real stdin/stdout and an exit code, which is
+/// why it isn't itself covered by a dedicated unit test.
 pub fn try_run_cli_subcommand(args: &[String]) -> Option<i32> {
     match parse_cli_subcommand(args)? {
         CliSubcommand::AppendHistory { workspace_root, agent_id } => {
@@ -540,7 +651,197 @@ pub fn try_run_cli_subcommand(args: &[String]) -> Option<i32> {
                 }
             }
         }
+        CliSubcommand::Doctor { workspace_root, repair } => {
+            match run_doctor(&workspace_root, repair) {
+                Ok(report) => {
+                    println!("{}", report.render(&workspace_root, repair));
+                    Some(if report.is_healthy(repair) { 0 } else { 1 })
+                }
+                Err(e) => {
+                    eprintln!("doctor failed: {}", e);
+                    Some(1)
+                }
+            }
+        }
     }
+}
+
+/// Result of one `doctor` inspection pass across the three persistent stores
+/// under `.comp/` (session-memory, history, index.db).
+///
+/// WHY this is the lightweight path (not `GraphDB::new`): `GraphDB::new` runs
+/// schema migrations and main.rs's startup spawns a full background re-index
+/// after it (~48s on this repo). `doctor` must stay a fast, non-intrusive
+/// diagnostic — it only ever reads `index.db` via a bare `PRAGMA quick_check`,
+/// and only quarantines it (never reopens/recreates it) when `--repair` is
+/// given, leaving recreation to the next real daemon startup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DoctorReport {
+    session_memory_files_ok: usize,
+    session_memory_files_corrupt: usize,
+    history_lines_ok: usize,
+    history_lines_corrupt: usize,
+    /// "ok" | "missing" | "corrupt" | "corrupt_and_quarantined" | "check_failed"
+    /// ("check_failed": the database is busy/locked by another process right
+    /// now — inconclusive, never treated as corruption, never quarantined).
+    index_db_status: &'static str,
+}
+
+impl DoctorReport {
+    /// Human-readable report for the CLI. Not JSON: `doctor` is a terminal
+    /// diagnostic tool, not an MCP tool response.
+    fn render(&self, workspace_root: &str, repair: bool) -> String {
+        let mode = if repair { "repair" } else { "report-only" };
+        format!(
+            "comP doctor ({mode}) — {root}\n  session-memory: {mem_ok} ok, {mem_bad} corrupt\n  history: {hist_ok} line(s) ok, {hist_bad} line(s) corrupt\n  index.db: {db}",
+            mode = mode,
+            root = workspace_root,
+            mem_ok = self.session_memory_files_ok,
+            mem_bad = self.session_memory_files_corrupt,
+            hist_ok = self.history_lines_ok,
+            hist_bad = self.history_lines_corrupt,
+            db = self.index_db_status,
+        )
+    }
+
+    /// Whether this report represents a state with no outstanding, unresolved
+    /// corruption. With `repair` set, anything found was already quarantined,
+    /// so only a hard failure to even inspect `index.db` counts as unhealthy —
+    /// and "check_failed" (busy/locked, not confirmed corrupt) counts as
+    /// unhealthy too: it means doctor could not actually determine the
+    /// database's health, which must not be reported as "fine".
+    fn is_healthy(&self, repair: bool) -> bool {
+        if self.index_db_status == "corrupt" || self.index_db_status == "check_failed" {
+            return false;
+        }
+        repair || (self.session_memory_files_corrupt == 0 && self.history_lines_corrupt == 0)
+    }
+}
+
+/// Classify the outcome of running `PRAGMA quick_check` against `index.db`
+/// into `"ok"`, `"check_failed"`, or `"corrupt"` (never `"missing"` or
+/// `"corrupt_and_quarantined"` — those are decided by the caller).
+///
+/// WHY this is its own function rather than inlined into `run_doctor`: the
+/// busy/locked-vs-corrupt distinction is a real correctness requirement (a
+/// database merely busy from routine concurrent use by another comp-daemon
+/// process must never be mistaken for corrupt and quarantined out from under
+/// whoever is using it), but provoking a real `SQLITE_BUSY` deterministically
+/// in a test means actually holding a lock across the 5-second
+/// `busy_timeout`. Testing this classification against a synthetic
+/// `rusqlite::Error` is instant and exercises the same decision.
+fn classify_quick_check_result(check: &std::result::Result<String, rusqlite::Error>) -> &'static str {
+    match check {
+        Ok(s) if s == "ok" => "ok",
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if matches!(e.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) =>
+        {
+            "check_failed"
+        }
+        _ => "corrupt",
+    }
+}
+
+/// Inspect (and, if `repair` is true, quarantine/fix) the three `.comp/`
+/// stores. See `DoctorReport`'s doc for why this never opens `index.db` via
+/// the full `GraphDB`.
+fn run_doctor(workspace_root: &str, repair: bool) -> Result<DoctorReport> {
+    let comp_dir = std::path::Path::new(workspace_root).join(".comp");
+
+    let mut session_memory_files_ok = 0usize;
+    let mut session_memory_files_corrupt = 0usize;
+    let memory_dir = comp_dir.join("session-memory");
+    if let Ok(entries) = std::fs::read_dir(&memory_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let parses = std::fs::read(&p)
+                .ok()
+                .map(|raw| serde_json::from_slice::<SessionMemory>(&raw).is_ok())
+                .unwrap_or(false);
+            if parses {
+                session_memory_files_ok += 1;
+            } else {
+                session_memory_files_corrupt += 1;
+                if repair {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    let quarantine = p.with_extension(format!("corrupt-{}.json", ts));
+                    if let Err(e) = std::fs::rename(&p, &quarantine) {
+                        log::warn!("doctor: failed to quarantine {}: {}", p.display(), e);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut history_lines_ok = 0usize;
+    let mut history_lines_corrupt = 0usize;
+    let hist_dir = comp_dir.join("history");
+    if let Ok(entries) = std::fs::read_dir(&hist_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if repair {
+                match repair_history_file(&p) {
+                    Ok(r) => {
+                        history_lines_ok += r.good_lines;
+                        history_lines_corrupt += r.bad_lines;
+                    }
+                    Err(e) => log::warn!("doctor: failed to repair {}: {}", p.display(), e),
+                }
+            } else if let Ok(content) = std::fs::read_to_string(&p) {
+                for line in content.lines() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if serde_json::from_str::<SessionCall>(line).is_ok() {
+                        history_lines_ok += 1;
+                    } else {
+                        history_lines_corrupt += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let db_path = comp_dir.join("index.db");
+    let index_db_status: &'static str = if !db_path.exists() {
+        "missing"
+    } else {
+        use rusqlite::Connection;
+        // WHY set busy_timeout before the check: a bare Connection::open has no
+        // timeout (SQLite fails immediately with SQLITE_BUSY by default), and
+        // index.db is routinely open concurrently by another comp-daemon
+        // process (the VSCode extension's daemon, or another MCP client's).
+        // Without this, a database that is merely busy at this exact instant
+        // would look identical to a corrupt one below.
+        let check = Connection::open(&db_path).and_then(|conn| {
+            conn.execute_batch("PRAGMA busy_timeout=5000;")?;
+            conn.query_row::<String, _, _>("PRAGMA quick_check", [], |row| row.get(0))
+        });
+        match classify_quick_check_result(&check) {
+            "corrupt" if repair => {
+                crate::graph::GraphDB::quarantine_db_files(&db_path);
+                "corrupt_and_quarantined"
+            }
+            other => other,
+        }
+    };
+
+    Ok(DoctorReport {
+        session_memory_files_ok,
+        session_memory_files_corrupt,
+        history_lines_ok,
+        history_lines_corrupt,
+        index_db_status,
+    })
 }
 
 /// Format a Unix-epoch millisecond timestamp as "YYYY-MM-DD HH:MM" in UTC.
@@ -625,6 +926,96 @@ fn get_git_diff_files(workspace_root: &str) -> std::collections::HashSet<String>
             .collect(),
         _ => std::collections::HashSet::new(),
     }
+}
+
+/// Whether `e` is the specific "DB mutex poisoned" error every `GraphDB`
+/// lock-acquisition site constructs (`anyhow::anyhow!("DB mutex poisoned: {}",
+/// e)` in `daemon/src/graph/mod.rs`). Extracted as its own function so the
+/// fatal-exit decision in `MCPServer::run` can be unit tested without the
+/// `std::process::exit` call site itself needing to run in a test.
+///
+/// WHY a string match is acceptable here, not fragile: the text is a fixed
+/// literal we author ourselves at every call site, not user input or a message
+/// from a dependency that could drift or coincidentally collide.
+fn is_poisoned_mutex_error(e: &anyhow::Error) -> bool {
+    e.to_string().contains("DB mutex poisoned")
+}
+
+/// Build the JSON-RPC response for one already-read `line`, as emitted by the
+/// stdio loop in `run_degraded_server`. Returns `None` when no response must
+/// be sent at all — a notification (valid JSON-RPC with no `id`) must never
+/// get one, mirroring `MCPServer::run`'s identical rule. Pulled out of the I/O
+/// loop so the response logic is unit-testable without real stdin/stdout.
+fn degraded_response(line: &str, reason: &str) -> Option<Value> {
+    let request: Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(_) => {
+            return Some(json!({
+                "jsonrpc": "2.0",
+                "error": { "code": -32700, "message": "Parse error" }
+            }));
+        }
+    };
+    let method = request["method"].as_str().unwrap_or("");
+    let id = request["id"].clone();
+    if id.is_null() {
+        return None;
+    }
+    let response = match method {
+        "initialize" => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "comP", "version": env!("CARGO_PKG_VERSION") }
+            }
+        }),
+        "tools/list" => json!({ "jsonrpc": "2.0", "id": id, "result": { "tools": [] } }),
+        _ => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32000,
+                "message": format!(
+                    "comP daemon is in degraded mode and no tools are available: {}. Restart the daemon after resolving this.",
+                    reason
+                )
+            }
+        }),
+    };
+    Some(response)
+}
+
+/// Minimal stdio JSON-RPC loop used only when `AppState::new` failed (e.g.
+/// `.comp/index.db` could not be created or repaired even after the
+/// quarantine-and-retry in `GraphDB::new` — see main.rs). WHY this exists
+/// instead of main() just returning the error and exiting: exiting leaves the
+/// MCP client with nothing but a dead process or a connection failure,
+/// indistinguishable from the binary being missing entirely. Completing the
+/// `initialize` handshake and answering every other call with the actual
+/// failure reason turns an opaque "MCP server not found" into an actionable
+/// error message (Phase 2, C5).
+pub fn run_degraded_server(reason: &str) -> Result<()> {
+    use std::io::{self, BufRead, Write};
+
+    log::error!("comP daemon starting in degraded mode: {}", reason);
+
+    let stdin = io::stdin();
+    let reader = stdin.lock();
+    let mut stdout = io::stdout();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(response) = degraded_response(&line, reason) {
+            writeln!(stdout, "{}", response)?;
+            stdout.flush()?;
+        }
+    }
+    Ok(())
 }
 
 impl MCPServer {
@@ -715,6 +1106,21 @@ impl MCPServer {
                 "compressFile" => self.handle_compress_file(params).await,
                 _ => Err(anyhow!("Unknown method: {}", method)),
             };
+
+            // WHY exit the process rather than return a normal error response: a
+            // poisoned Mutex means a prior panic happened while a GraphDB method
+            // held the lock, and every GraphDB call returns this exact error
+            // forever afterward within this process — there is no recovery path
+            // short of a fresh process. The MCP client (DaemonManager.ts) already
+            // auto-restarts a crashed daemon; exiting hands it a clean,
+            // unpoisoned process instead of letting it keep talking to one that
+            // is quietly broken for the rest of its lifetime (Phase 2, C6).
+            if let Err(ref e) = result {
+                if is_poisoned_mutex_error(e) {
+                    log::error!("fatal: {} — exiting so the MCP client restarts the daemon", e);
+                    std::process::exit(1);
+                }
+            }
 
             // Build response
             let response = match result {
@@ -1944,9 +2350,6 @@ impl MCPServer {
         let query_filter = params["query"].as_str().map(|q| q.to_lowercase());
         let limit = params["limit"].as_u64().unwrap_or(20) as usize;
 
-        let mut markdown = String::new();
-        markdown.push_str("### Session Recall\n\n");
-
         let no_result_msg = if query_filter.is_some() {
             "No matching past invocations found for the query."
         } else {
@@ -1964,6 +2367,13 @@ impl MCPServer {
         // Flatten everything across ALL agents/sessions and show newest-first.
         let mut calls: Vec<SessionCall> = Vec::new();
 
+        // WHY tracked instead of silently skipped: a file/line that fails to read
+        // or parse here is evidence of the exact corruption this recovery work is
+        // about — dropping it with no trace would make comP's own diagnostic tool
+        // blind to the condition it exists to help investigate (Phase 2, A8).
+        let mut unreadable_memory_files = 0usize;
+        let mut unreadable_history_lines = 0usize;
+
         let memory_dir = std::path::Path::new(&self.state.workspace_root)
             .join(".comp")
             .join("session-memory");
@@ -1973,13 +2383,19 @@ impl MCPServer {
                 if p.extension().and_then(|e| e.to_str()) != Some("json") {
                     continue;
                 }
-                if let Ok(file) = std::fs::File::open(&p) {
-                    let reader = std::io::BufReader::new(file);
-                    let memory: SessionMemory = serde_json::from_reader(reader)
-                        .unwrap_or(SessionMemory { sessions: Vec::new() });
-                    for session in memory.sessions {
-                        calls.extend(session.calls);
+                match std::fs::File::open(&p) {
+                    Ok(file) => {
+                        let reader = std::io::BufReader::new(file);
+                        match serde_json::from_reader::<_, SessionMemory>(reader) {
+                            Ok(memory) => {
+                                for session in memory.sessions {
+                                    calls.extend(session.calls);
+                                }
+                            }
+                            Err(_) => unreadable_memory_files += 1,
+                        }
                     }
+                    Err(_) => unreadable_memory_files += 1,
                 }
             }
         }
@@ -1998,8 +2414,9 @@ impl MCPServer {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        if let Ok(c) = serde_json::from_str::<SessionCall>(line) {
-                            calls.push(c);
+                        match serde_json::from_str::<SessionCall>(line) {
+                            Ok(c) => calls.push(c),
+                            Err(_) => unreadable_history_lines += 1,
                         }
                     }
                 }
@@ -2007,6 +2424,15 @@ impl MCPServer {
         }
 
         calls.sort_by_key(|c| std::cmp::Reverse(c.timestamp));
+
+        let mut markdown = String::new();
+        markdown.push_str("### Session Recall\n\n");
+        if unreadable_memory_files > 0 || unreadable_history_lines > 0 {
+            markdown.push_str(&format!(
+                "⚠ {} session-memory file(s) and {} history line(s) could not be read (corrupted or malformed) and are excluded below.\n\n",
+                unreadable_memory_files, unreadable_history_lines
+            ));
+        }
 
         let mut shown = 0;
         for call in &calls {
@@ -3321,6 +3747,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_session_recall_reports_unreadable_files_and_lines() {
+        // Phase 2 (A8): a corrupt session-memory file or an unparseable history
+        // line must no longer vanish silently — recall's own output is comP's
+        // diagnostic surface, and it was blind to the exact condition this
+        // recovery work exists to investigate.
+        let temp_dir = std::env::temp_dir().join("comP_test_session_recall_unreadable");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap();
+
+        let memory_dir = temp_dir.join(".comp").join("session-memory");
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::write(memory_dir.join("broken-agent.json"), b"{ not valid json").unwrap();
+
+        let hist_dir = temp_dir.join(".comp").join("history");
+        std::fs::create_dir_all(&hist_dir).unwrap();
+        std::fs::write(
+            hist_dir.join("log-2026-06.jsonl"),
+            concat!(
+                r#"{"timestamp":1782521356807,"request":"a good line","outcome":null}"#,
+                "\n",
+                "{ this line is not valid json at all\n",
+            ),
+        )
+        .unwrap();
+
+        std::env::set_var("COMP_WORKSPACE_ROOT", root);
+        let state = Arc::new(crate::AppState::new(root, "test-agent").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state.clone());
+
+        let recall = server.handle_session_recall(json!({})).await.unwrap();
+        let recall = recall.as_str().unwrap();
+        assert!(recall.contains("a good line"), "the readable line must still be surfaced");
+        assert!(recall.contains("1 session-memory file(s)"), "unreadable memory file count must be reported: {}", recall);
+        assert!(recall.contains("1 history line(s)"), "unreadable history line count must be reported: {}", recall);
+
+        std::env::remove_var("COMP_WORKSPACE_ROOT");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
     async fn test_new_mcp_tools() {
         let temp_dir = std::env::temp_dir().join("comP_test_new_mcp_tools");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -3773,6 +4240,41 @@ mod tests {
     }
 
     #[test]
+    fn test_compact_history_file_preserves_prior_backup_on_second_run() {
+        // Phase 2 (B6): a second compaction must not clobber the .bak from the
+        // first — that would destroy the only rollback copy of *that* run's
+        // pre-compaction content.
+        let temp_dir = std::env::temp_dir().join("comP_test_compact_preserves_prior_backup");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+        std::fs::write(&hist_path, "first-generation\n").unwrap();
+
+        compact_history_file(&hist_path, |original| Ok(original.to_vec())).unwrap();
+        let backup_path = hist_path.with_extension("jsonl.bak");
+        assert_eq!(std::fs::read_to_string(&backup_path).unwrap(), "first-generation\n");
+
+        std::fs::write(&hist_path, "second-generation\n").unwrap();
+        compact_history_file(&hist_path, |original| Ok(original.to_vec())).unwrap();
+
+        // The current .bak must hold the *second* run's pre-compaction content...
+        assert_eq!(std::fs::read_to_string(&backup_path).unwrap(), "second-generation\n");
+        // ...and the first run's backup must still exist somewhere, not be lost.
+        let prior_backups: Vec<_> = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                name.starts_with("log.jsonl.bak.") && name != "log.jsonl.bak"
+            })
+            .collect();
+        assert_eq!(prior_backups.len(), 1, "the first run's backup must be preserved under a generation suffix");
+        assert_eq!(std::fs::read_to_string(prior_backups[0].path()).unwrap(), "first-generation\n");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn test_compact_history_file_leaves_original_untouched_on_error() {
         let temp_dir = std::env::temp_dir().join("comP_test_compact_error");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -3791,6 +4293,70 @@ mod tests {
             !hist_path.with_extension("jsonl.bak").exists(),
             "no backup should be written when compaction never reaches the mutation step"
         );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_repair_history_file_quarantines_bad_lines_and_keeps_good_ones() {
+        let temp_dir = std::env::temp_dir().join("comP_test_repair_basic");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+        let good_line = r#"{"timestamp":1,"request":"good one"}"#;
+        std::fs::write(&hist_path, format!("{}\n{{ not valid json\n", good_line)).unwrap();
+
+        let report = repair_history_file(&hist_path).unwrap();
+        assert_eq!(report, RepairReport { good_lines: 1, bad_lines: 1 });
+
+        let remaining = std::fs::read_to_string(&hist_path).unwrap();
+        assert_eq!(remaining, format!("{}\n", good_line), "only the valid line must remain");
+
+        let quarantined = std::fs::read_to_string(hist_path.with_extension("jsonl.quarantine")).unwrap();
+        assert_eq!(quarantined, "{ not valid json\n", "the bad line must be preserved in quarantine, not discarded");
+
+        let backup = std::fs::read_to_string(hist_path.with_extension("jsonl.bak")).unwrap();
+        assert_eq!(backup, format!("{}\n{{ not valid json\n", good_line), "pre-repair content must be backed up");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_repair_history_file_is_noop_when_all_lines_valid() {
+        let temp_dir = std::env::temp_dir().join("comP_test_repair_noop");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+        let content = "{\"timestamp\":1,\"request\":\"a\"}\n{\"timestamp\":2,\"request\":\"b\"}\n";
+        std::fs::write(&hist_path, content).unwrap();
+
+        let report = repair_history_file(&hist_path).unwrap();
+        assert_eq!(report, RepairReport { good_lines: 2, bad_lines: 0 });
+        assert_eq!(std::fs::read_to_string(&hist_path).unwrap(), content, "a clean file must be left byte-identical");
+        assert!(!hist_path.with_extension("jsonl.bak").exists(), "no backup when nothing needed fixing");
+        assert!(!hist_path.with_extension("jsonl.quarantine").exists(), "no quarantine file when nothing was bad");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_repair_history_file_accumulates_quarantine_across_runs() {
+        // A second repair run (e.g. after more corruption accrues) must append
+        // to the quarantine file, not truncate away what a prior run saved.
+        let temp_dir = std::env::temp_dir().join("comP_test_repair_accumulates_quarantine");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+
+        std::fs::write(&hist_path, "bad-line-one\n{\"timestamp\":1,\"request\":\"a\"}\n").unwrap();
+        repair_history_file(&hist_path).unwrap();
+
+        std::fs::write(&hist_path, "{\"timestamp\":2,\"request\":\"b\"}\nbad-line-two\n").unwrap();
+        repair_history_file(&hist_path).unwrap();
+
+        let quarantined = std::fs::read_to_string(hist_path.with_extension("jsonl.quarantine")).unwrap();
+        assert!(quarantined.contains("bad-line-one"), "first run's quarantined line must survive: {}", quarantined);
+        assert!(quarantined.contains("bad-line-two"), "second run's quarantined line must be added: {}", quarantined);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -3870,6 +4436,215 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert_eq!(parse_cli_subcommand(&args), None);
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_doctor_report_only() {
+        let args: Vec<String> = ["comp-daemon", "doctor", "/ws"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            parse_cli_subcommand(&args),
+            Some(CliSubcommand::Doctor { workspace_root: "/ws".to_string(), repair: false })
+        );
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_doctor_with_repair() {
+        let args: Vec<String> = ["comp-daemon", "doctor", "/ws", "--repair"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            parse_cli_subcommand(&args),
+            Some(CliSubcommand::Doctor { workspace_root: "/ws".to_string(), repair: true })
+        );
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_doctor_rejects_unknown_trailing_flag() {
+        let args: Vec<String> = ["comp-daemon", "doctor", "/ws", "--bogus"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(parse_cli_subcommand(&args), None);
+    }
+
+    #[test]
+    fn test_is_poisoned_mutex_error_matches_graphdb_lock_failure_text() {
+        let e = anyhow!("DB mutex poisoned: {}", "the lock was poisoned");
+        assert!(is_poisoned_mutex_error(&e));
+    }
+
+    #[test]
+    fn test_is_poisoned_mutex_error_does_not_match_unrelated_errors() {
+        let e = anyhow!("no such table: files");
+        assert!(!is_poisoned_mutex_error(&e));
+    }
+
+    #[test]
+    fn test_degraded_response_completes_initialize_handshake() {
+        let response = degraded_response(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#, "disk full").unwrap();
+        assert!(response["result"]["serverInfo"]["name"].is_string(), "handshake must succeed even in degraded mode: {}", response);
+        assert!(response["error"].is_null());
+    }
+
+    #[test]
+    fn test_degraded_response_reports_empty_tools_list() {
+        let response = degraded_response(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#, "disk full").unwrap();
+        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_degraded_response_includes_reason_for_any_other_call() {
+        let response = degraded_response(
+            r#"{"jsonrpc":"2.0","id":3,"method":"run_pipeline","params":{"task":"x"}}"#,
+            "index.db could not be created: permission denied",
+        )
+        .unwrap();
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(message.contains("permission denied"), "the actual failure reason must reach the caller: {}", message);
+    }
+
+    #[test]
+    fn test_degraded_response_sends_nothing_for_notifications() {
+        // No "id" at all — e.g. notifications/initialized — must get no response,
+        // matching MCPServer::run's identical rule (a response here makes strict
+        // MCP clients drop the connection).
+        let response = degraded_response(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, "disk full");
+        assert!(response.is_none());
+    }
+
+    #[test]
+    fn test_degraded_response_reports_parse_error_for_invalid_json() {
+        let response = degraded_response("not json at all", "disk full").unwrap();
+        assert_eq!(response["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn test_run_doctor_report_only_does_not_mutate_anything() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_doctor_report_only");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let comp_dir = temp_dir.join(".comp");
+        let memory_dir = comp_dir.join("session-memory");
+        let hist_dir = comp_dir.join("history");
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::create_dir_all(&hist_dir).unwrap();
+        std::fs::write(memory_dir.join("broken.json"), b"{ not valid json").unwrap();
+        std::fs::write(hist_dir.join("log-2026-06.jsonl"), "{\"timestamp\":1,\"request\":\"ok\"}\nbad-line\n").unwrap();
+        std::fs::write(comp_dir.join("index.db"), b"not a sqlite database").unwrap();
+
+        let report = run_doctor(temp_dir.to_str().unwrap(), false).unwrap();
+        assert_eq!(report.session_memory_files_ok, 0);
+        assert_eq!(report.session_memory_files_corrupt, 1);
+        assert_eq!(report.history_lines_ok, 1);
+        assert_eq!(report.history_lines_corrupt, 1);
+        assert_eq!(report.index_db_status, "corrupt");
+        assert!(!report.is_healthy(false));
+
+        // Nothing must have moved: report-only means read-only.
+        assert!(memory_dir.join("broken.json").exists());
+        assert!(hist_dir.join("log-2026-06.jsonl").exists());
+        let hist_content = std::fs::read_to_string(hist_dir.join("log-2026-06.jsonl")).unwrap();
+        assert!(hist_content.contains("bad-line"), "report-only must not rewrite the history file");
+        assert!(comp_dir.join("index.db").exists());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_run_doctor_repair_quarantines_everything_corrupt() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_doctor_repair");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let comp_dir = temp_dir.join(".comp");
+        let memory_dir = comp_dir.join("session-memory");
+        let hist_dir = comp_dir.join("history");
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::create_dir_all(&hist_dir).unwrap();
+        std::fs::write(memory_dir.join("broken.json"), b"{ not valid json").unwrap();
+        std::fs::write(hist_dir.join("log-2026-06.jsonl"), "{\"timestamp\":1,\"request\":\"ok\"}\nbad-line\n").unwrap();
+        std::fs::write(comp_dir.join("index.db"), b"not a sqlite database").unwrap();
+
+        let report = run_doctor(temp_dir.to_str().unwrap(), true).unwrap();
+        assert_eq!(report.session_memory_files_corrupt, 1);
+        assert_eq!(report.history_lines_corrupt, 1);
+        assert_eq!(report.index_db_status, "corrupt_and_quarantined");
+        assert!(report.is_healthy(true), "everything found was quarantined, so repair mode reports healthy");
+
+        // The corrupt session-memory file must be moved aside, not left at its name.
+        assert!(!memory_dir.join("broken.json").exists());
+        let quarantined_memory: Vec<_> = std::fs::read_dir(&memory_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
+            .collect();
+        assert_eq!(quarantined_memory.len(), 1);
+
+        // The history file must keep only the good line; the bad one moved to quarantine.
+        let hist_content = std::fs::read_to_string(hist_dir.join("log-2026-06.jsonl")).unwrap();
+        assert_eq!(hist_content, "{\"timestamp\":1,\"request\":\"ok\"}\n");
+        assert!(hist_dir.join("log-2026-06.jsonl.quarantine").exists());
+
+        // The corrupt index.db must be moved aside so the next real startup creates a fresh one.
+        assert!(!comp_dir.join("index.db").exists());
+        let quarantined_db: Vec<_> = std::fs::read_dir(&comp_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("index.db.corrupt-"))
+            .collect();
+        assert_eq!(quarantined_db.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_run_doctor_healthy_workspace_reports_ok() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_doctor_healthy");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let report = run_doctor(temp_dir.to_str().unwrap(), false).unwrap();
+        assert_eq!(report.index_db_status, "missing", "no index.db yet is healthy, not an error");
+        assert!(report.is_healthy(false));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_classify_quick_check_result_ok() {
+        assert_eq!(classify_quick_check_result(&Ok("ok".to_string())), "ok");
+    }
+
+    #[test]
+    fn test_classify_quick_check_result_treats_busy_or_locked_as_inconclusive() {
+        // Phase 2 design fix: index.db is routinely open by another comp-daemon
+        // process. A database that is merely busy/locked right now must never
+        // be classified the same as confirmed-corrupt — doing so would let
+        // `doctor --repair` quarantine a perfectly healthy, actively-used
+        // database out from under whoever holds it.
+        let busy = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error { code: rusqlite::ErrorCode::DatabaseBusy, extended_code: 5 },
+            None,
+        );
+        assert_eq!(classify_quick_check_result(&Err(busy)), "check_failed");
+
+        let locked = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error { code: rusqlite::ErrorCode::DatabaseLocked, extended_code: 6 },
+            None,
+        );
+        assert_eq!(classify_quick_check_result(&Err(locked)), "check_failed");
+    }
+
+    #[test]
+    fn test_classify_quick_check_result_treats_other_failures_as_corrupt() {
+        let not_a_db = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error { code: rusqlite::ErrorCode::NotADatabase, extended_code: 26 },
+            None,
+        );
+        assert_eq!(classify_quick_check_result(&Err(not_a_db)), "corrupt");
+        assert_eq!(
+            classify_quick_check_result(&Ok("wrong # of entries in index idx_nodes_kind".to_string())),
+            "corrupt",
+            "quick_check reporting a problem (not the literal 'ok') must be treated as corrupt"
+        );
     }
 
     #[test]

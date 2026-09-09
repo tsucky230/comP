@@ -80,13 +80,13 @@ impl AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // WHY checked before env_logger/full startup: a lightweight CLI invocation
+    // WHY checked before env_logger/full startup: lightweight CLI invocations
     // (`comp-daemon append-history <workspace_root> <agent_id>`, used by
-    // .claude/hooks/history-record.sh) must not pay the cost of GraphDB open +
-    // background indexing on every Claude Code turn, and must exit immediately
+    // .claude/hooks/history-record.sh; `comp-daemon doctor <workspace_root>
+    // [--repair]`, a manual diagnostic for the three .comp/ stores) must not pay
+    // the cost of GraphDB open + background indexing, and must exit immediately
     // rather than falling into the long-running MCP stdio server loop below.
-    // See mcp::try_run_cli_subcommand for the locked-append implementation shared
-    // with the session_log MCP tool.
+    // See mcp::try_run_cli_subcommand for both implementations.
     let cli_args: Vec<String> = std::env::args().collect();
     if let Some(exit_code) = mcp::try_run_cli_subcommand(&cli_args) {
         std::process::exit(exit_code);
@@ -104,8 +104,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Identifies which MCP client spawned this process; see AppState::agent_id doc.
     let agent_id = std::env::var("COMP_AGENT_ID").unwrap_or_else(|_| "unknown".to_string());
 
-    // Initialize application state
-    let state = Arc::new(AppState::new(&workspace_root, &agent_id).await?);
+    // Initialize application state.
+    //
+    // WHY matched instead of `?`: GraphDB::new already retries once after
+    // quarantining a corrupt index.db (see graph/mod.rs), so a failure here
+    // means even a freshly (re)created database couldn't be opened — e.g. the
+    // .comp/ directory itself isn't writable. Propagating this error with `?`
+    // would exit before the MCP server ever starts, leaving the client with
+    // nothing but a dead process indistinguishable from a missing binary.
+    // Running a minimal degraded server instead lets every tool call report
+    // the actual reason (Phase 2, C5).
+    let state = match AppState::new(&workspace_root, &agent_id).await {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            return mcp::run_degraded_server(&e.to_string()).map_err(Into::into);
+        }
+    };
     info!("Application state initialized");
 
     // Start indexing in the background and immediately start the MCP server.
