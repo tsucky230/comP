@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-09-10
+
 ### Added
 
 - **session-memory / index.db の破損自動リカバリ**: `.comp/session-memory/<agent_id>.json` のパース失敗時、従来は `unwrap_or(空)` で黙ってリセットし過去の全記録を無警告で失っていたのを、`<agent>.corrupt-<epoch_ms>.json` へ隔離してから空で再開する方式に変更。書き込みも `File::create` による直接 truncate からtmp+rename方式のアトミック書き込みに変更し、同一 `agent_id` の二重起動に対する `.lock` サイドカーロックを追加（`daemon/src/mcp/mod.rs`）
