@@ -266,16 +266,19 @@ describe("registerCommands", () => {
     expect((vscode.window as any).showErrorMessage.calledOnce).to.be.true;
   });
 
-  it("comp.exportDebugLog shows warning when session-memory.json not found", async () => {
-    const fs = require("fs");
-    const existsStub = sinon.stub(fs, "existsSync").returns(false);
-    try {
-      registerCommands(mockContext, () => mockDaemon, mockStatusBar);
-      await handlers.get("comp.exportDebugLog")!();
-      expect((vscode.window as any).showWarningMessage.calledOnce).to.be.true;
-    } finally {
-      existsStub.restore();
-    }
+  it("comp.exportDebugLog shows warning when daemon is not running", async () => {
+    const notRunning = { ...mockDaemon, isRunning: sinon.stub().returns(false) };
+    registerCommands(mockContext, () => notRunning, mockStatusBar);
+    await handlers.get("comp.exportDebugLog")!();
+    expect((vscode.window as any).showWarningMessage.calledOnce).to.be.true;
+    expect(mockDaemon.request.called).to.be.false;
+  });
+
+  it("comp.exportDebugLog fetches session_recall when daemon is running", async () => {
+    mockDaemon.request = sinon.stub().resolves("### Session Recall\n\nsome markdown");
+    registerCommands(mockContext, () => mockDaemon, mockStatusBar);
+    await handlers.get("comp.exportDebugLog")!();
+    expect(mockDaemon.request.calledWith("session_recall")).to.be.true;
   });
 
   it("comp.copyActiveFileCompressed shows error when daemon is not running", async () => {

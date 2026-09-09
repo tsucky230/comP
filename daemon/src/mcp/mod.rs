@@ -317,6 +317,98 @@ fn record_mcp_call(
     // `lock_file` drops here, releasing the sidecar lock.
 }
 
+/// Mark `stale: true` on every call in the session-memory file at `path`
+/// whose `files` list contains `relative_path` (both sides normalized to `/`
+/// separators). Returns how many calls were newly marked; a result of 0 never
+/// touches the file (no lock contention, no write, for agents whose history
+/// doesn't mention this path at all).
+///
+/// WHY this exists in the daemon now rather than in `SessionMemoryManager.ts`:
+/// that TS class read and wrote `.comp/session-memory.json` directly — the
+/// single file the per-agent split (v0.11.1) replaced, so every call it made
+/// was writing to a file `session_recall` never reads. Routing the mutation
+/// through the daemon via the `mark_stale` RPC means it goes through the same
+/// sidecar-lock + atomic-write discipline as `record_mcp_call`, instead of a
+/// second, divergent implementation in another language touching the same
+/// class of file (Phase 3, A7/A9).
+fn mark_stale_in_file(path: &std::path::Path, relative_path: &str) -> Result<usize> {
+    let lock_path = session_memory_lock_path(path);
+    let lock_file = std::fs::OpenOptions::new().create(true).read(true).append(true).open(&lock_path)?;
+    lock_file.lock()?;
+
+    let mut memory = load_session_memory_or_quarantine(path)?;
+    let mut marked = 0usize;
+    for session in &mut memory.sessions {
+        for call in &mut session.calls {
+            if !call.stale && call.files.iter().any(|f| f.replace('\\', "/") == relative_path) {
+                call.stale = true;
+                marked += 1;
+            }
+        }
+    }
+    if marked > 0 {
+        write_session_memory_atomically(path, &memory)?;
+    }
+    Ok(marked)
+    // `lock_file` drops here, releasing the sidecar lock.
+}
+
+/// Latest `timestamp` across every call recorded in any per-agent
+/// session-memory file or history jsonl line under `workspace_root`, or
+/// `None` if nothing has ever been recorded.
+///
+/// WHY this exists: `SidebarPanel.ts` used to show "last agent connection
+/// time" by instantiating `SessionMemoryManager` and reading
+/// `.comp/session-memory.json` directly — again, the single pre-v0.11.1 file
+/// nothing writes to anymore, so the UI silently showed "Waiting..." forever
+/// (Phase 3, A7). Exposing the real answer via `get_stats` lets the UI read it
+/// from a response it already fetches, with no file access of its own.
+///
+/// Read-only and deliberately tolerant of unreadable files/lines (same
+/// best-effort posture as `handle_session_recall`) — this is a UI
+/// nice-to-have, not a correctness-critical path.
+fn latest_activity_timestamp(workspace_root: &str) -> Option<u64> {
+    let mut latest: Option<u64> = None;
+
+    let memory_dir = std::path::Path::new(workspace_root).join(".comp").join("session-memory");
+    if let Ok(entries) = std::fs::read_dir(&memory_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(raw) = std::fs::read(&p) {
+                if let Ok(memory) = serde_json::from_slice::<SessionMemory>(&raw) {
+                    for session in &memory.sessions {
+                        for call in &session.calls {
+                            latest = Some(latest.map_or(call.timestamp, |cur| cur.max(call.timestamp)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let hist_dir = std::path::Path::new(workspace_root).join(".comp").join("history");
+    if let Ok(entries) = std::fs::read_dir(&hist_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&p) {
+                for line in content.lines() {
+                    if let Ok(c) = serde_json::from_str::<SessionCall>(line) {
+                        latest = Some(latest.map_or(c.timestamp, |cur| cur.max(c.timestamp)));
+                    }
+                }
+            }
+        }
+    }
+
+    latest
+}
+
 /// Append one already-serialized JSONL line to `hist_path`, holding a short-lived
 /// *exclusive* OS advisory lock for the duration of the write.
 ///
@@ -333,12 +425,15 @@ fn record_mcp_call(
 /// negligible in practice: each critical section is one small write, so
 /// concurrent appenders just take turns rather than truly blocking each other.
 ///
-/// WHY this must be the ONLY writer of this file: history-record.sh (the Stop hook)
-/// used to call `fs.appendFileSync` directly from Node, bypassing this lock entirely
-/// — an advisory lock only blocks callers that also try to acquire it, so an
-/// unlocked writer defeats the whole scheme. The hook now shells out to
-/// `comp-daemon append-history` (see try_run_cli_subcommand) so every writer, in
-/// every language, goes through this one function.
+/// WHY this must be the ONLY locked writer of this file: history-record.sh
+/// (the Stop hook) used to call `fs.appendFileSync` directly from Node,
+/// bypassing this lock entirely — an advisory lock only blocks callers that
+/// also try to acquire it, so an unlocked writer defeats the whole scheme.
+/// The hook now shells out to `comp-daemon append-history` (see
+/// `try_run_cli_subcommand`) whenever the daemon binary is available. When it
+/// is not, the hook's fallback no longer writes to this file directly either
+/// — see `merge_spill_files`' doc for where that content ends up instead
+/// (Phase 3, B4).
 ///
 /// Synchronous / blocking: callers on the async runtime must wrap this in
 /// `tokio::task::spawn_blocking`.
@@ -361,8 +456,63 @@ fn append_history_line(hist_path: &std::path::Path, line: &str) -> Result<()> {
     // only briefly, so waiting is preferable to failing the caller's append.
     // Released automatically when `file` drops at the end of this function.
     file.lock()?;
+    // WHY merged here, inside the lock, before the caller's own line: any
+    // successful locked append — from any agent, any caller — is a safe
+    // opportunity to sweep up spill files left by a prior fallback, since it
+    // already holds the lock merging needs. This makes self-healing automatic
+    // rather than requiring a dedicated "merge spills" trigger, and ordering
+    // spills before the new line keeps the file roughly chronological (a
+    // spill is always older than "now").
+    if let Some(dir) = hist_path.parent() {
+        merge_spill_files(dir, &mut file);
+    }
     file.write_all(format!("{}\n", line).as_bytes())?;
     Ok(())
+}
+
+/// Fold every pending `spill-*.jsonl` file in `hist_dir` into the already-open,
+/// already-locked `file`, then delete each one that was merged successfully.
+///
+/// WHY spill files exist at all: `.claude/hooks/history-record.sh` previously
+/// fell back to `fs.appendFileSync` straight into the shared monthly log when
+/// the `comp-daemon` binary was unavailable — an unlocked "third writer" that
+/// could interleave with a concurrent locked append (see this module's WHY on
+/// `append_history_line`). The hook's fallback now writes its one entry to its
+/// own uniquely-named `spill-<pid>-<epoch_ms>-<rand>.jsonl` file instead, which
+/// needs no lock at all (nothing else ever writes that exact path), and this
+/// function is what reintegrates it into the real history the next time
+/// anyone appends normally.
+///
+/// Best-effort per file: a spill file that fails to read is logged and left
+/// in place (retried on the next append); one that merges but fails to delete
+/// is logged too — leaving it behind risks a harmless duplicate on the next
+/// merge, which is preferable to losing the caller's own append by surfacing
+/// an error here.
+fn merge_spill_files(hist_dir: &std::path::Path, file: &mut std::fs::File) {
+    use std::io::Write;
+
+    let entries = match std::fs::read_dir(hist_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !(name.starts_with("spill-") && name.ends_with(".jsonl")) {
+            continue;
+        }
+        match std::fs::read(&path) {
+            Ok(content) => match file.write_all(&content) {
+                Ok(()) => {
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        log::warn!("merged spill file {} but failed to remove it: {}", path.display(), e);
+                    }
+                }
+                Err(e) => log::warn!("failed to merge spill file {} into history: {}", path.display(), e),
+            },
+            Err(e) => log::warn!("failed to read spill file {}: {}", path.display(), e),
+        }
+    }
 }
 
 /// Rewrite `hist_path` in place, replacing its content with a compacted form,
@@ -393,11 +543,10 @@ fn append_history_line(hist_path: &std::path::Path, line: &str) -> Result<()> {
 /// handling path), so callers should run it via `spawn_blocking` same as
 /// `append_history_line`.
 ///
-/// WHY `#[allow(dead_code)]`: no manual trigger (CLI subcommand or MCP tool) has
-/// been wired up yet — which mechanism should own that decision was intentionally
-/// left open (see docs/ARCHITECTURE_ja.md 4.2.2). The locking/atomicity contract
-/// here is complete and covered by tests; only the entry point is pending.
-#[allow(dead_code)]
+/// Triggered manually via the `compact-history` CLI subcommand (Phase 3, B5;
+/// see `run_compact_history`), which supplies `dedup_exact_duplicate_lines` as
+/// `compact_fn` — the only policy wired up so far. Never called from the
+/// request-handling path.
 fn compact_history_file(
     hist_path: &std::path::Path,
     compact_fn: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
@@ -428,6 +577,49 @@ fn compact_history_file(
     file.set_len(compacted.len() as u64)?;
 
     Ok(())
+}
+
+/// Compaction policy: drop exact-duplicate lines, keeping each line's first
+/// occurrence. The only policy wired up to the `compact-history` CLI
+/// subcommand so far (Phase 3, B5) — deliberately conservative: it can only
+/// shrink a file by removing content that is byte-for-byte already present
+/// elsewhere in it, never by judging age or relevance, so it cannot discard
+/// information a less conservative policy (see `compact_history_file`'s doc)
+/// might.
+fn dedup_exact_duplicate_lines(original: &[u8]) -> Result<Vec<u8>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for line in String::from_utf8_lossy(original).lines() {
+        if seen.insert(line.to_string()) {
+            out.extend_from_slice(line.as_bytes());
+            out.push(b'\n');
+        }
+    }
+    Ok(out)
+}
+
+/// Run `dedup_exact_duplicate_lines` compaction against every `.comp/history/*.jsonl`
+/// file under `workspace_root`. Returns `(path, bytes_before, bytes_after)` for
+/// each file actually processed. An absent history directory is not an error
+/// — it just means there is nothing to compact yet.
+fn run_compact_history(workspace_root: &str) -> Result<Vec<(std::path::PathBuf, usize, usize)>> {
+    let hist_dir = std::path::Path::new(workspace_root).join(".comp").join("history");
+    let mut results = Vec::new();
+    let entries = match std::fs::read_dir(&hist_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(results),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let before = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+        compact_history_file(&path, dedup_exact_duplicate_lines)?;
+        let after = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+        results.push((path, before, after));
+    }
+    Ok(results)
 }
 
 /// Write `content` to `backup_path`, first preserving any file already there
@@ -535,6 +727,7 @@ fn repair_history_file(hist_path: &std::path::Path) -> Result<RepairReport> {
 enum CliSubcommand {
     AppendHistory { workspace_root: String, agent_id: String },
     Doctor { workspace_root: String, repair: bool },
+    CompactHistory { workspace_root: String },
 }
 
 /// Parse `args` (as given to `main`, so `args[0]` is the binary path) into a
@@ -544,6 +737,7 @@ enum CliSubcommand {
 /// # Subcommands
 /// - `append-history <workspace_root> <agent_id>`
 /// - `doctor <workspace_root> [--repair]`
+/// - `compact-history <workspace_root>`
 fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
     if args.len() == 4 && args[1] == "append-history" {
         return Some(CliSubcommand::AppendHistory {
@@ -560,6 +754,9 @@ fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
             workspace_root: args[2].clone(),
             repair,
         });
+    }
+    if args.len() == 3 && args[1] == "compact-history" {
+        return Some(CliSubcommand::CompactHistory { workspace_root: args[2].clone() });
     }
     None
 }
@@ -659,6 +856,23 @@ pub fn try_run_cli_subcommand(args: &[String]) -> Option<i32> {
                 }
                 Err(e) => {
                     eprintln!("doctor failed: {}", e);
+                    Some(1)
+                }
+            }
+        }
+        CliSubcommand::CompactHistory { workspace_root } => {
+            match run_compact_history(&workspace_root) {
+                Ok(results) => {
+                    if results.is_empty() {
+                        println!("compact-history: no .jsonl files found under {}/.comp/history", workspace_root);
+                    }
+                    for (path, before, after) in &results {
+                        println!("compact-history: {} — {} -> {} bytes", path.display(), before, after);
+                    }
+                    Some(0)
+                }
+                Err(e) => {
+                    eprintln!("compact-history failed: {}", e);
                     Some(1)
                 }
             }
@@ -1098,6 +1312,7 @@ impl MCPServer {
                 "removeFile" => self.handle_remove_file(params).await,
                 "session_recall" => self.handle_session_recall(params).await,
                 "session_log" => self.handle_session_log(params).await,
+                "mark_stale" => self.handle_mark_stale(params).await,
                 "get_symbol" => self.handle_get_symbol(params).await,
                 "get_dependencies" => self.handle_get_dependencies(params).await,
                 "get_file_summary" => self.handle_get_file_summary(params).await,
@@ -2060,7 +2275,50 @@ impl MCPServer {
         if let Ok(Some(ts)) = self.state.graph_db.recovery_marker() {
             response["index_recovered_from_corruption_at"] = json!(ts);
         }
+        // See latest_activity_timestamp's doc: replaces SidebarPanel.ts reading
+        // the pre-v0.11.1 single session-memory.json file directly (Phase 3, A7).
+        if let Some(ts) = latest_activity_timestamp(&self.state.workspace_root) {
+            response["last_activity_at"] = json!(ts);
+        }
         Ok(response)
+    }
+
+    /// Tool: mark_stale
+    ///
+    /// Mark every recorded call across every agent's session-memory file as
+    /// `stale` if it mentions `path` (relative to the workspace root, either
+    /// slash style). Called by the VSCode extension's file-system watcher
+    /// whenever a source file changes or is deleted — see `extension.ts`'s
+    /// `setupFileWatchers`, which used to do this by instantiating
+    /// `SessionMemoryManager` and writing `.comp/session-memory.json`
+    /// directly (the single file the per-agent split made dead; see
+    /// `mark_stale_in_file`'s doc). Not part of the original 5-tool set, so it
+    /// is deliberately absent from `tools/list` — only the VSCode extension's
+    /// own JSON-RPC client calls this method, never an AI agent.
+    pub async fn handle_mark_stale(&self, params: Value) -> Result<Value> {
+        let relative_path = params["path"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'path' parameter"))?
+            .replace('\\', "/");
+
+        let memory_dir = std::path::Path::new(&self.state.workspace_root)
+            .join(".comp")
+            .join("session-memory");
+        let mut marked = 0usize;
+        if let Ok(entries) = std::fs::read_dir(&memory_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                match mark_stale_in_file(&path, &relative_path) {
+                    Ok(n) => marked += n,
+                    Err(e) => log::warn!("mark_stale: failed to update {}: {}", path.display(), e),
+                }
+            }
+        }
+
+        Ok(json!({ "marked": marked }))
     }
 
     /// MCP initialize handshake — returns server capabilities
@@ -3346,6 +3604,131 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_get_stats_surfaces_last_activity_at() {
+        // Phase 3, A7: SidebarPanel.ts used to read this from the dead
+        // pre-v0.11.1 single session-memory.json file via SessionMemoryManager
+        // and always saw "Waiting..." — get_stats must carry the real answer.
+        let temp_dir = std::env::temp_dir().join("comP_test_get_stats_last_activity");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap();
+
+        record_mcp_call(root, "test-agent", "sess-1", "a task".to_string(), vec![], vec![], 1).unwrap();
+
+        let state = Arc::new(crate::AppState::new(root, "test-agent").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state);
+        let response = server.handle_get_stats().await.unwrap();
+        assert!(response["last_activity_at"].is_number(), "last_activity_at must be present once something was recorded");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_stats_omits_last_activity_at_when_nothing_recorded() {
+        let temp_dir = std::env::temp_dir().join("comP_test_get_stats_no_activity");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state);
+        let response = server.handle_get_stats().await.unwrap();
+        assert!(response.get("last_activity_at").is_none());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_mark_stale_in_file_marks_matching_calls_and_is_noop_otherwise() {
+        let temp_dir = std::env::temp_dir().join("comP_test_mark_stale_in_file");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let path = temp_dir.join("agent.json");
+
+        let memory = SessionMemory {
+            sessions: vec![Session {
+                id: "s1".to_string(),
+                timestamp: 1,
+                calls: vec![
+                    SessionCall {
+                        query: "touches target".to_string(),
+                        outcome: None,
+                        symbols: vec![],
+                        files: vec!["src/target.rs".to_string()],
+                        tokens: 0,
+                        stale: false,
+                        timestamp: 1,
+                        agent: "test".to_string(),
+                    },
+                    SessionCall {
+                        query: "unrelated".to_string(),
+                        outcome: None,
+                        symbols: vec![],
+                        files: vec!["src/other.rs".to_string()],
+                        tokens: 0,
+                        stale: false,
+                        timestamp: 2,
+                        agent: "test".to_string(),
+                    },
+                ],
+            }],
+        };
+        std::fs::write(&path, serde_json::to_string(&memory).unwrap()).unwrap();
+
+        let marked = mark_stale_in_file(&path, "src/target.rs").unwrap();
+        assert_eq!(marked, 1);
+
+        let updated: SessionMemory = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(updated.sessions[0].calls[0].stale, "the matching call must be marked stale");
+        assert!(!updated.sessions[0].calls[1].stale, "the unrelated call must be untouched");
+
+        // Re-running for the same path must not re-mark (already stale) or error.
+        let marked_again = mark_stale_in_file(&path, "src/target.rs").unwrap();
+        assert_eq!(marked_again, 0, "an already-stale call must not be counted again");
+
+        // A path that matches nothing must be a true no-op — the file's content
+        // (not just the stale flags) must be byte-identical, proving no write happened.
+        let before = std::fs::read_to_string(&path).unwrap();
+        let marked_none = mark_stale_in_file(&path, "src/does_not_exist.rs").unwrap();
+        assert_eq!(marked_none, 0);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_handle_mark_stale_marks_across_multiple_agent_files() {
+        let temp_dir = std::env::temp_dir().join("comP_test_handle_mark_stale");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let root = temp_dir.to_str().unwrap();
+
+        record_mcp_call(root, "claude-code", "s1", "a".to_string(), vec![], vec!["src/shared.rs".to_string()], 1).unwrap();
+        record_mcp_call(root, "codex", "s2", "b".to_string(), vec![], vec!["src/shared.rs".to_string()], 2).unwrap();
+        record_mcp_call(root, "codex", "s3", "c".to_string(), vec![], vec!["src/unrelated.rs".to_string()], 3).unwrap();
+
+        let state = Arc::new(crate::AppState::new(root, "test-agent").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state);
+
+        let response = server.handle_mark_stale(json!({ "path": "src/shared.rs" })).await.unwrap();
+        assert_eq!(response["marked"], 2, "both agents' calls touching the path must be marked");
+
+        let recall = server.handle_session_recall(json!({})).await.unwrap();
+        let recall = recall.as_str().unwrap();
+        // Two of the three entries are now stale; the unrelated one must not be.
+        assert_eq!(recall.matches("[Stale]").count(), 2);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_handle_mark_stale_requires_path_param() {
+        let state = Arc::new(crate::AppState::new(".", "test-agent").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state);
+        let result = server.handle_mark_stale(json!({})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn test_session_recall() {
         let temp_dir = std::env::temp_dir().join("comP_test_session_recall");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -4210,6 +4593,50 @@ mod tests {
     }
 
     #[test]
+    fn test_append_history_line_merges_pending_spill_files() {
+        // Simulates history-record.sh's fallback path (Phase 3, B4): a spill
+        // file written while comp-daemon was unavailable must be folded into
+        // the real log, in order before the new line, the next time anyone
+        // appends normally — and removed once merged.
+        let temp_dir = std::env::temp_dir().join("comP_test_append_merges_spill");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+
+        let spill_path = temp_dir.join("spill-1234-1700000000000-ab12.jsonl");
+        std::fs::write(&spill_path, "{\"timestamp\":1,\"request\":\"from spill\"}\n").unwrap();
+
+        append_history_line(&hist_path, "{\"timestamp\":2,\"request\":\"live append\"}").unwrap();
+
+        let content = std::fs::read_to_string(&hist_path).unwrap();
+        assert_eq!(
+            content,
+            "{\"timestamp\":1,\"request\":\"from spill\"}\n{\"timestamp\":2,\"request\":\"live append\"}\n",
+            "the spilled entry must land before the new line, in order"
+        );
+        assert!(!spill_path.exists(), "a successfully merged spill file must be removed");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_append_history_line_ignores_non_spill_files() {
+        let temp_dir = std::env::temp_dir().join("comP_test_append_ignores_non_spill");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let hist_path = temp_dir.join("log.jsonl");
+        std::fs::write(temp_dir.join("log-2026-05.jsonl"), "{\"timestamp\":0,\"request\":\"other month\"}\n").unwrap();
+        std::fs::write(temp_dir.join("notes.txt"), "unrelated file").unwrap();
+
+        append_history_line(&hist_path, "{\"timestamp\":1,\"request\":\"new\"}").unwrap();
+
+        let content = std::fs::read_to_string(&hist_path).unwrap();
+        assert_eq!(content, "{\"timestamp\":1,\"request\":\"new\"}\n", "only spill-*.jsonl files get merged in");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn test_compact_history_file_rewrites_and_keeps_backup() {
         let temp_dir = std::env::temp_dir().join("comP_test_compact_basic");
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -4466,6 +4893,62 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert_eq!(parse_cli_subcommand(&args), None);
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_compact_history() {
+        let args: Vec<String> = ["comp-daemon", "compact-history", "/ws"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            parse_cli_subcommand(&args),
+            Some(CliSubcommand::CompactHistory { workspace_root: "/ws".to_string() })
+        );
+    }
+
+    #[test]
+    fn test_dedup_exact_duplicate_lines_keeps_first_occurrence_only() {
+        let input = b"line1\nline2\nline1\nline3\nline2\n";
+        let result = dedup_exact_duplicate_lines(input).unwrap();
+        assert_eq!(String::from_utf8(result).unwrap(), "line1\nline2\nline3\n");
+    }
+
+    #[test]
+    fn test_dedup_exact_duplicate_lines_noop_when_no_duplicates() {
+        let input = b"a\nb\nc\n";
+        let result = dedup_exact_duplicate_lines(input).unwrap();
+        assert_eq!(String::from_utf8(result).unwrap(), "a\nb\nc\n");
+    }
+
+    #[test]
+    fn test_run_compact_history_processes_every_jsonl_file_and_shrinks_duplicates() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_compact_history");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let hist_dir = temp_dir.join(".comp").join("history");
+        std::fs::create_dir_all(&hist_dir).unwrap();
+        std::fs::write(hist_dir.join("log-2026-05.jsonl"), "dup\ndup\nunique\n").unwrap();
+        std::fs::write(hist_dir.join("log-2026-06.jsonl"), "a\nb\n").unwrap();
+        std::fs::write(hist_dir.join("notes.txt"), "not jsonl, must be ignored").unwrap();
+
+        let results = run_compact_history(temp_dir.to_str().unwrap()).unwrap();
+        assert_eq!(results.len(), 2, "only the two .jsonl files must be processed");
+
+        let may_content = std::fs::read_to_string(hist_dir.join("log-2026-05.jsonl")).unwrap();
+        assert_eq!(may_content, "dup\nunique\n", "the duplicate line must be removed");
+        let june_content = std::fs::read_to_string(hist_dir.join("log-2026-06.jsonl")).unwrap();
+        assert_eq!(june_content, "a\nb\n", "a file with no duplicates must be unchanged");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_run_compact_history_is_a_noop_when_history_dir_is_absent() {
+        let temp_dir = std::env::temp_dir().join("comP_test_run_compact_history_absent");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let results = run_compact_history(temp_dir.to_str().unwrap()).unwrap();
+        assert!(results.is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

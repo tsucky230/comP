@@ -282,6 +282,21 @@ export class DaemonManager {
   }
 
   /**
+   * Mark every recorded session-memory call that touched `filePath` as stale.
+   *
+   * WHY this is an RPC rather than local file I/O: it used to be
+   * SessionMemoryManager.markStaleForFile, which read and wrote
+   * `.comp/session-memory.json` directly — the single file the daemon's
+   * per-agent split (v0.11.1) stopped reading entirely, so every call was a
+   * silent no-op (Phase 3, A7). The daemon owns the real per-agent files and
+   * the locking/atomic-write discipline around them; routing through it here
+   * avoids a second, divergent implementation touching the same files.
+   */
+  async markStale(filePath: string): Promise<void> {
+    await this.request("mark_stale", { path: filePath });
+  }
+
+  /**
    * Check if daemon is running
    */
   isRunning(): boolean {
@@ -302,6 +317,7 @@ export class DaemonManager {
     tokens_saved?: number;
     queries_count?: number;
     avg_tokens_per_query?: number;
+    last_activity_at?: number;
   }> {
     const result = await this.request("getStats", {});
     if (!result || typeof result !== "object") {
@@ -317,6 +333,9 @@ export class DaemonManager {
       tokens_saved: stats["tokens_saved"] !== undefined ? Number(stats["tokens_saved"]) : undefined,
       queries_count: stats["queries_count"] !== undefined ? Number(stats["queries_count"]) : undefined,
       avg_tokens_per_query: stats["avg_tokens_per_query"] !== undefined ? Number(stats["avg_tokens_per_query"]) : undefined,
+      // WHY: lets SidebarPanel show "last agent connection" without reading any
+      // file itself — see daemon/src/mcp/mod.rs::latest_activity_timestamp's doc.
+      last_activity_at: stats["last_activity_at"] !== undefined ? Number(stats["last_activity_at"]) : undefined,
     };
   }
 

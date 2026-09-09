@@ -16,7 +16,6 @@ import * as path from "path";
 import * as fs from "fs";
 import { DaemonManager } from "../daemon/DaemonManager";
 import { StatusBar } from "./StatusBar";
-import { SessionMemoryManager } from "../mcp/sessionMemory";
 
 /**
  * Sidebar panel - Implemented as a WebviewViewProvider.
@@ -260,25 +259,16 @@ export class SidebarPanel implements vscode.WebviewViewProvider {
         efficiency
       );
 
-      let lastAgentConnectionStr = "Waiting...";
-      try {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ".";
-        const memoryManager = new SessionMemoryManager(workspaceRoot);
-        const memory = memoryManager.load();
-        let lastTimestamp = 0;
-        for (const session of memory.sessions) {
-          for (const call of session.calls) {
-            if (call.timestamp > lastTimestamp) {
-              lastTimestamp = call.timestamp;
-            }
-          }
-        }
-        if (lastTimestamp > 0) {
-          lastAgentConnectionStr = new Date(lastTimestamp).toLocaleTimeString();
-        }
-      } catch (e) {
-        // ignore file read errors
-      }
+      // WHY read from the daemon's own response instead of a local file: this
+      // used to instantiate SessionMemoryManager and read
+      // `.comp/session-memory.json` directly — the single file the daemon's
+      // per-agent split (v0.11.1) stopped writing to entirely, so this always
+      // showed "Waiting..." (Phase 3, A7). last_activity_at is computed by the
+      // daemon across every agent's file plus history, in the same request
+      // this function already makes.
+      const lastAgentConnectionStr = stats.last_activity_at
+        ? new Date(stats.last_activity_at).toLocaleTimeString()
+        : "Waiting...";
 
       this.view.webview.postMessage({
         type: "statsUpdate",

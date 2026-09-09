@@ -249,21 +249,39 @@ export function registerCommands(
   );
 
   // Command 6: comp.exportDebugLog
-  // Export session-memory.json to a user-chosen location
+  // Export the daemon's aggregated session log (via session_recall) to a
+  // user-chosen location.
+  //
+  // WHY this no longer reads .comp/session-memory.json directly: that was the
+  // single pre-v0.11.1 file the daemon's per-agent split stopped writing to
+  // entirely, so this command always reported "not found" (Phase 3, A7).
+  // session_recall already aggregates every agent's per-agent file plus
+  // history into one Markdown report — the daemon is the only thing that
+  // should read those files now.
   context.subscriptions.push(
     vscode.commands.registerCommand("comp.exportDebugLog", async () => {
-      const sessionMemoryPath = path.join(workspaceRoot, ".comp", "session-memory.json");
-
-      if (!fs.existsSync(sessionMemoryPath)) {
+      const dm = getDaemonManager();
+      if (!dm?.isRunning()) {
         vscode.window.showWarningMessage(
-          "No session memory found. Run a query via MCP first to generate logs."
+          "comP daemon is not running. Start it and run a query via MCP first to generate logs."
+        );
+        return;
+      }
+
+      let markdown: string;
+      try {
+        const result = await dm.request("session_recall", {});
+        markdown = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      } catch (error) {
+        vscode.window.showErrorMessage(
+          `Failed to fetch session log: ${error instanceof Error ? error.message : String(error)}`
         );
         return;
       }
 
       const choice = await vscode.window.showQuickPick(
         [
-          { label: "Open in Editor", description: "View session-memory.json in a new tab" },
+          { label: "Open in Editor", description: "View the session log in a new tab" },
           { label: "Export to File", description: "Save a copy to a chosen location" },
         ],
         { placeHolder: "How do you want to view the debug log?" }
@@ -272,27 +290,25 @@ export function registerCommands(
       if (!choice) return;
 
       if (choice.label === "Open in Editor") {
-        const uri = vscode.Uri.file(sessionMemoryPath);
-        const doc = await vscode.workspace.openTextDocument(uri);
+        const doc = await vscode.workspace.openTextDocument({ content: markdown, language: "markdown" });
         await vscode.window.showTextDocument(doc, { preview: false });
         return;
       }
 
       // Export to file
       const defaultUri = vscode.Uri.file(
-        path.join(workspaceRoot, `comp-debug-${Date.now()}.json`)
+        path.join(workspaceRoot, `comp-debug-${Date.now()}.md`)
       );
       const saveUri = await vscode.window.showSaveDialog({
         defaultUri,
-        filters: { "JSON": ["json"] },
+        filters: { "Markdown": ["md"] },
         title: "Export comP Debug Log",
       });
 
       if (!saveUri) return;
 
       try {
-        const content = fs.readFileSync(sessionMemoryPath, "utf-8");
-        fs.writeFileSync(saveUri.fsPath, content, "utf-8");
+        fs.writeFileSync(saveUri.fsPath, markdown, "utf-8");
         const openDoc = await vscode.window.showInformationMessage(
           `Debug log exported to ${path.basename(saveUri.fsPath)}`,
           "Open File"
