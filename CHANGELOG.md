@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-09-13
+
+### Added
+
+- **`run_pipeline` の `tokens`/`total_tokens`/`savings`/`estimated_cost` を実測トークン数ベースに刷新**（`daemon/src/search/mod.rs`、`daemon/src/mcp/mod.rs`）: 従来 `TokenCounter::count_tokens` はTODOのまま文字数÷4の近似を返すだけで、しかも生産コード経路のどこからも呼ばれていなかった（自分のユニットテスト以外未使用）。`tiktoken-rs`（cl100k_base、プロセス共有シングルトン、`count_ordinary`で任意テキストに対しpanic/エラーしない安全なAPIを使用）を導入し、`count_tokens`を実装。`run_pipeline`の最終選定ファイル（`pack_within_budget`通過後）についてのみ、実際に圧縮した本文を1回読み込んで正確にトークンをカウントし直す方式にした——圧縮レベル選択・予算パッキング自体は全候補への適用コストが大きいため、従来の文字数近似ヒューリスティックのまま維持。cl100k_baseはOpenAI GPT-4系のBPEでありAnthropicが公開しているClaude自身のトークナイザーではないが、オフラインで使える実務上の近似として採用した
+  - `tiktoken-rs`は依存関係にHTTPクライアントを持たずBPEデータをバンドルしているためネットワークアクセス不要（comPの local-first 方針と両立することを事前に確認済み）
+  - 回帰テスト追加: `test_run_pipeline_reports_exact_token_count_from_real_content`（実測値が旧ヒューリスティックと乖離するフィクスチャで、`run_pipeline`が返す`tokens`が実際の圧縮後コンテンツのtiktoken実測値と一致することを検証）
+
+### Fixed
+
+- **`comp setupAgents` の設定修復がGemini CLIの`.gemini/settings.json`を対象外にしていた**（`src/mcp/AgentSetup.ts`）: `repairTargets()`のリストにワークスペース・グローバル双方の`.gemini/settings.json`エントリが存在せず、拡張機能アップデート後にdaemonパスが古いままになっても自動修復されなかった（Cursor/Cline/Windsurf等は既に対応済みだった）。他エージェントと同じ`mcpServers.comp`パターンで2エントリを追加。テスト2件追加
+
+### Removed
+
+- **未使用のデッドコードスタブを削除**（`daemon/src/indexer/parser.rs`）: `CodeParser::extract_dependencies`は空Vecを返すだけで生産コード・テストのどちらからも呼ばれていなかった（実際の依存抽出は`dependency.rs::DependencyAnalyzer`が言語別正規表現で担当）。あわせて`dependency.rs`側の同名ディスパッチ関数に残っていた「未実装」という誤ったTODOコメントを是正（実際は言語別実装への振り分けが完了済み）
+
 ## [0.11.2] - 2026-09-10
 
 ### Added

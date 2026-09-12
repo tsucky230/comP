@@ -1597,7 +1597,22 @@ impl MCPServer {
                 }
                 _ => final_level,
             };
-            let tokens = Self::estimate_tokens(*base, file_level);
+            // Exact token count on the same compressed text the agent would actually
+            // receive, read once here and reused for `content` below when requested.
+            // Falls back to the char-count heuristic if the file went missing between
+            // indexing and this read (mirrors the previous include_content-only read).
+            let full_path = std::path::Path::new(&ws).join(file);
+            let lang = path_to_lang.get(file).map(|s| s.as_str()).unwrap_or("");
+            let file_compression = compress::CompressionLevel::from_i64(file_level);
+            let compressed = std::fs::read_to_string(&full_path)
+                .ok()
+                .map(|raw| compress::compress(&raw, lang, file_compression));
+            let tokens = match &compressed {
+                Some(text) => crate::search::TokenCounter::count_tokens(text)
+                    .unwrap_or_else(|_| Self::estimate_tokens(*base, file_level)),
+                None => Self::estimate_tokens(*base, file_level),
+            };
+
             let mut entry = json!({
                 "path": file,
                 "symbols": sym,
@@ -1607,11 +1622,8 @@ impl MCPServer {
                 entry["git_diff"] = Value::Bool(true);
             }
             if include_content {
-                let full_path = std::path::Path::new(&ws).join(file);
-                let lang = path_to_lang.get(file).map(|s| s.as_str()).unwrap_or("");
-                let file_compression = compress::CompressionLevel::from_i64(file_level);
-                if let Ok(raw) = std::fs::read_to_string(&full_path) {
-                    entry["content"] = Value::String(compress::compress(&raw, lang, file_compression));
+                if let Some(text) = compressed {
+                    entry["content"] = Value::String(text);
                 }
             }
             pivot_files.push(entry);
@@ -4457,6 +4469,53 @@ mod tests {
         // coverage.git_diff_boosted must be a non-negative number
         let boosted = result["coverage"]["git_diff_boosted"].as_u64().unwrap();
         assert!(boosted == 0 || boosted > 0); // always a valid count
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// tiktoken-rs wiring: `tokens` must be the real BPE count of the exact
+    /// content returned (compression level 0 == identity here), not the
+    /// char_count/4 heuristic `estimate_tokens` falls back to when the file
+    /// can't be read.
+    #[tokio::test]
+    async fn test_run_pipeline_reports_exact_token_count_from_real_content() {
+        let temp_dir = std::env::temp_dir().join("comP_test_exact_tokens");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let source = "fn zztokentestmarker() {\n    let value = 1;\n    let other = 2;\n    println!(\"{} {}\", value, other);\n}\n";
+        std::fs::write(temp_dir.join("zztokentestmarker.rs"), source).unwrap();
+
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.unwrap());
+        let server = MCPServer::new(state);
+        // AppState::new does not index anything by itself — only main()'s
+        // background task does that. Force a synchronous full index so the
+        // fixture file actually has a symbol/char_count row before querying it.
+        server.handle_force_reindex().await.expect("force reindex failed");
+
+        let result = server.handle_run_pipeline(json!({
+            "task": "fix zztokentestmarker function",
+            "max_tokens": 8000,
+            "compression_level": 0
+        })).await.unwrap();
+
+        let pivot_files = result["pivot_files"].as_array().unwrap();
+        let entry = pivot_files
+            .iter()
+            .find(|e| e["path"].as_str() == Some("zztokentestmarker.rs"))
+            .expect("zztokentestmarker.rs should be a pivot file");
+
+        let expected_exact = crate::search::TokenCounter::count_tokens(source).unwrap();
+        let old_heuristic = source.len().div_ceil(4);
+        assert_ne!(
+            expected_exact, old_heuristic,
+            "fixture must make the real count and the old char/4 heuristic diverge, or this test proves nothing"
+        );
+        assert_eq!(
+            entry["tokens"].as_u64().unwrap() as usize,
+            expected_exact,
+            "tokens field must be the real tiktoken count of the file's actual content"
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

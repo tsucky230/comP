@@ -379,27 +379,27 @@ pub struct TokenCounter;
 
 #[allow(dead_code)]
 impl TokenCounter {
-    /// Count tokens in text using tiktoken
-    /// 
+    /// Count tokens in text using tiktoken's cl100k_base encoding.
+    ///
     /// # Arguments
     /// - text: Text to count
     ///
     /// # Returns
-    /// - Number of tokens using cl100k_base encoding (GPT-4/Opus/Sonnet)
+    /// - Token count under OpenAI's cl100k_base BPE. This is not Claude's own
+    ///   tokenizer (Anthropic does not publish one for offline use), but it is
+    ///   a widely used stand-in that tracks Claude's real count closely enough
+    ///   for context-budget purposes on English text and source code.
     ///
     /// # Process:
-    /// 1. Use tiktoken-rs library
-    /// 2. Get "cl100k_base" encoding
-    /// 3. Encode text
-    /// 4. Return token count
+    /// 1. Reuse the process-wide cl100k_base singleton (avoids re-loading the
+    ///    embedded BPE rank table on every call — this runs on every
+    ///    run_pipeline invocation).
+    /// 2. `count_ordinary` counts tokens without materializing the token
+    ///    vector and never errors on untrusted input (unlike the
+    ///    special-token-aware encode methods), which matters here since the
+    ///    input is arbitrary file content.
     pub fn count_tokens(text: &str) -> Result<usize> {
-        // TODO: Implement using tiktoken-rs
-        // let encoding = tiktoken_rs::get_encoding("cl100k_base")?;
-        // let tokens = encoding.encode(text)?;
-        // Ok(tokens.len())
-        
-        // Estimate: ~4 characters per token
-        Ok(text.len().div_ceil(4))
+        Ok(tiktoken_rs::cl100k_base_singleton().count_ordinary(text))
     }
 
     /// Estimate total tokens for a set of files

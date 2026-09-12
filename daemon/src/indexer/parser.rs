@@ -245,17 +245,6 @@ impl CodeParser {
             scope: scope.clone(),
         })
     }
-
-    /// Extract dependencies between symbols
-    #[allow(dead_code)]
-    pub async fn extract_dependencies(
-        &mut self,
-        _language: &str,
-        _source_code: &str,
-    ) -> Result<Vec<(String, String, String)>> {
-        // TODO: Full implementation with AST traversal for imports
-        Ok(Vec::new())
-    }
 }
 
 impl Default for CodeParser {

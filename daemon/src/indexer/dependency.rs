@@ -76,9 +76,6 @@ impl DependencyAnalyzer {
         source_code: &str,
         _file_path: &str,
     ) -> Result<Vec<Dependency>> {
-        // TODO: Implement language-specific dependency extraction
-        // For now, return empty to prevent test failures
-
         match language {
             "rust" => Self::extract_rust_dependencies(source_code),
             "typescript" | "javascript" => Self::extract_typescript_dependencies(source_code),

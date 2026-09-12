@@ -1505,6 +1505,8 @@ export class AgentSetupManager {
       json(ws(".mcp.json"), ["mcpServers", "comp"], "workspace"),
       json(ws(".cursor", "mcp.json"), ["mcpServers", "comp"], "workspace"),
       json(home(".cursor", "mcp.json"), ["mcpServers", "comp"], "global"),
+      json(ws(".gemini", "settings.json"), ["mcpServers", "comp"], "workspace"),
+      json(home(".gemini", "settings.json"), ["mcpServers", "comp"], "global"),
       json(home(".codeium", "windsurf", "mcp_config.json"), ["mcpServers", "comp"], "global"),
       ...(cline ? [json(cline, ["mcpServers", "comp"], "global")] : []),
       json(this.antigravityConfigPath(), ["mcpServers", "comp"], "global"),

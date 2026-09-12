@@ -403,6 +403,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.11.0** | **Codex support, English/Japanese UI, automatic branch-switch reindexing** | ✅ Released |
 | **v0.11.1** | **Session memory shared across multiple LLMs, release version hygiene fixes** | ✅ Released |
 | **v0.11.2** | **Automatic corruption recovery across all 3 persistent stores (session-memory, history, index.db)** | ✅ Released |
+| **v0.11.3** | **Exact token counting in run_pipeline via tiktoken-rs, Gemini CLI config auto-repair** | ✅ Released |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---

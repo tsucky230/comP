@@ -80,8 +80,10 @@ lcov.info
 .claude/
 .codex/
 .continue/
+.gemini/
 .cache/
 CLAUDE.md
+GEMINI.md
 .eslintcache
 .stylelintcache
 .prettierignore

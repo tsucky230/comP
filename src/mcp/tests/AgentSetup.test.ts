@@ -971,6 +971,7 @@ describe("AgentSetupManager", () => {
     let bundledBinary: string;
     let stalePath: string;
     let repairCodexHome: string;
+    let repairHomeDir: string;
     let repairManager: AgentSetupManager;
 
     const writeJson = (file: string, value: unknown): void => {
@@ -1000,8 +1001,9 @@ describe("AgentSetupManager", () => {
       // WHY homeDir: several repair targets live under the home directory, so
       // running the suite against a real one would edit the developer's own
       // Cursor and Windsurf configuration.
+      repairHomeDir = path.join(caseDir, "home");
       repairManager = new AgentSetupManager(mockDaemon as any, ws, extDir, {
-        homeDir: path.join(caseDir, "home"),
+        homeDir: repairHomeDir,
         // Codex reads CODEX_HOME, which would otherwise point these repairs at
         // the developer's own configuration.
         codexHome: path.join(caseDir, "codex-home"),
@@ -1136,6 +1138,30 @@ describe("AgentSetupManager", () => {
 
       expect(entryFor(entries, cfg)?.status).to.equal("repaired");
       expect(readJson(cfg).mcpServers.comp.command).to.equal(devBinary);
+    });
+
+    it("repairs .gemini/settings.json under the mcpServers key (Gemini CLI, workspace)", () => {
+      const cfg = path.join(ws, ".gemini", "settings.json");
+      writeJson(cfg, { mcpServers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } } } });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("repaired");
+      expect(readJson(cfg).mcpServers.comp.command).to.equal(devBinary);
+    });
+
+    it("repairs the global ~/.gemini/settings.json (Gemini CLI) with the bundled binary", () => {
+      const cfg = path.join(repairHomeDir, ".gemini", "settings.json");
+      writeJson(cfg, {
+        mcpServers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: path.join(tmpRoot, "other-project") } } },
+      });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("repaired");
+      const written = readJson(cfg);
+      expect(written.mcpServers.comp.command).to.equal(bundledBinary);
+      expect(written.mcpServers.comp.command).to.not.equal(devBinary);
     });
 
     it("repairs the Cursor config whose comp entry sits at the document root", () => {
