@@ -10,7 +10,6 @@
 //   - type references (type dependencies)
 
 use anyhow::Result;
-use std::collections::HashMap;
 
 /// Dependency edge type
 #[derive(Debug, Clone)]
@@ -383,52 +382,7 @@ impl DependencyAnalyzer {
         Ok(deps)
     }
 
-    /// Resolve dependencies to node IDs
-    ///
-    /// # Arguments
-    /// - deps: Raw dependencies extracted from code
-    /// - symbol_map: Mapping of symbol names to node IDs (current file)
-    /// - imported_symbols: Mapping of imported modules to their exported symbols
-    ///
-    /// # Returns
-    /// - Vec<(from_node_id, to_node_id, edge_kind)>: Resolved node pairs for edge creation
-    ///
-    /// # Process:
-    /// 1. For each dependency, look up source node ID in symbol_map
-    /// 2. For each dependency, look up target in imported_symbols or symbol_map
-    /// 3. Return pairs that can be inserted as edges
-    // Retained as the same-file resolver; the indexer uses resolve_global.
-    #[allow(dead_code)]
-    pub fn resolve_dependencies(
-        deps: &[Dependency],
-        symbol_map: &HashMap<String, i64>,
-        _imported_symbols: &HashMap<String, HashMap<String, i64>>,
-    ) -> Vec<(i64, i64, String)> {
-        // TODO: Implement node ID resolution
-        // - Match symbol names to node IDs from symbol_map
-        // - Handle module.symbol notation by looking up in imported_symbols
-        // - Return only resolvable dependencies
-
-        let mut edges = Vec::new();
-
-        for dep in deps {
-            // Try to find source node ID
-            if let Some(&from_id) = symbol_map.get(&dep.from) {
-                // Try to find target node ID
-                // For now, just check symbol_map (same-file references)
-                if let Some(&to_id) = symbol_map.get(&dep.to) {
-                    edges.push((from_id, to_id, dep.kind.as_str().to_string()));
-                }
-            }
-        }
-
-        edges
-    }
-
     /// Resolve dependencies into edges using a cross-file global symbol index.
-    ///
-    /// This is the resolver used by the indexer (the older `resolve_dependencies`
-    /// only handles same-file references).
     ///
     /// # Arguments
     /// - deps: Raw dependencies extracted from one file's source
@@ -571,6 +525,7 @@ fn is_call_keyword(language: &str, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_extract_rust_dependencies() {
@@ -618,42 +573,6 @@ fs.readFile('test.txt', () => {});
         // Verify function calls are found
         let calls: Vec<_> = deps.iter().filter(|d| matches!(d.kind, EdgeKind::FunctionCall)).collect();
         assert!(!calls.is_empty(), "Should find method calls");
-    }
-
-    #[test]
-    fn test_resolve_dependencies() {
-        let mut symbol_map = HashMap::new();
-        symbol_map.insert("main".to_string(), 1);
-        symbol_map.insert("helper".to_string(), 2);
-
-        let deps = vec![Dependency {
-            from: "main".to_string(),
-            to: "helper".to_string(),
-            kind: EdgeKind::FunctionCall,
-            line: 5,
-        }];
-
-        let edges = DependencyAnalyzer::resolve_dependencies(&deps, &symbol_map, &HashMap::new());
-
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0], (1, 2, "function_call".to_string()));
-    }
-
-    #[test]
-    fn test_resolve_dependencies_unresolved() {
-        let symbol_map = HashMap::new(); // Empty map
-
-        let deps = vec![Dependency {
-            from: "main".to_string(),
-            to: "unknown".to_string(),
-            kind: EdgeKind::FunctionCall,
-            line: 5,
-        }];
-
-        let edges = DependencyAnalyzer::resolve_dependencies(&deps, &symbol_map, &HashMap::new());
-
-        // Unresolved dependencies should be skipped
-        assert_eq!(edges.len(), 0);
     }
 
     #[test]

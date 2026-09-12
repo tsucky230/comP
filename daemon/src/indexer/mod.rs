@@ -450,7 +450,6 @@ impl Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::dependency::{Dependency, EdgeKind};
 
     #[test]
     fn test_indexer_creation() {
@@ -583,31 +582,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_dependency_analyzer_resolve() {
-        // Test dependency resolution with symbol_map
-        let deps = vec![
-            Dependency {
-                from: "main".to_string(),
-                to: "helper".to_string(),
-                kind: EdgeKind::FunctionCall,
-                line: 5,
-            },
-        ];
-
-        let mut symbol_map = HashMap::new();
-        symbol_map.insert("main".to_string(), 1);
-        symbol_map.insert("helper".to_string(), 2);
-
-        let edges = DependencyAnalyzer::resolve_dependencies(&deps, &symbol_map, &HashMap::new());
-
-        // Verify edge is created with correct node IDs
-        assert_eq!(edges.len(), 1);
-        assert_eq!(edges[0].0, 1); // from_id
-        assert_eq!(edges[0].1, 2); // to_id
-        assert_eq!(edges[0].2, "function_call");
-    }
-
     /// 4-5: load_exclude_patterns returns empty Vec when config.json has no exclude key
     #[test]
     fn test_load_exclude_patterns_missing() {
@@ -662,28 +636,6 @@ mod tests {
         assert_eq!(total, 1, "only app.py should be found, env/ must be excluded");
 
         Ok(())
-    }
-
-    #[test]
-    fn test_dependency_analyzer_unresolved() {
-        // Test that unresolved dependencies are skipped
-        let deps = vec![
-            Dependency {
-                from: "main".to_string(),
-                to: "unknown".to_string(),
-                kind: EdgeKind::FunctionCall,
-                line: 5,
-            },
-        ];
-
-        let mut symbol_map = HashMap::new();
-        symbol_map.insert("main".to_string(), 1);
-        // "unknown" is not in symbol_map
-
-        let edges = DependencyAnalyzer::resolve_dependencies(&deps, &symbol_map, &HashMap::new());
-
-        // Unresolved dependencies should not create edges
-        assert_eq!(edges.len(), 0);
     }
 
     #[tokio::test]

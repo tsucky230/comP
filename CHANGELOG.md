@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Removed
+
+- **`dependency.rs`の`resolve_dependencies`（同一ファイル内解決のみ行う旧ロジック、`resolve_global`に代替済みでv0.11.3時点では`#[allow(dead_code)]`のまま残置）を削除**（`daemon/src/indexer/dependency.rs`、`daemon/src/indexer/mod.rs`）: 本番コード経路では既に未使用だったが、直接呼び出すユニットテストが4件（`dependency.rs`に2件、`indexer/mod.rs`に2件）残っており、削除には既存テストの削除が伴うため前回は保留していた。関数と4件のテストをまとめて削除し、あわせて不要になった`use`文（`dependency.rs`のトップレベル`HashMap`、`indexer/mod.rs`の`Dependency`/`EdgeKind`)を整理。Rust全186件（190件から対象の4件減）パス、clippy新規警告なし
+
 ## [0.11.3] - 2026-09-13
 
 ### Added
