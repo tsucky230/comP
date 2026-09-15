@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
-## [Unreleased]
+## [0.11.4] - 2026-09-15
+
+### Fixed
+
+- **VS Code Marketplace / Open VSXへのpublishがGitHub Actions上でタイムアウトし、CIはgreenのまま公開に失敗していた不具合を修正**（`.github/workflows/release.yml`）: v0.11.2・v0.11.3ともに`vsce publish`がMarketplace Gallery API（`/_apis/gallery`）との疎通確認で約3分後にタイムアウトしていた（既知issue: [microsoft/vscode-vsce#926](https://github.com/microsoft/vscode-vsce/issues/926)、vsce自体は自動リトライしない）。旧実装は`vsce publish | tee`のパイプ終了コードが`tee`自身の終了コード（常に0）に握りつぶされる構造で、vsce本体のタイムアウト失敗を検知できずジョブが成功扱いのまま完走していた（実際にMarketplace側は本修正時点で0.11.1のまま止まっていたことを確認済み）。`set -o pipefail`でパイプ内のvsce/ovsx本体の終了コードを正しく拾うようにし、あわせてvsce・ovsxそれぞれのpublishを最大3回リトライ（各試行間15秒待機、`already exists`検出時は成功扱いで即終了）するよう変更
 
 ### Removed
 

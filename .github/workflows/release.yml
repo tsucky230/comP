@@ -151,19 +151,59 @@ jobs:
 
       - name: Publish to VS Code Marketplace
         # secretsはif条件式で直接参照できないため、本家リポジトリの実行時のみ公開するように制御します
+        # vsceはMarketplace Gallery APIとの疎通確認で稀にタイムアウトすることがあり(既知issue: microsoft/vscode-vsce#926)、
+        # vsce自体は自動リトライしないためここで最大3回まで再試行する。
+        # また旧実装は `vsce publish | tee` のパイプ終了コードがteeの終了コード(常に0)に握りつぶされ、
+        # vsce本体がタイムアウト失敗してもジョブがgreenのまま完走するバグがあった(v0.11.2/v0.11.3で発生)。
+        # set -o pipefail で vsce 本体の終了コードを正しく拾う。
         if: github.repository == 'tsucky230/comP'
         run: |
-          if ! vsce publish -i comP-${{ github.ref_name }}.vsix --pat ${{ secrets.VSCE_PAT }} 2>&1 | tee /tmp/vsce_out.txt; then
-            grep -q "already exists" /tmp/vsce_out.txt && echo "Already published, skipping." || exit 1
+          set -o pipefail
+          published=false
+          for attempt in 1 2 3; do
+            echo "vsce publish attempt ${attempt}/3..."
+            if vsce publish -i comP-${{ github.ref_name }}.vsix --pat "$VSCE_PAT" 2>&1 | tee /tmp/vsce_out.txt; then
+              published=true
+              break
+            fi
+            if grep -q "already exists" /tmp/vsce_out.txt; then
+              echo "Already published, skipping."
+              published=true
+              break
+            fi
+            echo "vsce publish attempt ${attempt} failed."
+            [ "$attempt" -lt 3 ] && sleep 15
+          done
+          if [ "$published" != "true" ]; then
+            echo "::error::vsce publish failed after 3 attempts"
+            exit 1
           fi
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
       - name: Publish to Open VSX Registry
+        # 上のVS Code Marketplaceステップと同じ理由(タイムアウト再試行 + pipefail)でリトライ化。
         if: github.repository == 'tsucky230/comP'
         run: |
-          if ! npx ovsx publish comP-${{ github.ref_name }}.vsix -p ${{ secrets.OVSX_PAT }} 2>&1 | tee /tmp/ovsx_out.txt; then
-            grep -q "already exists" /tmp/ovsx_out.txt && echo "Already published, skipping." || exit 1
+          set -o pipefail
+          published=false
+          for attempt in 1 2 3; do
+            echo "ovsx publish attempt ${attempt}/3..."
+            if npx ovsx publish comP-${{ github.ref_name }}.vsix -p "$OVSX_PAT" 2>&1 | tee /tmp/ovsx_out.txt; then
+              published=true
+              break
+            fi
+            if grep -q "already exists" /tmp/ovsx_out.txt; then
+              echo "Already published, skipping."
+              published=true
+              break
+            fi
+            echo "ovsx publish attempt ${attempt} failed."
+            [ "$attempt" -lt 3 ] && sleep 15
+          done
+          if [ "$published" != "true" ]; then
+            echo "::error::ovsx publish failed after 3 attempts"
+            exit 1
           fi
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
