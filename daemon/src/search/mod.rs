@@ -30,20 +30,25 @@ pub struct SearchResult {
     pub line: u32,
 }
 
-/// Helper: Tokenize text (camelCase, snake_case, SCREAMING_CASE)
+/// Helper: Tokenize text (camelCase, snake_case, SCREAMING_CASE, whitespace-separated words)
 ///
 /// # Examples
 /// - "getAuthToken" → ["get", "auth", "token"]
 /// - "snake_case" → ["snake", "case"]
 /// - "HTTPServer" → ["http", "server"]
+/// - "fix JWT validation bug" → ["fix", "jwt", "validation", "bug"]
 fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
 
     let chars: Vec<char> = text.chars().collect();
     for (i, &ch) in chars.iter().enumerate() {
-        if ch == '_' || ch == '-' {
-            // Separator: flush current token
+        if !ch.is_alphanumeric() {
+            // Separator: whitespace, underscore, hyphen, punctuation all flush
+            // the current token. Without this, a multi-word natural-language
+            // query (the normal shape of a run_pipeline `task`) collapses into
+            // one giant space-joined pseudo-token that never matches the
+            // single-word tokens derived from symbol names.
             if !current.is_empty() {
                 tokens.push(current.to_lowercase());
                 current.clear();
@@ -649,5 +654,112 @@ mod tests {
 
         let matches = engine.fuzzy_match("auth", &symbols);
         assert_eq!(matches.len(), 2); // Case insensitive matching
+    }
+
+    // --- Reproduction for GitHub issue #7 ---
+    // https://github.com/tsucky230/comP/issues/7
+    // Claim: TF-IDF cosine similarity has no document-length normalization,
+    // so a header-rich Markdown file systematically outranks small, genuinely
+    // on-topic files across unrelated queries.
+
+    #[test]
+    fn test_tokenize_multiword_query_is_not_split_on_whitespace() {
+        // WHY this matters for issue #7: run_pipeline (mcp/mod.rs) passes the
+        // raw multi-word task string directly into SearchEngine::search(),
+        // which calls tokenize() on it. If tokenize() does not treat spaces
+        // as separators, a natural-language task like "fix JWT validation bug"
+        // never breaks into ["fix", "jwt", "validation", "bug"] and instead
+        // collapses into one or two multi-word strings that will almost never
+        // match single-word, camelCase/snake_case-derived symbol tokens.
+        let tokens = tokenize("fix JWT validation bug");
+        println!("tokenize(\"fix JWT validation bug\") = {:?}", tokens);
+
+        // If this assertion fails, tokenize() is NOT splitting on whitespace,
+        // meaning the TF-IDF path is effectively a no-op for realistic
+        // multi-word queries (a separate, more severe bug than issue #7 itself).
+        assert_eq!(
+            tokens,
+            vec!["fix", "jwt", "validation", "bug"],
+            "tokenize() does not split on whitespace as a real search engine would need"
+        );
+    }
+
+    #[test]
+    fn test_issue7_header_rich_markdown_vs_focused_files() {
+        use crate::indexer::doc_parser::DocumentParser;
+
+        // A header-rich Markdown file resembling CONTRIBUTING.md: many
+        // headings that repeat shared project jargon ("MCP", "Tool",
+        // "Development", "Testing") across multiple sections.
+        let md = "# Contributing to comP\n\
+## Code of Conduct\n\
+## Reporting Bugs\n\
+## Suggesting Features\n\
+## Setting Up the Development Environment\n\
+## Prerequisites\n\
+## Clone and Install\n\
+## Build\n\
+## Packaging a Local VSIX\n\
+## Watch Mode\n\
+## Testing\n\
+## Linting\n\
+## Debug in VSCode\n\
+## Submitting Changes\n\
+## Branch Naming\n\
+## Commit Messages\n\
+## Pull Request Process\n\
+## Pull Request Checklist\n\
+## Code Style\n\
+## Documentation\n\
+## Release Process\n\
+## MCP Server Development\n\
+## MCP Tool Development Checklist\n\
+## Example: Adding a New MCP Tool\n\
+## Testing MCP Servers\n\
+## Getting Help\n\
+## Recognition\n";
+
+        let md_symbols = DocumentParser::parse_markdown(md).unwrap();
+        assert!(md_symbols.len() >= 20, "fixture should have 20+ headings like the issue's repro steps");
+
+        let mut symbols: Vec<(String, String, String, u32)> = md_symbols
+            .iter()
+            .map(|s| ("CONTRIBUTING.md".to_string(), s.name.clone(), s.kind.as_str().to_string(), s.line))
+            .collect();
+
+        // Two small, genuinely on-topic files for two unrelated queries.
+        symbols.push(("daemon/src/mcp/tool_handler.rs".to_string(), "handleNewMcpTool".to_string(), "function".to_string(), 5));
+        symbols.push(("daemon/src/auth/jwt.rs".to_string(), "validateJwtToken".to_string(), "function".to_string(), 5));
+
+        let mut engine = SearchEngine::new();
+        engine.build_index(&symbols).unwrap();
+
+        let results_a = engine.search("add new mcp tool", 10).unwrap();
+        let results_b = engine.search("validate jwt token", 10).unwrap();
+
+        println!(
+            "Query A (\"add new mcp tool\") results: {:?}",
+            results_a.iter().map(|r| (r.file_path.clone(), r.score)).collect::<Vec<_>>()
+        );
+        println!(
+            "Query B (\"validate jwt token\") results: {:?}",
+            results_b.iter().map(|r| (r.file_path.clone(), r.score)).collect::<Vec<_>>()
+        );
+
+        // Once tokenize() splits on whitespace (see
+        // test_tokenize_multiword_query_is_not_split_on_whitespace), real
+        // cosine similarity already length-normalizes correctly: the small,
+        // precisely on-topic file outranks the header-rich Markdown file even
+        // though one of its headings shares several words with the query.
+        assert_eq!(
+            results_a.first().map(|r| r.file_path.as_str()),
+            Some("daemon/src/mcp/tool_handler.rs"),
+            "on-topic file must outrank CONTRIBUTING.md for query A: {:?}", results_a
+        );
+        assert_eq!(
+            results_b.first().map(|r| r.file_path.as_str()),
+            Some("daemon/src/auth/jwt.rs"),
+            "on-topic file must outrank CONTRIBUTING.md for query B: {:?}", results_b
+        );
     }
 }

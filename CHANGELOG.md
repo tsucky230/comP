@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
+## [0.11.5] - 2026-09-16
+
+### Fixed
+
+- **`run_pipeline`のpivot_files順序に関連度スコアが一切なく、見出しの多いMarkdownファイルが無関係なクエリでも上位を独占する不具合を修正（#7）**（`daemon/src/mcp/mod.rs`、`daemon/src/search/mod.rs`）。issue本文はTF-IDFコサイン類似度の文書長正規化欠如を原因として疑っていたが、実際に再現テストで検証したところ真因は別だった:
+  1. `daemon/src/search/mod.rs`の`tokenize()`が空白を区切り文字として扱っておらず、複数単語の自然文タスク（`run_pipeline`の`task`の通常の形）がTF-IDF層で単一の空白混じりトークンに潰れ、実質的に何にもマッチしない死んだコードパスになっていた。空白も区切り文字として扱うよう修正
+  2. `handle_run_pipeline`のLIKEキーワード検索マージ処理に関連度スコアが一切なく、キーワードを順番に処理して初出のファイルを候補リストの前方に置くだけだった。見出しの多いファイルほど「どれかのキーワードに偶然一致する」チャンスが多く、早い順番のキーワードで一致すると後続キーワードでしか一致しない的確な小ファイルより先に候補へ入っていた
+  3. 上記2点を修正しつつ、LIKEキーワード一致（コーパス内での希少性 × ファイルのシンボル数による長さペナルティ）・TF-IDFコサイン類似度・BM25全文検索（Markdown/Office/PDF/jsonlのみ対象）を単一の正規化済みスコアに統合し、候補を一括ソートするよう再設計。BM25はコード系ファイルには元々計算されないため、対象外ファイルはBM25分の重みをLIKE/TF-IDFへ再配分し、ドキュメント系ファイルが常に得をする逆方向のバイアスを回避
+  4. 副次的に発見: `handle_force_reindex`がグラフDBのみ再構築しTF-IDFインデックス（`search_engine`）を再構築していなかったため、デーモン起動後の強制再インデックスではTF-IDFが起動時のまま古くなっていた。再構築処理を追加
+- **Geminiクロスレビューで発見・修正**: タスク文の単語がすべて3文字未満（例:「ui」「db」）の場合に`keywords`が空になり、`like_hit_counts`/`like_matched_keywords`が一切構築されずLIKEスコアが常に0になっていた。さらにBM25も同条件でスキップされるため、ドキュメント系ファイルは`0.3*bm25(=0)`込みの式、コード系ファイルは`(LIKE+TFIDF)/0.7`の再正規化式という非対称な扱いになり、同一の関連度でもコード系ファイルが約1.43倍（1/0.7）有利になる逆方向のバイアスが生じていた。空語彙クエリでもタスク文全体を単一キーワードとして扱うよう修正し、BM25が実際に実行されたかどうか（`bm25_available`）に応じて全ファイルへ同一の重み配分式を適用するよう変更。あわせてLIKE検索1件あたりの取得上限を5→50に引き上げ、希少性スコアの分解能を改善
+- 回帰テスト追加: `search::tests::test_tokenize_multiword_query_is_not_split_on_whitespace`、`search::tests::test_issue7_header_rich_markdown_vs_focused_files`、`mcp::tests::test_issue7_header_rich_markdown_dominates_unrelated_queries`（実際の`handle_run_pipeline`をE2Eで検証）、`mcp::tests::test_exact_heading_match_still_surfaces_markdown_file`（見出し完全一致検索の非劣化を保証）、`mcp::tests::test_short_query_does_not_bias_against_doc_files`（Geminiクロスレビュー起因の回帰防止）
+
 ## [0.11.4] - 2026-09-15
 
 ### Fixed

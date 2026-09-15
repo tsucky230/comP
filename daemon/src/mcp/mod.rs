@@ -1423,19 +1423,59 @@ impl MCPServer {
             .filter(|w| w.len() >= 3)
             .collect();
 
+        // Per-keyword hit count feeds the LIKE relevance score below (see
+        // `like_score_for`): a keyword that matches many files (e.g. "add",
+        // "new", "test") is generic and should count for less than one that
+        // matches only a handful (e.g. "jwt", "lru"). This is what keeps a
+        // header-rich Markdown file (many headings = many chances to match a
+        // generic word) from outranking a small, precisely on-topic file —
+        // see https://github.com/tsucky230/comP/issues/7.
+        let mut like_hit_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut like_matched_keywords: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+        // WHY 50 not 5: this count also feeds `like_score_for`'s specificity
+        // weighting (1 / hit_count). Capping too low (an earlier version used
+        // 5) makes every keyword that matches more than a handful of files
+        // bottom out at the same floor weight, blunting the distinction
+        // between "somewhat common" and "extremely generic" keywords — found
+        // during Gemini cross-review of this fix (issue #7).
+        const LIKE_QUERY_LIMIT: usize = 50;
+
         let mut all_hits: Vec<(String, String, String, i32)> = if keywords.is_empty() {
-            self.state.graph_db.search_symbols_by_name(task, 10)?
+            let task_hits = self.state.graph_db.search_symbols_by_name(task, 10)?;
+            // WHY: without this, a query with no word >= 3 chars (e.g. "s3",
+            // "db") left like_hit_counts/like_matched_keywords empty, so
+            // like_score_for returned 0.0 for every file — found during Gemini
+            // cross-review. That silently broke the doc/code weight
+            // renormalization below too, since it assumes "no BM25 signal"
+            // only happens for non-doc files; treat the whole task as one
+            // keyword so this branch is scored the same way as the normal one.
+            let key = task.to_lowercase();
+            like_hit_counts.insert(key.clone(), task_hits.len().max(1));
+            for hit in &task_hits {
+                like_matched_keywords.entry(hit.0.clone()).or_default().insert(key.clone());
+            }
+            task_hits
         } else {
             let mut merged = Vec::new();
             for kw in &keywords {
-                merged.extend(self.state.graph_db.search_symbols_by_name(kw, 5)?);
+                let kw_hits = self.state.graph_db.search_symbols_by_name(kw, LIKE_QUERY_LIMIT)?;
+                like_hit_counts.insert(kw.to_lowercase(), kw_hits.len().max(1));
+                for hit in &kw_hits {
+                    like_matched_keywords
+                        .entry(hit.0.clone())
+                        .or_default()
+                        .insert(kw.to_lowercase());
+                }
+                merged.extend(kw_hits);
             }
             merged
         };
         // Augment LIKE hits with TF-IDF semantic results (may find files not matched by exact LIKE)
+        let mut tfidf_scores: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
         {
             let se = self.state.search_engine.lock().await;
             for hit in se.search(task, 20).unwrap_or_default() {
+                tfidf_scores.entry(hit.file_path.clone()).or_insert(hit.score);
                 all_hits.push((hit.file_path, hit.symbol_name, hit.kind, hit.line as i32));
             }
         }
@@ -1506,7 +1546,17 @@ impl MCPServer {
         // WHY: Symbol LIKE queries only match headings, missing body content keywords.
         //      We read Markdown/Office files and score using BM25, then add to candidates.
         let mut bm25_hit_count: usize = 0;
-        if !doc_paths.is_empty() && !keywords.is_empty() {
+        let mut bm25_scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        // WHY track this explicitly rather than re-deriving it below: when
+        // BM25 never ran at all for this query (no doc files in the corpus,
+        // or no keyword long enough to search — e.g. task = "s3"), doc-type
+        // files must NOT be scored via the BM25-inclusive formula below with
+        // an implicit bm25=0.0. That would silently apply a smaller effective
+        // weight to every doc file than every code file gets from the
+        // renormalized (0.4*like+0.3*tfidf)/0.7 formula, reintroducing a bias
+        // in the opposite direction — found during Gemini cross-review.
+        let bm25_available = !doc_paths.is_empty() && !keywords.is_empty();
+        if bm25_available {
             let workspace_root = self.state.workspace_root.clone();
             let bm25_hits = crate::indexer::doc_parser::Bm25Scorer::search_files(
                 &workspace_root,
@@ -1515,6 +1565,9 @@ impl MCPServer {
                 20,
             );
             bm25_hit_count = bm25_hits.len();
+            for (path, score) in &bm25_hits {
+                bm25_scores.insert(path.clone(), *score);
+            }
             for (path, _score) in bm25_hits {
                 recorded_files.push(path.clone());
                 if seen.insert(path.clone()) {
@@ -1528,6 +1581,87 @@ impl MCPServer {
                 }
             }
         }
+
+        // Rank all collected candidates by a single normalized relevance score
+        // combining LIKE-keyword specificity, TF-IDF cosine similarity, and
+        // BM25 full-text relevance (see issue #7: candidates previously kept
+        // whatever order they were first inserted in, with no actual scoring).
+        //
+        // BM25's raw score is unbounded and is saturated into [0, 1) via
+        // score/(score+K) rather than min-max normalized against this call's
+        // own hits: with min-max, a file that happens to be the *only* BM25
+        // hit for a query always normalizes to a perfect 1.0 regardless of how
+        // weak its actual match is, which is a common case (most queries only
+        // surface one relevant doc file) and would silently re-inflate exactly
+        // the doc-file bias this rework is meant to remove.
+        const BM25_SATURATION_K: f64 = 2.0;
+        let doc_path_set: std::collections::HashSet<&str> =
+            doc_paths.iter().map(|s| s.as_str()).collect();
+        let like_score_for = |file: &str| -> f32 {
+            match like_matched_keywords.get(file) {
+                None => 0.0,
+                Some(matched) => {
+                    let raw: f32 = matched
+                        .iter()
+                        .map(|kw| 1.0 / *like_hit_counts.get(kw).unwrap_or(&1) as f32)
+                        .sum();
+                    // WHY length-penalize: a file with many symbols (e.g. every
+                    // heading in a header-rich Markdown file) has many more
+                    // chances to contain any given keyword than a small,
+                    // precisely on-topic file with one or two symbols. Without
+                    // this, `raw` alone rewards verbosity exactly like the
+                    // un-normalized cosine similarity issue #7 originally
+                    // suspected (that theory turned out to point at the wrong
+                    // code path, but the missing length normalization was real
+                    // — it was just here, in the LIKE tier, not in TF-IDF).
+                    let sym_count = path_to_id
+                        .get(file)
+                        .and_then(|id| symbol_counts.get(id))
+                        .copied()
+                        .unwrap_or(1)
+                        .max(1) as f32;
+                    let length_penalty = 1.0 + sym_count.ln();
+                    // Best case: every keyword matched this file, each uniquely (hit count 1),
+                    // in a single-symbol file (no length penalty).
+                    let max_possible = keywords.len().max(1) as f32;
+                    (raw / (length_penalty * max_possible)).min(1.0)
+                }
+            }
+        };
+        // WHY renormalize per file type: BM25 is only ever computed for
+        // Markdown/Office/PDF/jsonl files (`doc_paths`) — a code file's BM25
+        // "score" isn't a low-relevance signal, it's a signal that was never
+        // computed at all. Giving it a flat 0.3 weight for every file would
+        // silently penalize every code file relative to every doc file
+        // regardless of true relevance, reintroducing a doc-vs-code bias by a
+        // different route. Only files eligible for BM25 include it in the mix;
+        // everyone else's weight is redistributed across LIKE + TF-IDF.
+        let combined_score_for = |file: &str| -> f32 {
+            let like = like_score_for(file);
+            let tfidf = tfidf_scores.get(file).copied().unwrap_or(0.0);
+            if bm25_available && doc_path_set.contains(file) {
+                let raw_bm25 = bm25_scores.get(file).copied().unwrap_or(0.0);
+                let bm25 = if raw_bm25 > 0.0 {
+                    (raw_bm25 / (raw_bm25 + BM25_SATURATION_K)) as f32
+                } else {
+                    0.0
+                };
+                0.4 * like + 0.3 * tfidf + 0.3 * bm25
+            } else {
+                (0.4 * like + 0.3 * tfidf) / 0.7
+            }
+        };
+        let score_map: std::collections::HashMap<String, f32> = candidates
+            .iter()
+            .map(|(path, _, _)| (path.clone(), combined_score_for(path)))
+            .collect();
+        // Stable sort: candidates with equal (e.g. zero) score keep their
+        // original relative order rather than being shuffled arbitrarily.
+        candidates.sort_by(|(a, _, _), (b, _, _)| {
+            score_map.get(b).unwrap_or(&0.0)
+                .partial_cmp(score_map.get(a).unwrap_or(&0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Git diff boost: move currently-modified files to the front of candidates.
         // Files in `git diff HEAD` are the ones the agent is actively working on, so they
@@ -2172,6 +2306,18 @@ impl MCPServer {
         // No-op if the marker was never set.
         if let Err(e) = self.state.graph_db.clear_recovery_marker() {
             log::warn!("failed to clear index recovery marker after force reindex: {}", e);
+        }
+
+        // WHY: main()'s startup task rebuilds the TF-IDF search_engine after its
+        // own indexing pass, but handle_force_reindex previously only rebuilt the
+        // graph DB. Without this, TF-IDF results (and therefore run_pipeline's
+        // combined ranking score) would keep scoring every file 0.0 and go stale
+        // after any force re-index that runs later than process startup.
+        if let Ok(all_symbols) = self.state.graph_db.get_all_symbols_for_search() {
+            let mut se = self.state.search_engine.lock().await;
+            if let Err(e) = se.build_index(&all_symbols) {
+                log::warn!("TF-IDF index build failed during force reindex: {}", e);
+            }
         }
 
         let (files, nodes, edges) = self.state.graph_db.get_stats()?;
@@ -4543,6 +4689,192 @@ mod tests {
             0,
             "git_diff_boosted must be 0 when not in a git repo"
         );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    // ---- GitHub issue #7 reproduction: header-rich Markdown dominating unrelated queries ----
+    // https://github.com/tsucky230/comP/issues/7
+    // Runs the real end-to-end run_pipeline path (LIKE keyword search + TF-IDF +
+    // BM25 + candidate merge) against a CONTRIBUTING.md-style file with 20+
+    // headings, alongside two small files that are each precisely on-topic for
+    // one of two queries about application-specific topics CONTRIBUTING.md
+    // never mentions in any heading or body sentence. If the header-rich file
+    // still ranks #1 ahead of the genuinely on-topic file for both queries —
+    // purely because it has more symbols and therefore more chances to match
+    // some keyword — the issue reproduces end-to-end.
+    #[tokio::test]
+    async fn test_issue7_header_rich_markdown_dominates_unrelated_queries() {
+        let temp_dir = std::env::temp_dir().join("comP_test_issue7_ranking_bug");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let md = "# Contributing to comP\n\
+## Code of Conduct\nBe respectful.\n\
+## Reporting Bugs\nOpen an issue with steps to reproduce.\n\
+## Suggesting Features\nStart a discussion.\n\
+## Setting Up the Development Environment\nClone the repo and install dependencies.\n\
+## Prerequisites\nNode 18 and Rust 1.70 are required.\n\
+## Clone and Install\nRun npm install after cloning.\n\
+## Build\nCompile the TypeScript extension and Rust daemon.\n\
+## Packaging a Local VSIX\nUse npm run package local for testing.\n\
+## Watch Mode\nWatch TypeScript and Rust changes in two terminals.\n\
+## Testing\nRun cargo test and npm test.\n\
+## Linting\nCheck Markdown formatting.\n\
+## Debug in VSCode\nPress F5 to start debugging.\n\
+## Submitting Changes\nUse conventional branch names.\n\
+## Branch Naming\nPrefix with feature bugfix or docs.\n\
+## Commit Messages\nFollow the conventional commit format.\n\
+## Pull Request Process\nOpen an issue before starting a big change.\n\
+## Pull Request Checklist\nConfirm tests and docs are updated.\n\
+## Code Style\nUse rustfmt and strict TypeScript.\n\
+## Documentation\nUpdate the architecture doc when needed.\n\
+## Release Process\nBump the version and tag the release.\n\
+## MCP Server Development\nDefine new tools in mcp mod rs.\n\
+## MCP Tool Development Checklist\nTest every new tool with multiple agents.\n\
+## Example Adding a New MCP Tool\nRegister the handler and update docs.\n\
+## Testing MCP Servers\nVerify with Claude Code or Cursor.\n\
+## Getting Help\nCheck the discussions board.\n\
+## Recognition\nContributors are listed in the README.\n";
+        std::fs::write(temp_dir.join("CONTRIBUTING.md"), md).unwrap();
+
+        // Precisely on-topic for query A ("sqlite connection pool leaks handles
+        // under load"). None of these words appear anywhere in CONTRIBUTING.md.
+        std::fs::write(
+            temp_dir.join("connection_pool.rs"),
+            "pub fn releaseConnectionPool(handle: u32) -> bool {\n    handle > 0\n}\n",
+        ).unwrap();
+        // Precisely on-topic for query B ("cli output truncates unicode
+        // filenames on windows"). Also absent from CONTRIBUTING.md entirely.
+        std::fs::write(
+            temp_dir.join("path_utils.rs"),
+            "pub fn truncateUnicodeFilename(name: &str) -> String {\n    name.to_string()\n}\n",
+        ).unwrap();
+
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.unwrap());
+        let server = MCPServer::new(state);
+        server.handle_force_reindex().await.expect("force reindex failed");
+
+        let result_a = server.handle_run_pipeline(json!({
+            "task": "sqlite connection pool leaks handles under load",
+            "max_tokens": 8000
+        })).await.unwrap();
+        let result_b = server.handle_run_pipeline(json!({
+            "task": "cli output truncates unicode filenames on windows",
+            "max_tokens": 8000
+        })).await.unwrap();
+
+        let paths_a: Vec<&str> = result_a["pivot_files"].as_array().unwrap().iter()
+            .filter_map(|f| f["path"].as_str()).collect();
+        let paths_b: Vec<&str> = result_b["pivot_files"].as_array().unwrap().iter()
+            .filter_map(|f| f["path"].as_str()).collect();
+
+        println!("Query A pivot_files order: {:?}", paths_a);
+        println!("Query B pivot_files order: {:?}", paths_b);
+
+        assert_eq!(
+            paths_a.first(), Some(&"connection_pool.rs"),
+            "connection_pool.rs (the genuinely on-topic file) must rank first for query A, \
+             not CONTRIBUTING.md (issue #7): {:?}", paths_a
+        );
+        assert_eq!(
+            paths_b.first(), Some(&"path_utils.rs"),
+            "path_utils.rs (the genuinely on-topic file) must rank first for query B, \
+             not CONTRIBUTING.md (issue #7): {:?}", paths_b
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Regression guard for the issue #7 fix: a query naming an exact heading
+    /// must still surface that Markdown file quickly via the LIKE tier. The
+    /// length penalty in `like_score_for` must not overcorrect into hiding
+    /// genuinely relevant documentation just because the file has many
+    /// headings.
+    #[tokio::test]
+    async fn test_exact_heading_match_still_surfaces_markdown_file() {
+        let temp_dir = std::env::temp_dir().join("comP_test_heading_exact_match");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let md = "# Contributing to comP\n\
+## Code of Conduct\nBe respectful.\n\
+## Reporting Bugs\nOpen an issue with steps to reproduce.\n\
+## Suggesting Features\nStart a discussion.\n\
+## Setting Up the Development Environment\nClone the repo and install dependencies.\n\
+## Prerequisites\nNode 18 and Rust 1.70 are required.\n\
+## Installation\nRun npm install to set up the project locally.\n\
+## Build\nCompile the TypeScript extension and Rust daemon.\n\
+## Testing\nRun cargo test and npm test.\n\
+## Linting\nCheck Markdown formatting.\n\
+## Submitting Changes\nUse conventional branch names.\n\
+## Code Style\nUse rustfmt and strict TypeScript.\n\
+## Documentation\nUpdate the architecture doc when needed.\n\
+## Release Process\nBump the version and tag the release.\n\
+## Getting Help\nCheck the discussions board.\n";
+        std::fs::write(temp_dir.join("CONTRIBUTING.md"), md).unwrap();
+        std::fs::write(
+            temp_dir.join("unrelated.rs"),
+            "pub fn computeChecksum(data: &[u8]) -> u32 {\n    data.len() as u32\n}\n",
+        ).unwrap();
+
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.unwrap());
+        let server = MCPServer::new(state);
+        server.handle_force_reindex().await.expect("force reindex failed");
+
+        let result = server.handle_run_pipeline(json!({
+            "task": "installation instructions",
+            "max_tokens": 8000
+        })).await.unwrap();
+
+        let paths: Vec<&str> = result["pivot_files"].as_array().unwrap().iter()
+            .filter_map(|f| f["path"].as_str()).collect();
+        assert_eq!(
+            paths.first(), Some(&"CONTRIBUTING.md"),
+            "a query naming an exact heading must still rank that Markdown file first: {:?}", paths
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Regression guard from Gemini cross-review of the issue #7 fix: a query
+    /// with no keyword >= 3 chars (e.g. "ui") takes the `keywords.is_empty()`
+    /// branch, which never populated `like_hit_counts`/`like_matched_keywords`
+    /// and always skipped BM25. Combined with the doc/non-doc weight
+    /// renormalization, every Markdown/Office file was silently scored via a
+    /// smaller effective weight (0.3 fixed) than every code file (1/0.7 ≈
+    /// 1.43x boost) for any such query, regardless of true relevance — an
+    /// exact inverse of the bias issue #7 was about. Both files matching here
+    /// must still be considered (neither silently dropped), proving the short
+    /// query path participates in scoring instead of being a scored-as-zero
+    /// dead branch for one file type.
+    #[tokio::test]
+    async fn test_short_query_does_not_bias_against_doc_files() {
+        let temp_dir = std::env::temp_dir().join("comP_test_short_query_bias");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        std::fs::write(temp_dir.join("faq.md"), "# FAQ\n## UI Guide\nHow to use the interface.\n").unwrap();
+        std::fs::write(
+            temp_dir.join("widgets.rs"),
+            "pub fn buildUiPanel(id: u32) -> bool {\n    id > 0\n}\n",
+        ).unwrap();
+
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.unwrap());
+        let server = MCPServer::new(state);
+        server.handle_force_reindex().await.expect("force reindex failed");
+
+        let result = server.handle_run_pipeline(json!({
+            "task": "ui",
+            "max_tokens": 8000
+        })).await;
+        assert!(result.is_ok(), "run_pipeline must not error on a query with no keyword >= 3 chars");
+
+        let response = result.unwrap();
+        let paths: Vec<&str> = response["pivot_files"].as_array().unwrap().iter()
+            .filter_map(|f| f["path"].as_str()).collect();
+        assert!(paths.contains(&"faq.md"), "the matching Markdown file must not be dropped: {:?}", paths);
+        assert!(paths.contains(&"widgets.rs"), "the matching code file must not be dropped: {:?}", paths);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
