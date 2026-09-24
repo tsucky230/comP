@@ -1155,6 +1155,22 @@ fn is_poisoned_mutex_error(e: &anyhow::Error) -> bool {
     e.to_string().contains("DB mutex poisoned")
 }
 
+/// JSON-RPC error response for a handler failure. The detail is put in `message`
+/// as well as `data` because MCP clients such as Claude Code show only `message`;
+/// with a bare "Internal error" a missing argument (e.g. `query` instead of
+/// `task`) is indistinguishable from a broken daemon.
+fn internal_error_response(id: &Value, e: &anyhow::Error) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": -32603,
+            "message": format!("Internal error: {}", e),
+            "data": e.to_string()
+        }
+    })
+}
+
 /// Build the JSON-RPC response for one already-read `line`, as emitted by the
 /// stdio loop in `run_degraded_server`. Returns `None` when no response must
 /// be sent at all — a notification (valid JSON-RPC with no `id`) must never
@@ -1344,15 +1360,7 @@ impl MCPServer {
                     "id": id,
                     "result": result_value
                 }),
-                Err(e) => json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": {
-                        "code": -32603,
-                        "message": "Internal error",
-                        "data": e.to_string()
-                    }
-                }),
+                Err(e) => internal_error_response(&id, &e),
             };
 
             // Write response
@@ -5339,6 +5347,39 @@ mod tests {
         let results = run_compact_history(temp_dir.to_str().unwrap()).unwrap();
         assert!(results.is_empty());
 
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_internal_error_response_puts_detail_in_message() {
+        let e = anyhow!("Missing 'task' parameter");
+        let r = internal_error_response(&json!(7), &e);
+        assert_eq!(r["error"]["code"], -32603);
+        assert_eq!(r["error"]["message"], "Internal error: Missing 'task' parameter");
+    }
+
+    #[test]
+    fn test_internal_error_response_keeps_data_and_id() {
+        let e = anyhow!("Missing 'task' parameter");
+        let r = internal_error_response(&json!("abc"), &e);
+        assert_eq!(r["error"]["data"], "Missing 'task' parameter");
+        assert_eq!(r["id"], "abc");
+        assert_eq!(r["jsonrpc"], "2.0");
+    }
+
+    #[tokio::test]
+    async fn test_tools_call_missing_task_reports_parameter_name() {
+        let temp_dir = std::env::temp_dir().join("comP_test_mcp_internal_error_detail");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state);
+        let err = server
+            .handle_tools_call(json!({ "name": "run_pipeline", "arguments": { "query": "x" } }))
+            .await
+            .unwrap_err();
+        let r = internal_error_response(&json!(1), &err);
+        assert!(r["error"]["message"].as_str().unwrap().contains("'task'"));
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 

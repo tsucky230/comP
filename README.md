@@ -406,6 +406,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.11.3** | **Exact token counting in run_pipeline via tiktoken-rs, Gemini CLI config auto-repair** | ✅ Released |
 | **v0.11.4** | **Fixed VS Code Marketplace / Open VSX publish silently failing on Gallery API timeout in CI** | ✅ Released |
 | **v0.11.5** | **Fixed run_pipeline ranking bias where header-rich Markdown files dominated unrelated search results (#7)** | ✅ Released |
+| **v0.11.6** | **Tool errors now show the cause (e.g. `Missing 'task' parameter`) instead of a bare "Internal error"** | ✅ Released |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---

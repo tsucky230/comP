@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
+## [0.11.6] - 2026-09-24
+
+### Fixed
+
+- **ツール呼び出しの失敗が、Claude Codeなどのクライアントで原因の分からない「Internal error」としか表示されない問題を修正**（`daemon/src/mcp/mod.rs`）: 詳細（例: `Missing 'task' parameter`）は`error.data`にのみ入っており、クライアントは`error.message`しか表示しないため、引数名の誤り（`task`を`query`で呼ぶなど）がデーモンの故障と区別できなかった。`message`を`Internal error: <詳細>`に変更（`code`と`data`は従来どおり）。エラー応答の組み立ては`internal_error_response`に切り出した
+- 回帰テスト追加: `mcp::tests::test_internal_error_response_puts_detail_in_message`、`mcp::tests::test_internal_error_response_keeps_data_and_id`、`mcp::tests::test_tools_call_missing_task_reports_parameter_name`。Rust全194件パス
+
 ## [0.11.5] - 2026-09-16
 
 ### Fixed
