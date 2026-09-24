@@ -209,3 +209,22 @@ recall is meant to save.
 
 **Recommended**: call `session_recall` at the start of a new session, or when
 resuming work, to check the previous request and how it was handled.
+
+## Errors
+
+A failed tool call returns a JSON-RPC error with `code` `-32603`. Since **v0.11.6** the
+cause is part of `message` (for example `Internal error: Missing 'task' parameter`);
+`data` carries the same text. Before v0.11.6 `message` was always a bare
+`Internal error`, which most MCP clients display as-is, so a wrong argument name
+looked like a broken daemon.
+
+The most common cause is a wrong or missing argument name. Check it first:
+
+| Tool | Required arguments |
+| --- | --- |
+| `run_pipeline` | `task` |
+| `get_context` | `query` |
+| `get_impact_graph` | `symbol_id` (numeric) |
+| `get_dependencies` | `name`, `direction` (`in` or `out`) |
+| `get_symbol` | `name` |
+| `get_file_summary` | `file_path` |
