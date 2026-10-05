@@ -4,6 +4,7 @@ comP は、AI エージェントとの会話を1往復ずつ `.comp/history/` �
 
 - 状態: β版（v0.11.6 の次の版で入る予定。2026-10-05 時点では `feat/record-turn` ブランチ）
 - 対象読者: comP の開発者・保守者
+- 利用者向けの手引き: [docs/user/BETA_FEATURES_ja.md](../user/BETA_FEATURES_ja.md)（英語版 [BETA_FEATURES.md](../user/BETA_FEATURES.md)）
 
 ## 背景: 配布版の comP では、comP リポジトリ以外の会話がまったく記録されていなかった
 
@@ -83,7 +84,7 @@ Gemini CLI は、1回のフックで依頼と応答の両方が JSON で届く�
 
 β版のうちに把握しておくべき制約が4つある。
 
-1. **Claude Code 本体での動作確認がまだ終わっていない。** 本物の transcript を使った単体の実行では、記録できることを確かめた。しかし Claude Code が `settings.local.json` のフックを実際に起動するかは、まだ見ていない。
+1. **本体での動作確認は Windows だけで済んでいる。** 2026-10-05 に、Windows 11 と Claude Code 2.1.172 で、YASAKANI リポジトリに初期設定と同じ処理でフックを入れ、`claude -p` を2回動かした。記録ONでは往復の終わりにフックが起動して `.comp/history/` に1行記録され（`agent=claude-code`、依頼と応答の本文つき）、`.comp/config.json` だけOFFに変えると、フックが残っていても何も記録されなかった。macOS ではまだ確かめていない。
 2. **VS Code の Copilot が `record-turn` を呼ぶ可能性がある。** 設定 `chat.useClaudeHooks` を有効にすると、Copilot は `.claude/settings.local.json` のフックも実行する（VS Code の公式文書による）。そうなると Copilot の会話が `claude-code` として記録されるか、形式が合わずに記録されないかのどちらかになる。どちらになるかは未確認だ。
 3. **履歴は増える一方になる。** 今の `compact-history` は、まったく同じ行を消すだけだ。記録を常に続けると、`log-YYYY-MM.jsonl` は月ごとに大きくなり続ける。
 4. **他のリポジトリで使えるのは、新しい VSIX を配布してからになる。** 初期設定が書くフックは、拡張機能に同梱された本体を呼ぶ。0.11.6 以前の本体には `record-turn` がない。なお comP リポジトリ自身の `history-record.sh` も `record-turn` を呼ぶので、開発中に記録したいときは、このリポジトリでも設定をONにしておく必要がある。
@@ -92,7 +93,7 @@ Gemini CLI は、1回のフックで依頼と応答の両方が JSON で届く�
 
 次がそろったら、β版の表記を外して正式版にしてよいと考える。正式版でも既定はOFFのままにする（2026-10-05 決定）。会話の本文を作業フォルダに書き出す機能なので、本人が選んで使う形を保つ。
 
-- Claude Code 本体で、フックの導入・記録・OFFでの停止・フックを外すコマンドを、Windows と macOS で1回ずつ確認した
+- Claude Code 本体で、フックの導入・記録・OFFでの停止・フックを外すコマンドを確認した（Windows は導入・記録・OFFでの停止まで確認済み。フックを外すコマンドの実機確認と macOS が残っている）
 - 制約2（Copilot から呼ばれた場合）を確かめ、Copilot の呼び出しなら記録しないように見分けを入れた
 - 履歴の容量を管理する手段（古い月の圧縮や削除）を用意した
 - Gemini CLI の対応を1つ入れ、エージェントを増やしてもスイッチの設計が崩れないことを確かめた

@@ -26,7 +26,8 @@ anything — but leaves the hook installed. Run **comP: Remove Conversation Reco
 
 Records never leave the workspace, but they contain conversation text. Keep `.comp/` out of version control
 (add it to `.gitignore`). Other agents are not recorded automatically yet; the instruction files ask them to call
-`session_log` after each task. Plan and status: [docs/dev/CONVERSATION_RECORDING_ja.md](../dev/CONVERSATION_RECORDING_ja.md).
+`session_log` after each task. Step-by-step guide and troubleshooting: [Beta Features](./BETA_FEATURES.md#conversation-recording).
+Plan and status: [docs/dev/CONVERSATION_RECORDING_ja.md](../dev/CONVERSATION_RECORDING_ja.md).
 
 ## Workspace vs User settings
 

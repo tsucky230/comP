@@ -281,9 +281,8 @@ VS Code 設定からの除外も可能：
 既定はOFFです。VS Code の設定で `comp.conversationRecording.enabled` をONにしてから **comP: Setup Agents** で
 Claude Code を選ぶと、各往復が `.comp/history/` に記録され、あとで `session_recall` から読めます。設定をOFFに
 戻すと記録はすぐ止まり、フックは **comP: 会話記録フックを外す** で外せます。記録はワークスペースの中だけに
-残ります。`.comp/` は git に含めないでください。詳細は
-[設定の手引き](docs/user/CONFIGURATION.md#conversation-recording-beta) と
-[企画書](docs/dev/CONVERSATION_RECORDING_ja.md)。
+残ります。`.comp/` は git に含めないでください。今のところ Claude Code だけが対象です。使い方と困ったときは
+[ベータ機能](docs/user/BETA_FEATURES_ja.md#会話の記録)、計画は [企画書](docs/dev/CONVERSATION_RECORDING_ja.md)。
 
 ---
 
@@ -415,6 +414,7 @@ MCP 2024-11-05 準拠クライアントは原則対応。問題があれば [Iss
 | **v0.11.4** | **CIでのVS Code Marketplace / Open VSX publishがGallery APIタイムアウト時に検知不能なまま失敗していた不具合を修正** | ✅ リリース済み |
 | **v0.11.5** | **見出しの多いMarkdownファイルが無関係な検索結果で上位を独占するrun_pipelineのランキング不具合を修正（#7）** | ✅ リリース済み |
 | **v0.11.6** | **ツール呼び出しの失敗が、原因の分からない「Internal error」ではなく詳細付きで表示されるよう修正** | ✅ リリース済み |
+| 次の版 | **会話の記録（β版・既定OFF）— Claude Code の往復を自動で記録。[ベータ機能](docs/user/BETA_FEATURES_ja.md) を参照** | 🟡 β版 |
 | v1.0 | API 安定化・コミュニティ統合 | ⚪ 計画中 |
 
 ---

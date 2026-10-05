@@ -47,6 +47,10 @@ the project-level registration in place.
 | Aider | `.aider.conf.yml` | — |
 | Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` |
 
+With [conversation recording (beta)](./BETA_FEATURES.md#conversation-recording) turned on, setup for
+Claude Code also writes a Stop hook into `.claude/settings.local.json`. It is off by default, so nothing
+is written there unless you enabled it.
+
 Three rules govern these writes:
 
 - **Existing files are backed up.** Before any file is rewritten, comP copies it
@@ -180,6 +184,9 @@ folder; run `gemini trust` first if it shows as `Disconnected` instead.
 ---
 
 ## Troubleshooting
+
+Problems with conversation recording (beta) are covered in
+[Beta Features → Troubleshooting](./BETA_FEATURES.md#troubleshooting).
 
 ### MCP stopped working after upgrading comP
 

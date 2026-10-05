@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - コマンド「comP: 会話記録フックを外す」（`comp.removeHistoryHooks`）: `.claude/settings.local.json` から `record-turn` のフックだけを外す（ほかのフック・設定は保持、`.bak` を作成）
 - OFFからONに切り替えたとき、フックが入っていなければ Setup Agents の実行を案内する通知を出す
 - 企画書 `docs/dev/CONVERSATION_RECORDING_ja.md`（β版の方針、エージェント別のフック調査、既知の制約、正式版にする条件）
+- 利用者向けのベータ機能ガイド `docs/user/BETA_FEATURES.md`・`BETA_FEATURES_ja.md`（ONにする手順、書かれるファイル、確かめ方、OFF・フックの外し方、プライバシー、困ったとき）。README のロードマップ、`docs/user/MCP_SETUP.md`、`docs/user/CONFIGURATION.md` からリンク
 
 ### Fixed
 
