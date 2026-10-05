@@ -345,6 +345,38 @@ export class AgentSetupManager {
   }
 
   /**
+   * Ask agents to record each task with session_log.
+   *
+   * WHY: only Claude Code has a Stop hook comP can attach to (record-turn).
+   * Every other agent leaves no turn record unless the model calls session_log
+   * itself, and nothing told it to. Claude Code is told not to, so that its
+   * turns are not recorded twice. Separate marker from the other two sections
+   * so files written by earlier versions still receive it on the next setup.
+   */
+  private sessionLoggingSnippet(): string {
+    if (this.locale === "ja") {
+      return [
+        "## comP Session Logging (作業の記録)",
+        "",
+        "タスクを1つ終えたら、`session_log` を呼んで記録してください。",
+        "`request` にユーザーの依頼、`outcome` に行ったことと結果を短く書きます（関係したファイルがあれば `files` にも）。",
+        "記録は `.comp/history/` に残り、次のセッションで `session_recall` から読めます。",
+        "",
+        "Claude Code は Stop フック（`comp-daemon record-turn`）が各往復を自動で記録するので、`session_log` を呼ぶ必要はありません（呼ぶと二重に記録されます）。",
+      ].join("\n");
+    }
+    return [
+      "## comP Session Logging",
+      "",
+      "After finishing each task, call `session_log` to record it:",
+      "`request` = what the user asked for, `outcome` = what you did and the result (add `files` when relevant).",
+      "Records go to `.comp/history/` and are available to `session_recall` in later sessions.",
+      "",
+      "Claude Code: do not call session_log — its Stop hook (`comp-daemon record-turn`) already records every turn, so calling it would record the turn twice.",
+    ].join("\n");
+  }
+
+  /**
    * Append a snippet to an instruction file unless it is already there.
    *
    * `marker` is the text that proves the snippet is present; it is checked
@@ -399,7 +431,8 @@ export class AgentSetupManager {
       "Session Continuity",
       this.sessionContinuitySnippet()
     );
-    return rules || continuity;
+    const logging = this.ensureSnippet(filePath, "comP Session Logging", this.sessionLoggingSnippet());
+    return rules || continuity || logging;
   }
 
   /** Agent names the setup flow offers, in display order. */

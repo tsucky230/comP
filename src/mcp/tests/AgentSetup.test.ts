@@ -789,6 +789,57 @@ describe("AgentSetupManager", () => {
       );
     });
 
+    // Agents without a Stop hook leave no turn record unless the model calls
+    // session_log itself, so their instruction file must ask for it.
+    for (const [agent, file] of [
+      ["Codex", "AGENTS.md"],
+      ["Gemini CLI", "GEMINI.md"],
+      ["Aider", "CONVENTIONS.md"],
+      ["GitHub Copilot", path.join(".github", "copilot-instructions.md")],
+    ] as const) {
+      it(`asks ${agent} to call session_log after each task (${file})`, async () => {
+        await manager.generateConfig(agent);
+        const content = fs.readFileSync(path.join(testWorkspace, file), "utf-8");
+        expect(content).to.include("comP Session Logging");
+        expect(content).to.match(/`session_log`/);
+        expect(content).to.include("request");
+        expect(content).to.include("outcome");
+      });
+    }
+
+    it("tells Claude Code not to call session_log, since its Stop hook already records", async () => {
+      await manager.generateConfig("Claude Code");
+      const content = fs.readFileSync(path.join(testWorkspace, "CLAUDE.md"), "utf-8");
+      expect(content).to.match(/Claude Code[^\n]*(do not|don't|need not)[^\n]*session_log|session_log[^\n]*not[^\n]*Claude Code/i);
+    });
+
+    it("adds the logging section to a file that already has the older two sections, once", async () => {
+      const agentsMd = path.join(testWorkspace, "AGENTS.md");
+      fs.writeFileSync(agentsMd, "## comP MCP Tool Usage\n\nold\n\n## Session Continuity\n\nold\n", "utf-8");
+
+      await manager.generateConfig("Codex");
+      await manager.generateConfig("Codex");
+
+      const content = fs.readFileSync(agentsMd, "utf-8");
+      expect(content.split("comP Session Logging")).to.have.lengthOf(2);
+      expect(content.split("comP MCP Tool Usage")).to.have.lengthOf(2);
+      expect(content).to.include("old");
+    });
+
+    it("writes the logging section in Japanese with the same English marker", async () => {
+      const ja = new AgentSetupManager(mockDaemon as any, testWorkspace, undefined, {
+        homeDir: fakeHome,
+        globalStorageDir,
+        codexHome,
+        locale: "ja",
+      });
+      await ja.generateConfig("Codex");
+      const content = fs.readFileSync(path.join(testWorkspace, "AGENTS.md"), "utf-8");
+      expect(content).to.include("comP Session Logging");
+      expect(content).to.include("`session_log`");
+      expect(content).to.match(/作業|タスク/);
+    });
+
     it("honours autoGenerateConstitution: false", async () => {
       writeJson(path.join(testWorkspace, ".comp", "config.json"), {
         autoGenerateConstitution: false,
