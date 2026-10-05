@@ -852,6 +852,34 @@ describe("AgentSetupManager", () => {
     });
   });
 
+  describe("historyHookInstalled", () => {
+    const local = () => path.join(testWorkspace, ".claude", "settings.local.json");
+    const shared = () => path.join(testWorkspace, ".claude", "settings.json");
+    const stopWith = (command: string) => ({ hooks: { Stop: [{ hooks: [{ type: "command", command }] }] } });
+
+    it("is false with no settings files", () => {
+      expect(manager.historyHookInstalled()).to.equal(false);
+    });
+
+    for (const [label, file, command, expected] of [
+      ["record-turn in settings.local.json", "local", `"/x/comp-daemon" record-turn "/ws"`, true],
+      ["history-record in settings.json", "shared", "$CLAUDE_PROJECT_DIR/.claude/hooks/history-record.sh", true],
+      ["history-record in settings.local.json", "local", ".claude/hooks/history-record.sh", true],
+      ["an unrelated Stop hook", "local", "notify.sh", false],
+      ["record-turn only in settings.json (setup never writes there)", "shared", `"/x/comp-daemon" record-turn`, false],
+    ] as const) {
+      it(`is ${expected} for ${label}`, () => {
+        writeJson(file === "local" ? local() : shared(), stopWith(command));
+        expect(manager.historyHookInstalled()).to.equal(expected);
+      });
+    }
+
+    it("is false for an unreadable settings.local.json", () => {
+      writeText(local(), "{ nope");
+      expect(manager.historyHookInstalled()).to.equal(false);
+    });
+  });
+
   describe("Claude Code user scope", () => {
     it("builds a command with the scope, transport and argument separator", async () => {
       const result = await manager.generateConfig("Claude Code");

@@ -18,6 +18,23 @@ import {
   ManualFallback,
   UserScopeResult,
 } from "../mcp/AgentSetup";
+import { ConversationRecordingSettings } from "../config/conversationRecording";
+
+/**
+ * Current `comp.conversationRecording.*` values for the first workspace folder.
+ *
+ * WHY read at call time (not once at registration): the user flips this in
+ * the Settings UI while VS Code is running, and setup must honour the value
+ * they see, not the one from activation.
+ */
+export function currentRecordingSettings(): ConversationRecordingSettings {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  const cfg = vscode.workspace.getConfiguration("comp.conversationRecording", folder?.uri);
+  return {
+    enabled: cfg.get<boolean>("enabled", false),
+    claudeCode: cfg.get<boolean>("claudeCode", true),
+  };
+}
 
 export function registerCommands(
   context: vscode.ExtensionContext,
@@ -28,15 +45,12 @@ export function registerCommands(
 ): void {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ".";
   // _daemonManager is unused in AgentSetupManager (reserved for future expansion)
-  const agentSetup = new AgentSetupManager(
-    null as unknown as DaemonManager,
-    workspaceRoot,
-    context.extensionPath,
-    {
+  const makeAgentSetup = (): AgentSetupManager =>
+    new AgentSetupManager(null as unknown as DaemonManager, workspaceRoot, context.extensionPath, {
       globalStorageDir: context.globalStorageUri?.fsPath,
       locale: isJapaneseLocale() ? "ja" : "en",
-    }
-  );
+      conversationRecording: currentRecordingSettings(),
+    });
 
   // WHY a channel rather than a notification: setup writes outside the
   // workspace — into the home directory and VS Code's global storage — and the
@@ -50,10 +64,53 @@ export function registerCommands(
     return setupChannel;
   };
 
+  // comp.removeHistoryHooks: undo what conversation recording (beta) installed.
+  // Turning the setting off only stops recording; the hook stays until this runs.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("comp.removeHistoryHooks", async () => {
+      const remove = t("Remove", "外す");
+      const answer = await vscode.window.showWarningMessage(
+        t(
+          "Remove comP's conversation recording hook (record-turn) from .claude/settings.local.json? Other hooks and settings are kept, and a .bak backup is taken.",
+          ".claude/settings.local.json から comP の会話記録フック（record-turn）を外しますか？ ほかのフックと設定は残し、.bak にバックアップを取ります。"
+        ),
+        { modal: true },
+        remove
+      );
+      if (answer !== remove) return;
+
+      const outcome = makeAgentSetup().removeHistoryHook();
+      const channel = reportChannel();
+      channel.appendLine(t("=== Remove conversation recording hooks ===", "=== 会話記録フックを外す ==="));
+      const mark = outcome.status === "written" ? "OK  " : outcome.status === "skipped" ? "SKIP" : "FAIL";
+      channel.appendLine(`  [${mark}] ${outcome.path}`);
+      if (outcome.backupPath) channel.appendLine(`         ${t("Backup:", "バックアップ:")} ${outcome.backupPath}`);
+      if (outcome.reason) channel.appendLine(`         ${t("Reason:", "理由:")} ${outcome.reason}`);
+      channel.appendLine("");
+      channel.show(true);
+
+      if (outcome.status === "failed") {
+        vscode.window.showErrorMessage(
+          t(`Could not remove the hook: ${outcome.reason}`, `フックを外せませんでした: ${outcome.reason}`)
+        );
+      } else {
+        vscode.window.showInformationMessage(
+          outcome.status === "written"
+            ? t(
+                "Removed the conversation recording hook. Restart Claude Code to apply.",
+                "会話記録フックを外しました。Claude Code を再起動すると反映されます。"
+              )
+            : t("No conversation recording hook was installed.", "会話記録フックは入っていませんでした。")
+        );
+      }
+    })
+  );
+
   // Command 1: comp.setupAgents
   // Write comP into every config file the chosen agents actually read
   context.subscriptions.push(
     vscode.commands.registerCommand("comp.setupAgents", async () => {
+      const agentSetup = makeAgentSetup();
       const detected = agentSetup.detectInstalledAgents();
       // Detection only preselects: a false negative must never hide an agent
       // the user really has, so every supported agent stays on the list.

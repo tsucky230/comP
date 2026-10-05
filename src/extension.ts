@@ -14,7 +14,8 @@ import { DaemonManager } from "./daemon/DaemonManager";
 import { StatusBar } from "./ui/StatusBar";
 import { SidebarPanel } from "./ui/SidebarPanel";
 import { DependencyCodeLensProvider } from "./ui/CodeLens";
-import { registerCommands } from "./ui/commands";
+import { currentRecordingSettings, registerCommands } from "./ui/commands";
+import { syncConversationRecording } from "./config/conversationRecording";
 import { registerChatParticipant } from "./mcp/chatParticipant";
 import { AgentSetupManager } from "./mcp/AgentSetup";
 import { isJapaneseLocale, t } from "./i18n";
@@ -171,6 +172,65 @@ function syncExcludeToConfig(): void {
 
 
 /** Activation: called when extension is loaded */
+/**
+ * Keep `.comp/config.json`'s conversationRecording section in step with the
+ * `comp.conversationRecording.*` settings, which record-turn reads.
+ *
+ * WHY sync on change as well as on activation: turning recording off must stop
+ * it at once (the hook stays installed and keeps being called). The setup
+ * prompt fires only on an off-to-on transition, never on activation, so a user
+ * who removed the hook on purpose is not nagged every time VS Code starts.
+ */
+function watchConversationRecording(context: vscode.ExtensionContext): void {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) return;
+
+  const isOn = (s: { enabled: boolean; claudeCode: boolean }) => s.enabled && s.claudeCode;
+  const sync = (): void => {
+    try {
+      const result = syncConversationRecording(workspaceRoot, currentRecordingSettings());
+      if (result.status === "invalid") {
+        vscode.window.showWarningMessage(
+          t(
+            `comP: .comp/config.json is not valid JSON (${result.reason}), so conversation recording (beta) stays off. Fix the file to apply the setting.`,
+            `comP: .comp/config.json が正しい JSON ではないため（${result.reason}）、会話の記録（β版）はOFFのままです。ファイルを直すと設定が反映されます。`
+          )
+        );
+      }
+    } catch (error) {
+      console.warn(`[comP] failed to sync conversation recording setting: ${error}`);
+    }
+  };
+
+  let previous = currentRecordingSettings();
+  sync();
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(async (event) => {
+      if (!event.affectsConfiguration("comp.conversationRecording")) return;
+      const now = currentRecordingSettings();
+      sync();
+      const turnedOn = !isOn(previous) && isOn(now);
+      previous = now;
+      if (!turnedOn) return;
+
+      const probe = new AgentSetupManager(null as unknown as DaemonManager, workspaceRoot, context.extensionPath);
+      if (probe.historyHookInstalled()) return;
+      const runSetup = t("Run Setup Agents", "Setup Agents を実行");
+      const answer = await vscode.window.showInformationMessage(
+        t(
+          "Conversation recording (beta) is on. Run comP: Setup Agents and pick Claude Code to install the recording hook.",
+          "会話の記録（β版）をONにしました。comP: Setup Agents で Claude Code を選ぶと、記録用のフックが入ります。"
+        ),
+        runSetup
+      );
+      if (answer === runSetup) {
+        await vscode.commands.executeCommand("comp.setupAgents");
+      }
+    })
+  );
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log("[comP] Extension activating...");
 
@@ -198,6 +258,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push({ dispose: () => statusBar?.dispose() });
     registerCommands(context, () => daemonManager, statusBar);
     registerChatParticipant(context, () => daemonManager);
+    watchConversationRecording(context);
 
     // 3. Inject lifecycle callbacks into SidebarPanel.
     // WHY: Prevent duplicate DaemonManager creation within SidebarPanel.

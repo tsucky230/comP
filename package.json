@@ -72,6 +72,11 @@
         "command": "comp.exportDebugLog",
         "title": "comP: Export Debug Log",
         "description": "Open or export the session-memory.json debug log"
+      },
+      {
+        "command": "comp.removeHistoryHooks",
+        "title": "%comp.removeHistoryHooks.title%",
+        "category": "comP"
       }
     ],
     "viewsContainers": {
@@ -115,6 +120,26 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Additional directory names to exclude from indexing (synced to .comp/config.json). Changes take effect after Force Re-index."
+        },
+        "comp.conversationRecording.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "order": 100,
+          "tags": [
+            "preview"
+          ],
+          "markdownDescription": "%comp.conversationRecording.enabled.description%"
+        },
+        "comp.conversationRecording.claudeCode": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "order": 101,
+          "tags": [
+            "preview"
+          ],
+          "markdownDescription": "%comp.conversationRecording.claudeCode.description%"
         }
       }
     }

@@ -73,9 +73,10 @@ describe("registerCommands", () => {
     (vscode.env.clipboard as any).writeText = sinon.stub().resolves();
   });
 
-  it("registers all 7 commands", () => {
+  it("registers all 8 commands", () => {
     registerCommands(mockContext, () => mockDaemon, mockStatusBar);
-    expect(handlers.size).to.equal(7);
+    expect(handlers.size).to.equal(8);
+    expect(handlers.has("comp.removeHistoryHooks")).to.be.true;
     expect(handlers.has("comp.setupAgents")).to.be.true;
     expect(handlers.has("comp.forceReindex")).to.be.true;
     expect(handlers.has("comp.generateContext")).to.be.true;

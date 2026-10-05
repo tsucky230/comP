@@ -1,10 +1,11 @@
 {
-  "commit": "e035ca2239b95042788b5bedf6f70bc54c05098a",
+  "commit": "252302d0a3f77e6180cb45548d2d830aa950c3cc",
   "files": {
     "daemon/src/mcp/record_turn_tests.rs": "c1c8ecc2bed68d1d750271aaa9d42cd8dbc7e6415e9c3e17378c0a564a8d8a19",
-    "src/mcp/tests/AgentSetupHistoryHook.test.ts": "fbe7afe0d79c0a7d533a093db3ebbba5e512b772592fd95433785b0fd26670b6"
+    "src/mcp/tests/AgentSetupHistoryHook.test.ts": "65132fdde0078562c83e8104d5f50f179a5315594d5b4954034d430a21114808",
+    "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05"
   },
-  "frozen_at": "2026-10-05T05:00:03Z",
+  "frozen_at": "2026-10-05T05:02:44Z",
   "history": [
     {
       "approved_by": null,
@@ -65,6 +66,18 @@
       },
       "note": "会話記録β版: 既定OFFのスイッチ。Ws::new は ON の config を持つ（ユーザー決定 2026-10-05）",
       "request": "TCR-4"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-10-05T05:02:44Z",
+      "commit": "252302d0a3f77e6180cb45548d2d830aa950c3cc",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "会話記録β版: 設定画面・同期・フック導入の既定OFF・外すコマンド",
+      "request": "TCR-5"
     }
   ],
   "metrics": {
@@ -74,7 +87,8 @@
   },
   "paths": [
     "daemon/src/mcp/record_turn_tests.rs",
-    "src/mcp/tests/AgentSetupHistoryHook.test.ts"
+    "src/mcp/tests/AgentSetupHistoryHook.test.ts",
+    "src/test/conversationRecording.test.ts"
   ],
   "version": 1
 }

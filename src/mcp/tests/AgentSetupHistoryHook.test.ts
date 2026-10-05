@@ -47,11 +47,19 @@ describe("AgentSetupManager — Claude Code history hook", () => {
   let manager: AgentSetupManager;
   let localSettings: string;
 
-  const makeManager = (workspace: string, daemonPath: string, locale?: "en" | "ja") => {
+  // TCR-5: recording is opt-in (beta). Existing cases run with it switched on.
+  const ON = { enabled: true, claudeCode: true };
+  const makeManager = (
+    workspace: string,
+    daemonPath: string,
+    locale?: "en" | "ja",
+    conversationRecording: { enabled: boolean; claudeCode: boolean } | undefined = ON
+  ) => {
     const m = new AgentSetupManager(new MockDaemonManager() as any, workspace, undefined, {
       homeDir: fakeHome,
       codexHome: path.join(fakeHome, ".codex"),
       ...(locale ? { locale } : {}),
+      ...(conversationRecording ? { conversationRecording } : {}),
     });
     (m as any).getDaemonPath = () => daemonPath;
     return m;
@@ -292,6 +300,98 @@ describe("AgentSetupManager — Claude Code history hook", () => {
     });
   });
 
+  describe("beta switch (comp.conversationRecording)", () => {
+    for (const [label, rec] of [
+      ["option omitted (default)", undefined],
+      ["enabled: false", { enabled: false, claudeCode: true }],
+      ["claudeCode: false", { enabled: true, claudeCode: false }],
+      ["both false", { enabled: false, claudeCode: false }],
+    ] as const) {
+      it(`does not install the hook when recording is off: ${label}`, async () => {
+        const m = new AgentSetupManager(new MockDaemonManager() as any, ws, undefined, {
+          homeDir: fakeHome,
+          codexHome: path.join(fakeHome, ".codex"),
+          ...(rec ? { conversationRecording: rec } : {}),
+        });
+        (m as any).getDaemonPath = () => daemon;
+        const result = await m.generateConfig("Claude Code");
+        expect(result.historyHook?.status).to.equal("skipped");
+        expect(result.historyHook?.reason).to.match(/off|β|beta/i);
+        expect(fs.existsSync(localSettings)).to.equal(false);
+        expect(result.success).to.equal(true);
+      });
+    }
+
+    it("still repairs an existing hook while recording is off (hooks are kept, not broken)", () => {
+      const stale = `"C:/gone/comp-daemon-win.exe" record-turn "${fwd(ws)}"`;
+      writeJson(localSettings, { hooks: { Stop: [{ hooks: [{ type: "command", command: stale }] }] } });
+      const m = makeManager(ws, daemon, undefined, { enabled: false, claudeCode: true });
+      (m as any).resolveRepairPath = () => daemon;
+      const entry = m.repairStaleConfigs().find((e) => e.file === localSettings);
+      expect(entry?.status).to.equal("repaired");
+    });
+  });
+
+  describe("removeHistoryHook", () => {
+    it("removes only record-turn hooks, keeps other hooks in the same group and other keys, and backs up", () => {
+      const doc = {
+        model: "x",
+        hooks: {
+          PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "guard.sh" }] }],
+          Stop: [
+            { hooks: [{ type: "command", command: "notify.sh" }, { type: "command", command: expectedCommand(daemon, ws), timeout: 10 }] },
+            { hooks: [{ type: "command", command: `"/old/comp-daemon" record-turn` }] },
+          ],
+        },
+      };
+      writeJson(localSettings, doc);
+      const before = fs.readFileSync(localSettings, "utf-8");
+      const out = manager.removeHistoryHook();
+      expect(out.status).to.equal("written");
+      expect(out.backupPath).to.equal(localSettings + ".bak");
+      expect(fs.readFileSync(localSettings + ".bak", "utf-8")).to.equal(before);
+      const after = readJson(localSettings);
+      expect(after.model).to.equal("x");
+      expect(after.hooks.PreToolUse).to.deep.equal(doc.hooks.PreToolUse);
+      expect(after.hooks.Stop).to.deep.equal([{ hooks: [{ type: "command", command: "notify.sh" }] }]);
+    });
+
+    it("drops an emptied Stop list and an emptied hooks object", () => {
+      writeJson(localSettings, { model: "x", hooks: { Stop: [{ hooks: [{ type: "command", command: expectedCommand(daemon, ws) }] }] } });
+      expect(manager.removeHistoryHook().status).to.equal("written");
+      expect(readJson(localSettings)).to.deep.equal({ model: "x" });
+    });
+
+    it("reports skipped when there is no settings.local.json", () => {
+      expect(manager.removeHistoryHook().status).to.equal("skipped");
+      expect(fs.existsSync(localSettings)).to.equal(false);
+    });
+
+    it("reports skipped and leaves the file byte-identical when no record-turn hook exists", () => {
+      writeJson(localSettings, { hooks: { Stop: [{ hooks: [{ type: "command", command: "notify.sh" }] }] } });
+      const before = fs.readFileSync(localSettings, "utf-8");
+      expect(manager.removeHistoryHook().status).to.equal("skipped");
+      expect(fs.readFileSync(localSettings, "utf-8")).to.equal(before);
+      expect(fs.existsSync(localSettings + ".bak")).to.equal(false);
+    });
+
+    for (const bad of ["{ nope", "[]", JSON.stringify({ hooks: { Stop: {} } })]) {
+      it(`fails without touching a file it does not understand: ${bad}`, () => {
+        writeText(localSettings, bad);
+        expect(manager.removeHistoryHook().status).to.equal("failed");
+        expect(fs.readFileSync(localSettings, "utf-8")).to.equal(bad);
+      });
+    }
+
+    it("never touches the shared settings.json", () => {
+      const shared = path.join(ws, ".claude", "settings.json");
+      const content = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "x record-turn" }] }] } });
+      writeText(shared, content);
+      manager.removeHistoryHook();
+      expect(fs.readFileSync(shared, "utf-8")).to.equal(content);
+    });
+  });
+
   describe("Session Continuity snippet", () => {
     for (const locale of ["en", "ja"] as const) {
       it(`does not claim prompt auto-injection and names the Stop hook (${locale})`, async () => {
@@ -302,6 +402,9 @@ describe("AgentSetupManager — Claude Code history hook", () => {
         expect(text).to.not.include("自動的に注入");
         expect(text).to.include("record-turn");
         expect(text).to.include(".comp/history");
+        // The hook may be absent (beta, opt-in), so the Claude Code lines must be conditional.
+        expect(text).to.include(".claude/settings.local.json");
+        expect(text).to.match(/(If|if|場合)[^\n]*record-turn|record-turn[^\n]*(場合|if)/);
       });
     }
   });

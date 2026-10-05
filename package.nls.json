@@ -1,3 +1,6 @@
 {
-  "comp.chatParticipant.description": "Intelligently compresses API specs and large code before sending your question to the LLM."
+  "comp.chatParticipant.description": "Intelligently compresses API specs and large code before sending your question to the LLM.",
+  "comp.conversationRecording.enabled.description": "**(Beta)** Automatically record each conversation turn with AI agents to `.comp/history/`, so `session_recall` can restore it in later sessions. Off by default.\n\nWhen on, **comP: Setup Agents** installs a Stop hook (`comp-daemon record-turn`) into `.claude/settings.local.json` for Claude Code. Records stay inside this workspace and are never sent anywhere.\n\nTurning this off stops recording immediately but keeps the installed hook; run **comP: Remove Conversation Recording Hooks** (`comp.removeHistoryHooks`) to remove it.",
+  "comp.conversationRecording.claudeCode.description": "**(Beta)** Record Claude Code conversations (Stop hook). Takes effect only while `comp.conversationRecording.enabled` is on.",
+  "comp.removeHistoryHooks.title": "Remove Conversation Recording Hooks (Beta)"
 }

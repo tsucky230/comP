@@ -12,6 +12,10 @@ import * as fs from "fs";
 import * as os from "os";
 import { spawn } from "child_process";
 import { DaemonManager } from "../daemon/DaemonManager";
+import {
+  ConversationRecordingSettings,
+  DEFAULT_CONVERSATION_RECORDING,
+} from "../config/conversationRecording";
 
 /**
  * How comP has to be encoded into one particular config file.
@@ -138,6 +142,11 @@ export interface AgentSetupOptions {
    * the result in, the same way it resolves globalStorageDir.
    */
   locale?: "en" | "ja";
+  /**
+   * The `comp.conversationRecording.*` settings. Omitted means off: recording
+   * is beta and installs nothing unless the user switched it on.
+   */
+  conversationRecording?: ConversationRecordingSettings;
 }
 
 /**
@@ -227,6 +236,7 @@ export class AgentSetupManager {
   private homeDir: string;
   private codexHomeOverride: string | undefined;
   private locale: "en" | "ja";
+  private conversationRecording: ConversationRecordingSettings;
 
   constructor(
     _daemonManager: DaemonManager,
@@ -241,6 +251,7 @@ export class AgentSetupManager {
     this.homeDir = options?.homeDir ?? os.homedir();
     this.codexHomeOverride = options?.codexHome;
     this.locale = options?.locale ?? "en";
+    this.conversationRecording = options?.conversationRecording ?? DEFAULT_CONVERSATION_RECORDING;
   }
 
   /** Pick the string matching the configured locale; English is the default. */
@@ -322,8 +333,8 @@ export class AgentSetupManager {
         "   - `session_recall({ \"limit\": 5 })` — 直近N件を表示",
         "2. 過去に何をしたかを確認し、その文脈のまま作業を続ける",
         "",
-        "**補足**: Claude Code では、comP の初期設定が `.claude/settings.local.json` に Stop フック（`comp-daemon record-turn`）を入れ、",
-        "各往復を `.comp/history/` に記録します。`session_recall` はこの記録を読みます。",
+        "**補足**: 会話の記録（β版）をONにした場合、comP の初期設定が `.claude/settings.local.json` に Stop フック（`comp-daemon record-turn`）を入れ、",
+        "Claude Code の各往復を `.comp/history/` に記録します。`session_recall` はこの記録を読みます。",
       ].join("\n");
     }
     return [
@@ -339,8 +350,8 @@ export class AgentSetupManager {
       "   - `session_recall({ \"limit\": 5 })` — show last N interactions",
       "2. Review what was done previously and continue in that context",
       "",
-      "**Note**: With Claude Code, comP setup installs a Stop hook (`comp-daemon record-turn`) in",
-      "`.claude/settings.local.json` that records each turn to `.comp/history/`; `session_recall` reads those records.",
+      "**Note**: If conversation recording (beta) is enabled, comP setup installs a Stop hook (`comp-daemon record-turn`) in",
+      "`.claude/settings.local.json` that records each Claude Code turn to `.comp/history/`; `session_recall` reads those records.",
     ].join("\n");
   }
 
@@ -362,7 +373,7 @@ export class AgentSetupManager {
         "`request` にユーザーの依頼、`outcome` に行ったことと結果を短く書きます（関係したファイルがあれば `files` にも）。",
         "記録は `.comp/history/` に残り、次のセッションで `session_recall` から読めます。",
         "",
-        "Claude Code は Stop フック（`comp-daemon record-turn`）が各往復を自動で記録するので、`session_log` を呼ぶ必要はありません（呼ぶと二重に記録されます）。",
+        "Claude Code で、`.claude/settings.local.json` に `record-turn` の Stop フックがある場合は、各往復が自動で記録されるので `session_log` を呼ばないでください（二重に記録されます）。",
       ].join("\n");
     }
     return [
@@ -372,7 +383,7 @@ export class AgentSetupManager {
       "`request` = what the user asked for, `outcome` = what you did and the result (add `files` when relevant).",
       "Records go to `.comp/history/` and are available to `session_recall` in later sessions.",
       "",
-      "Claude Code: do not call session_log — its Stop hook (`comp-daemon record-turn`) already records every turn, so calling it would record the turn twice.",
+      "Claude Code: if `.claude/settings.local.json` has a `record-turn` Stop hook, do not call session_log — the hook already records every turn, so calling it would record the turn twice.",
     ].join("\n");
   }
 
@@ -1345,7 +1356,18 @@ export class AgentSetupManager {
 
     if (agentName === "Claude Code") {
       result.command = this.generateClaudeCodeCommand(daemonPath);
-      result.historyHook = this.ensureHistoryHook(daemonPath);
+      result.historyHook =
+        this.conversationRecording.enabled && this.conversationRecording.claudeCode
+          ? this.ensureHistoryHook(daemonPath)
+          : {
+              path: this.historyHookFile(),
+              scope: "workspace",
+              status: "skipped",
+              reason: this.t(
+                "conversation recording (beta) is off — enable comp.conversationRecording.enabled to install the hook",
+                "会話の記録（β版）がOFFです。comp.conversationRecording.enabled をONにするとフックを入れます"
+              ),
+            };
     }
 
     if (failed.length > 0) {
@@ -1726,6 +1748,79 @@ export class AgentSetupManager {
    * The repairTarget() counterpart for the Stop hook: rewrite its daemon path
    * after an extension upgrade, and its workspace argument after a move.
    */
+  /**
+   * Whether this project already records Claude Code turns: comP's record-turn
+   * hook in settings.local.json, or a history-record hook in either file (the
+   * comP repository's own development hook). Used to decide whether to prompt
+   * for setup when recording is switched on.
+   */
+  historyHookInstalled(): boolean {
+    const read = (name: string): string | null => {
+      const file = path.join(this.workspaceRoot, ".claude", name);
+      try {
+        return fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : null;
+      } catch {
+        return null;
+      }
+    };
+    const shared = read("settings.json");
+    const local = read("settings.local.json");
+    if ([shared, local].some((text) => text !== null && text.includes("history-record"))) {
+      return true;
+    }
+    if (local === null) {
+      return false;
+    }
+    try {
+      return AgentSetupManager.recordTurnHooks(AgentSetupManager.loadHookSettings(local).stop).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Remove comP's record-turn Stop hook from `.claude/settings.local.json`.
+   * Backs up first, keeps every other hook and key, never touches settings.json.
+   */
+  removeHistoryHook(): WriteOutcome {
+    const file = this.historyHookFile();
+    const base = { path: file, scope: "workspace" as const };
+    if (!fs.existsSync(file)) {
+      return { ...base, status: "skipped", reason: "no .claude/settings.local.json" };
+    }
+    try {
+      const { doc, stop } = AgentSetupManager.loadHookSettings(fs.readFileSync(file, "utf-8"));
+      const targets = AgentSetupManager.recordTurnHooks(stop);
+      if (targets.length === 0) {
+        return { ...base, status: "skipped", reason: "no record-turn hook" };
+      }
+
+      const remaining = stop.flatMap((group) => {
+        const inner = (group as Record<string, unknown> | null)?.["hooks"];
+        if (!Array.isArray(inner)) return [group];
+        const kept = inner.filter((h) => !targets.includes(h as Record<string, unknown>));
+        // Drop only groups that this removal emptied; an already-empty group is the user's.
+        if (kept.length === 0 && inner.length > 0) return [];
+        return [{ ...(group as Record<string, unknown>), hooks: kept }];
+      });
+      const hooks = doc["hooks"] as Record<string, unknown>;
+      if (remaining.length > 0) {
+        hooks["Stop"] = remaining;
+      } else {
+        delete hooks["Stop"];
+      }
+      if (Object.keys(hooks).length === 0) {
+        delete doc["hooks"];
+      }
+
+      const backupPath = this.backupIfExists(file);
+      this.atomicWrite(file, JSON.stringify(doc, null, 2) + "\n");
+      return { ...base, status: "written", ...(backupPath ? { backupPath } : {}) };
+    } catch (error) {
+      return { ...base, status: "failed", reason: describeError(error) };
+    }
+  }
+
   private repairHistoryHook(): RepairEntry {
     const file = this.historyHookFile();
     if (!fs.existsSync(file)) {

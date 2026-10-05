@@ -79,6 +79,9 @@ Module.prototype.require = function (id: string) {
       workspace: {
         workspaceFolders: undefined,
         openTextDocument: () => Promise.resolve({ uri: { fsPath: '/mock/doc' } }),
+        // Every setting reads as its declared default unless a test overrides this.
+        getConfiguration: () => ({ get: (_key: string, fallback?: unknown) => fallback }),
+        onDidChangeConfiguration: () => ({ dispose: () => {} }),
       },
       ProgressLocation: { SourceControl: 1, Window: 10, Notification: 15 },
       StatusBarAlignment: { Left: 1, Right: 2 },
