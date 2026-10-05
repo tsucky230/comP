@@ -1,14 +1,15 @@
 {
-  "commit": "dc5fb0d7875413e8d8651ca27db3ed73c8b30a4d",
+  "commit": "1e8bbc5f95e7df5e43b5393cb30b003298a627bd",
   "files": {
     "daemon/src/mcp/record_turn_tests.rs": "c1c8ecc2bed68d1d750271aaa9d42cd8dbc7e6415e9c3e17378c0a564a8d8a19",
-    "daemon/src/mcp/rule_sharing_tests.rs": "69e79a4d1f23823d360f75b32f91954a71a3ff52da6ffb801bfdf75d700314db",
+    "daemon/src/mcp/rule_sharing_tests.rs": "4cc1e8e631b1acf5df2cbcde8d4a8cfad300044cffa37f270aaded8c3fa86bd6",
+    "daemon/src/mcp/trace_tests.rs": "a2bd44c9ac75edb5e0c99a299ae5984aabc6e49d14da07b2f2a9d6918b381eeb",
     "daemon/src/rules/tests.rs": "6bde44788b30c1dfd7a0bf4bb0c61dcc8974884dba9da4cc0d16d02eaf9a7206",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts": "65132fdde0078562c83e8104d5f50f179a5315594d5b4954034d430a21114808",
     "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05",
     "src/test/ruleSharing.test.ts": "9fcebac114562d39d954ee6ba396e151a772ce29e9c05e7536c18ea700ef8a66"
   },
-  "frozen_at": "2026-10-05T12:29:18Z",
+  "frozen_at": "2026-10-05T21:51:12Z",
   "history": [
     {
       "approved_by": null,
@@ -129,6 +130,18 @@
       },
       "note": "実データ（comP の指示ファイル）で見つかった問題: 区切り線・識別子・同内容の組",
       "request": "TCR-9"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-10-05T21:51:12Z",
+      "commit": "1e8bbc5f95e7df5e43b5393cb30b003298a627bd",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "YASAKANI plan B stages 2-3: add trace tests; rule_sharing_tests SessionCall literal gets ..Default::default() for the new optional trace fields (no assertion change)",
+      "request": "TCR-trace-1"
     }
   ],
   "metrics": {
@@ -142,7 +155,8 @@
     "src/test/conversationRecording.test.ts",
     "daemon/src/rules/tests.rs",
     "daemon/src/mcp/rule_sharing_tests.rs",
-    "src/test/ruleSharing.test.ts"
+    "src/test/ruleSharing.test.ts",
+    "daemon/src/mcp/trace_tests.rs"
   ],
   "version": 1
 }

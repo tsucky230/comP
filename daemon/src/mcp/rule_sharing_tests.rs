@@ -210,7 +210,7 @@ async fn session_recall_shows_the_rules_a_call_used() {
 fn session_call_without_rules_serializes_as_before() {
     let call = SessionCall {
         query: "q".into(), outcome: None, symbols: vec![], files: vec![], tokens: 0, stale: false,
-        timestamp: 1, agent: "claude-code".into(), rules: vec![],
+        timestamp: 1, agent: "claude-code".into(), rules: vec![], ..Default::default()
     };
     let v: Value = serde_json::to_value(&call).unwrap();
     assert!(v.get("rules").is_none());

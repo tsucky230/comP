@@ -377,6 +377,7 @@ pub fn run_record_turn(
         timestamp: now_ms,
         agent: AGENT_ID.to_string(),
         rules: Vec::new(),
+        ..Default::default()
     };
 
     let line = match serde_json::to_string(&call) {

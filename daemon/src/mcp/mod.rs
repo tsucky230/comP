@@ -11,6 +11,7 @@
 
 mod compress;
 pub mod record_turn;
+pub mod trace;
 #[cfg(test)]
 #[path = "rule_sharing_tests.rs"]
 mod rule_sharing_tests;
@@ -21,7 +22,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use crate::rules;
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
 pub struct SessionCall {
     /// The Stop hook (history-record.sh) writes this field as "request";
     /// session_log writes "query". Accept both so hook-written JSONL lines
@@ -55,6 +56,28 @@ pub struct SessionCall {
     /// records without rules keep their previous shape.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RuleRef>,
+    /// Multi-agent trace (YASAKANI plan B): the agent session this record came
+    /// from (Claude Code's session_id), so delegations can be linked to the turn
+    /// that ran them without the orchestrator knowing its own turn id. See
+    /// trace::delegations_for_turn. All trace fields are omitted when None so
+    /// older records keep their shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Stable id of a conversation turn (transcript uuid of the request line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    /// Explicit parent turn of a delegation; None means "resolve by session and time".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_turn_id: Option<String>,
+    /// "turn" (record-turn) or "delegation" (append-history from an orchestrator).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// git HEAD when the record was written: the outcome as a fact, not a summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// Exit code of the delegation's test command (0 = accepted).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_exit: Option<i32>,
 }
 
 /// Reference to one rule section returned by run_pipeline (see crate::rules).
@@ -367,6 +390,7 @@ fn record_mcp_call_with_rules(
                 timestamp: now,
                 agent: agent_id.to_string(),
                 rules: rules.clone(),
+                ..Default::default()
             });
             found = true;
             break;
@@ -387,6 +411,7 @@ fn record_mcp_call_with_rules(
                 timestamp: now,
                 agent: agent_id.to_string(),
                 rules,
+                ..Default::default()
             }],
         });
     }
@@ -680,6 +705,18 @@ fn dedup_exact_duplicate_lines(original: &[u8]) -> Result<Vec<u8>> {
 /// file under `workspace_root`. Returns `(path, bytes_before, bytes_after)` for
 /// each file actually processed. An absent history directory is not an error
 /// — it just means there is nothing to compact yet.
+/// Like `run_compact_history`, but after the exact-duplicate pass also folds the
+/// text of records older than `days` days (trace::fold_old_lines). `now_ms` is
+/// injectable for tests. Same locking and `.bak` guarantees (compact_history_file).
+fn run_compact_history_fold(
+    workspace_root: &str,
+    days: u32,
+    now_ms: u64,
+) -> Result<Vec<(std::path::PathBuf, usize, usize)>> {
+    let _ = (workspace_root, days, now_ms);
+    unimplemented!()
+}
+
 fn run_compact_history(workspace_root: &str) -> Result<Vec<(std::path::PathBuf, usize, usize)>> {
     let hist_dir = std::path::Path::new(workspace_root).join(".comp").join("history");
     let mut results = Vec::new();
@@ -806,6 +843,8 @@ enum CliSubcommand {
     AppendHistory { workspace_root: String, agent_id: String },
     Doctor { workspace_root: String, repair: bool },
     CompactHistory { workspace_root: String },
+    /// `compact-history <ws> --fold-after-days N` (N >= 1): dedup, then trace::fold_old_lines.
+    CompactHistoryFold { workspace_root: String, days: u32 },
     RecordTurn { workspace_root: Option<String> },
 }
 
@@ -889,6 +928,7 @@ fn run_append_history(
         timestamp: now,
         agent: agent_id.to_string(),
         rules: Vec::new(),
+        ..Default::default()
     };
 
     let month = &format_epoch_ms(now)[0..7];
@@ -973,6 +1013,24 @@ pub fn try_run_cli_subcommand(args: &[String]) -> Option<i32> {
                 },
             }
             Some(record_turn::exit_code(&result))
+        }
+        CliSubcommand::CompactHistoryFold { workspace_root, days } => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            match run_compact_history_fold(&workspace_root, days, now_ms) {
+                Ok(results) => {
+                    for (path, before, after) in &results {
+                        println!("compact-history: {} — {} -> {} bytes (folded > {} days)", path.display(), before, after, days);
+                    }
+                    Some(0)
+                }
+                Err(e) => {
+                    eprintln!("compact-history failed: {}", e);
+                    Some(1)
+                }
+            }
         }
         CliSubcommand::CompactHistory { workspace_root } => {
             match run_compact_history(&workspace_root) {
@@ -3151,6 +3209,7 @@ impl MCPServer {
             timestamp: now,
             agent: self.state.agent_id.clone(),
             rules: Vec::new(),
+            ..Default::default()
         };
 
         // Monthly file bounds each log while preserving full history.
@@ -4036,6 +4095,7 @@ mod tests {
                         timestamp: 1,
                         agent: "test".to_string(),
                         rules: Vec::new(),
+                        ..Default::default()
                     },
                     SessionCall {
                         query: "unrelated".to_string(),
@@ -4047,6 +4107,7 @@ mod tests {
                         timestamp: 2,
                         agent: "test".to_string(),
                         rules: Vec::new(),
+                        ..Default::default()
                     },
                 ],
             }],
