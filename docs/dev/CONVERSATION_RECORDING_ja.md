@@ -87,7 +87,7 @@ Gemini CLI は、1回のフックで依頼と応答の両方が JSON で届く�
 
 1. **本体での動作確認は Windows だけで済んでいる。** 2026-10-05 に、Windows 11 と Claude Code 2.1.172 で、YASAKANI リポジトリに初期設定と同じ処理でフックを入れ、`claude -p` を2回動かした。記録ONでは往復の終わりにフックが起動して `.comp/history/` に1行記録され（`agent=claude-code`、依頼と応答の本文つき）、`.comp/config.json` だけOFFに変えると、フックが残っていても何も記録されなかった。macOS ではまだ確かめていない。
 2. **VS Code の Copilot が `record-turn` を呼ぶ可能性がある。** 設定 `chat.useClaudeHooks` を有効にすると、Copilot は `.claude/settings.local.json` のフックも実行する（VS Code の公式文書による）。そうなると Copilot の会話が `claude-code` として記録されるか、形式が合わずに記録されないかのどちらかになる。どちらになるかは未確認だ。
-3. **履歴は増える一方になる。** 今の `compact-history` は、まったく同じ行を消すだけだ。記録を常に続けると、`log-YYYY-MM.jsonl` は月ごとに大きくなり続ける。
+3. **履歴は増える一方になる。** `compact-history` は、まったく同じ行を消す。`--fold-after-days N` を付けると、古い記録の本文を120字に畳む（2026-10-06 追加。手動のみ）。自動の整理はまだない。
 4. **0.11.7 より前の本体では動かない。** 初期設定が書くフックは、拡張機能に同梱された本体を呼ぶ。0.11.6 以前の本体には `record-turn` がない。なお comP リポジトリ自身の `history-record.sh` も `record-turn` を呼ぶので、開発中に記録したいときは、このリポジトリでも設定をONにしておく必要がある。
 
 ## 正式版にする条件

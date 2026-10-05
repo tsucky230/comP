@@ -124,9 +124,14 @@ not yet handled; turn that setting off if you use both.
 ### Known limitations
 
 - Claude Code only. Other agents are asked to call `session_log` themselves (see below).
-- `.comp/history/` grows every month. `comp-daemon compact-history <workspace>` removes only exact
-  duplicate lines; there is no automatic cleanup yet.
-- Only the final text of the request and answer is kept (truncated as above), not tool calls.
+- `.comp/history/` grows every month. `comp-daemon compact-history <workspace>` removes exact
+  duplicate lines; add `--fold-after-days N` to also cut the request and answer of records older
+  than N days to 120 characters (a `.bak` is kept; folded text can no longer be searched). There is
+  no automatic cleanup.
+- Only the final text of the request and answer is kept (truncated as above). Tool calls are not
+  kept, except the paths of files edited in the turn, the git commit, and the session and turn ids.
+- Strings that look like API keys or `token=`/`api_key=` values are replaced with `[REDACTED]`
+  before writing. This is pattern-based: other secrets in the text are still written.
 
 ### Other agents
 

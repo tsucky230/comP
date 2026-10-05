@@ -23,7 +23,17 @@
 //!   joined with "\n" and trimmed.
 //! - outcome: stdin `last_assistant_message` when non-empty after trim, else the
 //!   joined text blocks of the last `type == "assistant"` line, else None.
-//! - request is cut to 600 chars, outcome to 400 chars (chars, not bytes).
+//! - request is cut to 600 chars, outcome to 400 chars (chars, not bytes), after
+//!   `trace::redact_secrets` (redacting first, so a key cut at the limit cannot
+//!   leave a recognisable prefix behind).
+//! - trace fields (YASAKANI plan B): `session_id` = stdin `session_id` when
+//!   non-blank; `turn_id` = the request line's transcript `uuid`
+//!   (`trace::extract_turn_meta`), else `<session_id>-<now_ms>`, else
+//!   `turn-<now_ms>`; `kind` = "turn"; `commit` = `git rev-parse HEAD` in the
+//!   workspace when it prints a 40-hex id (otherwise the field is omitted and the
+//!   record is still written); `files` = the files Edit/Write/MultiEdit/NotebookEdit
+//!   touched after the request, made relative to the workspace with "/" when they
+//!   are under it.
 //! - agent is always "claude-code"; nothing in stdin or the transcript can set it.
 //! - switch (beta, opt-in): after the workspace is known and before the transcript
 //!   is read, `<workspace>/.comp/config.json` must have
@@ -202,7 +212,7 @@ pub fn extract_turn(transcript_jsonl: &str, last_assistant_message: Option<&str>
         }
     }
 
-    let request = truncate_chars(request?, REQUEST_MAX_CHARS);
+    let request = truncate_chars(super::trace::redact_secrets(&request?), REQUEST_MAX_CHARS);
 
     let outcome = if let Some(s) = last_assistant_message {
         let t = s.trim();
@@ -215,7 +225,7 @@ pub fn extract_turn(transcript_jsonl: &str, last_assistant_message: Option<&str>
         outcome
     };
     let outcome = outcome.and_then(|s| {
-        let t = truncate_chars(s, OUTCOME_MAX_CHARS);
+        let t = truncate_chars(super::trace::redact_secrets(&s), OUTCOME_MAX_CHARS);
         if t.is_empty() {
             None
         } else {
@@ -259,6 +269,30 @@ fn recording_switch(workspace: &Path) -> Result<(), String> {
         return Err("conversation recording is off for Claude Code (comp.conversationRecording.claudeCode)".into());
     }
     Ok(())
+}
+
+/// `git rev-parse HEAD` in `workspace`, when it succeeds with a 40-hex id.
+fn git_head(workspace: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && id.len() == 40 && id.chars().all(|c| c.is_ascii_hexdigit())).then_some(id)
+}
+
+/// A path under `workspace` becomes relative with "/" separators; others are kept.
+fn relativize(workspace: &Path, file: &str) -> String {
+    match Path::new(file).strip_prefix(workspace) {
+        Ok(rel) if !rel.as_os_str().is_empty() => rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/"),
+        _ => file.to_string(),
+    }
 }
 
 fn make_spill_path(hist_dir: &Path, now_ms: u64) -> PathBuf {
@@ -367,17 +401,35 @@ pub fn run_record_turn(
         .join("history")
         .join(format!("log-{}.jsonl", month));
 
+    let meta = super::trace::extract_turn_meta(&transcript);
+    let session_id = stdin_obj
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let turn_id = meta.request_uuid.clone().unwrap_or_else(|| {
+        format!("{}-{}", session_id.as_deref().unwrap_or("turn"), now_ms)
+    });
+    let ws_path = Path::new(&workspace);
+    let files = meta.files.iter().map(|f| relativize(ws_path, f)).collect();
+
     let call = super::SessionCall {
         query: entry.request,
         outcome: entry.outcome,
         symbols: Vec::new(),
-        files: Vec::new(),
+        files,
         tokens: 0,
         stale: false,
         timestamp: now_ms,
         agent: AGENT_ID.to_string(),
         rules: Vec::new(),
-        ..Default::default()
+        session_id,
+        turn_id: Some(turn_id),
+        parent_turn_id: None,
+        kind: Some("turn".to_string()),
+        commit: git_head(ws_path),
+        test_exit: None,
     };
 
     let line = match serde_json::to_string(&call) {

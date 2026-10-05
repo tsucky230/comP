@@ -240,7 +240,10 @@ auto-records), and returns them newest first.
 
 Parameters:
 
-- `query` (string, optional) — partial-match filter against both the request and outcome fields
+- `query` (string, optional) — entries whose request or outcome contains `query` (case-insensitive)
+  come first, newest first, as before; other entries that share terms with it follow, ranked by BM25
+  over words and character 1-/2-grams (so Japanese and multi-word queries match) times a recency
+  weight (half-life 90 days)
 - `limit` (number, optional, default 20) — maximum number of results to return
 
 Response format (Markdown text):
@@ -255,6 +258,12 @@ Response format (Markdown text):
 ```
 
 Each field (Outcome, Symbols, Files) is shown only when the entry actually has data.
+
+Multi-agent trace: a conversation turn recorded by `record-turn` also shows **Commit** (git HEAD at
+the end of the turn, 8 characters) and **Delegations** (the delegations that turn ran, as
+`agent (test_exit N)`); a delegation recorded through `append-history` with `kind: "delegation"`
+shows **Delegated by** with the request of its turn. The parent is `parent_turn_id` when given,
+otherwise the turn of the same `session_id` that ended next after the delegation.
 
 With rule sharing (beta), a run_pipeline entry that handed out rules also shows a **Rules** line
 listing each rule as `file#heading (hash8)` — for example `AGENTS.md#Testing (47727fe4)` — where

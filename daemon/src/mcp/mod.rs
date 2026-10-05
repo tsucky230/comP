@@ -713,8 +713,26 @@ fn run_compact_history_fold(
     days: u32,
     now_ms: u64,
 ) -> Result<Vec<(std::path::PathBuf, usize, usize)>> {
-    let _ = (workspace_root, days, now_ms);
-    unimplemented!()
+    let hist_dir = std::path::Path::new(workspace_root).join(".comp").join("history");
+    let mut results = Vec::new();
+    let entries = match std::fs::read_dir(&hist_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(results),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let before = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+        compact_history_file(&path, |orig| {
+            let deduped = dedup_exact_duplicate_lines(orig)?;
+            trace::fold_old_lines(&deduped, now_ms, days)
+        })?;
+        let after = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+        results.push((path, before, after));
+    }
+    Ok(results)
 }
 
 fn run_compact_history(workspace_root: &str) -> Result<Vec<(std::path::PathBuf, usize, usize)>> {
@@ -874,6 +892,10 @@ fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
             repair,
         });
     }
+    if args.len() == 5 && args[1] == "compact-history" && args[3] == "--fold-after-days" {
+        let days = args[4].parse::<u32>().ok().filter(|d| *d >= 1)?;
+        return Some(CliSubcommand::CompactHistoryFold { workspace_root: args[2].clone(), days });
+    }
     if args.len() == 3 && args[1] == "compact-history" {
         return Some(CliSubcommand::CompactHistory { workspace_root: args[2].clone() });
     }
@@ -902,16 +924,39 @@ fn run_append_history(
     // could set it directly, a confused or malicious hook script could spoof
     // attribution. This struct has no `agent` field at all, so serde silently
     // ignores one if present in the input — agent_id (the CLI arg) always wins.
+    //
+    // The optional trace fields (YASAKANI plan B) let an orchestrator record a
+    // delegation: `kind` must be "turn" or "delegation" when given, so a typo
+    // cannot create records session_recall would never link.
     #[derive(serde::Deserialize)]
     struct AppendHistoryPayload {
         request: String,
         #[serde(default)]
         outcome: Option<String>,
+        #[serde(default)]
+        files: Vec<String>,
+        #[serde(default)]
+        session_id: Option<String>,
+        #[serde(default)]
+        turn_id: Option<String>,
+        #[serde(default)]
+        parent_turn_id: Option<String>,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        commit: Option<String>,
+        #[serde(default)]
+        test_exit: Option<i32>,
     }
 
     let mut buf = String::new();
     input.read_to_string(&mut buf)?;
     let payload: AppendHistoryPayload = serde_json::from_str(&buf)?;
+    if let Some(kind) = payload.kind.as_deref() {
+        if kind != "turn" && kind != "delegation" {
+            return Err(anyhow!("'kind' must be \"turn\" or \"delegation\", got {:?}", kind));
+        }
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -919,16 +964,21 @@ fn run_append_history(
         .unwrap_or(0);
 
     let call = SessionCall {
-        query: payload.request,
-        outcome: payload.outcome,
+        query: trace::redact_secrets(&payload.request),
+        outcome: payload.outcome.as_deref().map(trace::redact_secrets),
         symbols: Vec::new(),
-        files: Vec::new(),
+        files: payload.files,
         tokens: 0,
         stale: false,
         timestamp: now,
         agent: agent_id.to_string(),
         rules: Vec::new(),
-        ..Default::default()
+        session_id: payload.session_id,
+        turn_id: payload.turn_id,
+        parent_turn_id: payload.parent_turn_id,
+        kind: payload.kind,
+        commit: payload.commit,
+        test_exit: payload.test_exit,
     };
 
     let month = &format_epoch_ms(now)[0..7];
@@ -2804,13 +2854,13 @@ impl MCPServer {
                 },
                 {
                     "name": "session_recall",
-                    "description": "Recall past MCP tool invocations (queries, symbols, files, tokens) across ALL sessions, newest first, each tagged with its date/time. Survives daemon restarts and session breaks — call this when resuming work to reconstruct what was previously asked and done. Returns a Markdown list with stale status. If query is provided, filters by substring match.",
+                    "description": "Recall past MCP tool invocations (queries, symbols, files, tokens) across ALL sessions, newest first, each tagged with its date/time. Survives daemon restarts and session breaks — call this when resuming work to reconstruct what was previously asked and done. Returns a Markdown list with stale status. If query is provided, substring matches come first (newest first), then other records ranked by relevance (BM25 over character bigrams, so Japanese and multi-word queries work) weighted by recency. Turns list the delegations they ran; delegations name the turn that ran them.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "Optional search query to filter past invocations (case-insensitive substring)"
+                                "description": "Optional search query: case-insensitive substring matches first, then relevance-ranked matches"
                             },
                             "limit": {
                                 "type": "integer",
@@ -3086,19 +3136,21 @@ impl MCPServer {
             ));
         }
 
+        // WHY ranked rather than filtered: a substring filter misses paraphrases and
+        // multi-word queries (Japanese has no spaces to split on). Substring hits keep
+        // their old place at the top; char-bigram BM25 hits follow (trace::rank_by_query).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let order: Vec<usize> = match query_filter {
+            Some(ref q) => trace::rank_by_query(&calls, q, now_ms),
+            None => (0..calls.len()).collect(),
+        };
+
         let mut shown = 0;
-        for call in &calls {
-            if let Some(ref q_filter) = query_filter {
-                let hit = call.query.to_lowercase().contains(q_filter)
-                    || call
-                        .outcome
-                        .as_ref()
-                        .map(|o| o.to_lowercase().contains(q_filter))
-                        .unwrap_or(false);
-                if !hit {
-                    continue;
-                }
-            }
+        for &idx in &order {
+            let call = &calls[idx];
             if shown >= limit {
                 break;
             }
@@ -3135,6 +3187,34 @@ impl MCPServer {
                     .map(|r| format!("{}#{} ({})", r.file, r.heading, &r.hash[..r.hash.len().min(8)]))
                     .collect();
                 markdown.push_str(&format!("  - **Rules**: {}\n", format_capped_list(&refs, RECALL_LIST_CAP)));
+            }
+            // Multi-agent trace: which delegations a turn ran, and which turn ran a delegation.
+            match call.kind.as_deref() {
+                Some("turn") => {
+                    if let Some(ref c) = call.commit {
+                        markdown.push_str(&format!("  - **Commit**: {}\n", &c[..c.len().min(8)]));
+                    }
+                    let children: Vec<String> = trace::delegations_for_turn(&calls, idx)
+                        .iter()
+                        .map(|&d| match calls[d].test_exit {
+                            Some(code) => format!("{} (test_exit {})", calls[d].agent, code),
+                            None => calls[d].agent.clone(),
+                        })
+                        .collect();
+                    if !children.is_empty() {
+                        markdown.push_str(&format!(
+                            "  - **Delegations**: {}\n",
+                            format_capped_list(&children, RECALL_LIST_CAP)
+                        ));
+                    }
+                }
+                Some("delegation") => {
+                    if let Some(p) = trace::parent_turn_of(&calls, idx) {
+                        let parent: String = calls[p].query.chars().take(60).collect();
+                        markdown.push_str(&format!("  - **Delegated by**: \"{}\"\n", parent));
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -3186,9 +3266,10 @@ impl MCPServer {
     pub async fn handle_session_log(&self, params: Value) -> Result<Value> {
         let request = params["request"]
             .as_str()
-            .ok_or_else(|| anyhow!("Missing 'request' parameter"))?
-            .to_string();
-        let outcome = params["outcome"].as_str().map(|s| s.to_string());
+            .ok_or_else(|| anyhow!("Missing 'request' parameter"))?;
+        // Redact at write time: the history file is plain text that outlives the session.
+        let request = trace::redact_secrets(request);
+        let outcome = params["outcome"].as_str().map(trace::redact_secrets);
         let files: Vec<String> = params["files"]
             .as_array()
             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())

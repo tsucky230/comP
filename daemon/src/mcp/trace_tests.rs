@@ -597,7 +597,7 @@ async fn integ_session_recall_shows_delegations_under_their_turn() {
     let md = md.as_str().unwrap().to_string();
     let second = md.find("二番目の依頼").expect("turn 2 shown");
     let deleg_line = md[second..].find("**Delegations**").expect("delegations listed under turn 2") + second;
-    let next_entry = md[second + 1..].find("\n- `").map(|x| x + second + 1).unwrap_or(md.len());
+    let next_entry = md[second..].find("\n- `").map(|x| x + second).unwrap_or(md.len());
     assert!(deleg_line < next_entry, "Delegations must belong to turn 2's entry:\n{}", md);
     assert!(md[deleg_line..next_entry].contains("codex"), "{}", md);
     assert!(md[second..next_entry].contains("**Commit**: 01234567"), "{}", md);

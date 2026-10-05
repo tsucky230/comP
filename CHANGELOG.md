@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
   - プロンプトインジェクション対策: ホーム配下・git 管理外・ワークスペース外（すり替えられたシンボリックリンクを含む）・64KB 超は読まない、制御文字の除去、参考情報である旨の注記
 - 上位の企画書 `docs/dev/MULTI_AGENT_TRACE_ja.md`（複数エージェントの追跡: 会話の記録・ルール共有・指示のつながり）。利用者向けに `docs/user/BETA_FEATURES*.md`・`MCP_TOOLS.md`・`CONFIGURATION.md` を更新
 - `.comp/config.json` の同期処理を共通化（`syncConfigSection`）
+- **指示のつながり（T3）**: 記録に任意の欄 `session_id`・`turn_id`・`parent_turn_id`・`kind`（`turn`/`delegation`）・`commit`・`test_exit` を追加（`daemon/src/mcp/trace.rs`）。空の欄は JSON に出さないので、古い行はそのまま読める
+  - `record-turn` が、Claude Code の `session_id`、依頼行の `uuid`（turn_id）、`git rev-parse HEAD`、その往復で Edit/Write したファイル（ワークスペース相対）を記録する
+  - `append-history` が上の欄を受け付ける。オーケストレーター（YASAKANI の `delegate_run.py`）が委譲の結果を `kind: "delegation"` で記録する。`kind` が `turn`/`delegation` 以外なら失敗
+  - `session_recall` が、ターンの下に「Delegations」（その往復で走った委譲）と「Commit」を、委譲の下に「Delegated by」を表示する。親は `parent_turn_id`、なければ同じ `session_id` の時刻の範囲で決める（オーケストレーターは往復の途中で自分の turn_id を知らないため）
+- **`session_recall` の検索**: `query` は、部分一致の結果を従来どおり先頭に出し、続けて文字の1-gram・2-gram の BM25 に新しさ（半減期90日）を掛けた順で、言い換えや複数語の問い合わせにも当たるようにした
+- **秘密の伏せ字**: `record-turn`・`session_log`・`append-history` が書き込む前に、API キーの形（`sk-`・`AIza`・`ghp_`・`github_pat_`・`xox?-`・`AKIA`）と `api_key=`・`token:` などの値（16字以上で数字を含むもの）を `[REDACTED]` に置き換える
+- **`compact-history <ws> --fold-after-days N`**: 重複行の削除に加え、N 日より古い記録の依頼・応答を先頭120字に畳む（`.bak` を残す。畳んだ本文は検索できなくなる）。引数なしの動作は従来どおり
 
 ## [0.11.7] - 2026-10-05
 
