@@ -13,6 +13,7 @@ mod indexer;
 mod graph;
 mod search;
 mod mcp;
+mod rules;
 
 use graph::GraphDB;
 use search::SearchEngine;

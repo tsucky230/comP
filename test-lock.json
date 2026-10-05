@@ -1,11 +1,12 @@
 {
-  "commit": "252302d0a3f77e6180cb45548d2d830aa950c3cc",
+  "commit": "81ff3ba46e1200572054f6cae83a60b3e6e1b5a1",
   "files": {
     "daemon/src/mcp/record_turn_tests.rs": "c1c8ecc2bed68d1d750271aaa9d42cd8dbc7e6415e9c3e17378c0a564a8d8a19",
+    "daemon/src/rules/tests.rs": "6e3f775de69af300762a1c60cf7d462999c61e2cc851cfb3c81a9a2790c381f6",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts": "65132fdde0078562c83e8104d5f50f179a5315594d5b4954034d430a21114808",
     "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05"
   },
-  "frozen_at": "2026-10-05T05:02:44Z",
+  "frozen_at": "2026-10-05T07:40:25Z",
   "history": [
     {
       "approved_by": null,
@@ -78,6 +79,18 @@
       },
       "note": "会話記録β版: 設定画面・同期・フック導入の既定OFF・外すコマンド",
       "request": "TCR-5"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-10-05T07:40:25Z",
+      "commit": "81ff3ba46e1200572054f6cae83a60b3e6e1b5a1",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "ルール共有（T2）: rules モジュールの契約テスト",
+      "request": "TCR-6"
     }
   ],
   "metrics": {
@@ -88,7 +101,8 @@
   "paths": [
     "daemon/src/mcp/record_turn_tests.rs",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts",
-    "src/test/conversationRecording.test.ts"
+    "src/test/conversationRecording.test.ts",
+    "daemon/src/rules/tests.rs"
   ],
   "version": 1
 }
