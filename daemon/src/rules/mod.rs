@@ -18,6 +18,8 @@
 //!   JSON boolean); see [`rule_sharing_enabled`].
 
 use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use sha2::{Digest, Sha256};
 
 /// Files larger than this are skipped (not truncated).
 pub const MAX_FILE_BYTES: u64 = 64 * 1024;
@@ -82,23 +84,76 @@ pub struct ConflictPair {
 /// Backslashes are treated as `/`. Absolute paths and paths with a `..`
 /// component return None.
 pub fn owner_of(rel_path: &str) -> Option<&'static str> {
-    let _ = rel_path;
-    todo!()
+    let path = rel_path.replace('\\', "/");
+    if path.starts_with('/')
+        || path.as_bytes().get(1) == Some(&b':')
+        || path.split('/').any(|part| part == "..")
+    {
+        return None;
+    }
+    match path.as_str() {
+        "CLAUDE.md" | ".claude/CLAUDE.md" => Some("claude-code"),
+        "AGENTS.md" => Some("codex"),
+        "GEMINI.md" => Some("gemini-cli"),
+        ".github/copilot-instructions.md" => Some("github-copilot"),
+        "CONVENTIONS.md" => Some("aider"),
+        ".clinerules" => Some("cline"),
+        ".windsurfrules" => Some("windsurf"),
+        _ if path.starts_with(".clinerules/") && path.ends_with(".md") => Some("cline"),
+        _ if path.starts_with(".cursor/rules/")
+            && (path.ends_with(".md") || path.ends_with(".mdc")) => Some("cursor"),
+        _ => None,
+    }
 }
 
 /// Run `git ls-files -z` in `workspace` and return the tracked paths.
 /// Err(reason) when git is missing or `workspace` is not inside a repository.
 pub fn git_tracked_files(workspace: &Path) -> Result<Vec<String>, String> {
-    let _ = workspace;
-    todo!()
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "-z"])
+        .current_dir(workspace)
+        .output()
+        .map_err(|error| format!("git ls-files: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git ls-files failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout.split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).replace('\\', "/"))
+        .collect())
 }
 
 /// Read one instruction file. Ok(None) when it must be skipped: missing,
 /// larger than [`MAX_FILE_BYTES`], not valid UTF-8, or resolving (after
 /// canonicalization) outside the canonical workspace.
 pub fn read_rule_file(workspace: &Path, rel_path: &str) -> std::io::Result<Option<String>> {
-    let _ = (workspace, rel_path);
-    todo!()
+    if owner_of(rel_path).is_none() {
+        return Ok(None);
+    }
+    let root = workspace.canonicalize()?;
+    let path = match workspace.join(rel_path.replace('\\', "/")).canonicalize() {
+        Ok(path) => path,
+        Err(_) => return Ok(None),
+    };
+    if !path.starts_with(&root) {
+        return Ok(None);
+    }
+    let mut file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_FILE_BYTES {
+        return Ok(None);
+    }
+    // Bound the read as well as checking metadata, in case the file grows.
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    (&mut file).take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Ok(None);
+    }
+    Ok(String::from_utf8(bytes).ok().map(|text| sanitize(&text)))
 }
 
 /// Split one file into sections.
@@ -114,14 +169,52 @@ pub fn read_rule_file(workspace: &Path, rel_path: &str) -> std::io::Result<Optio
 /// - Sections whose body is empty after trimming are dropped.
 /// - Heading and body have control characters removed (see [`sanitize`]).
 pub fn parse_sections(file: &str, owner: &str, text: &str) -> Vec<RuleSection> {
-    let _ = (file, owner, text);
-    todo!()
+    let lines: Vec<&str> = text.lines().collect();
+    let start = if lines.first() == Some(&"---") {
+        lines.iter().skip(1).position(|line| *line == "---")
+            .map(|index| index + 2).unwrap_or(0)
+    } else {
+        0
+    };
+    let mut sections = Vec::new();
+    let mut heading = String::new();
+    let mut body = String::new();
+    let mut fence: Option<&str> = None;
+    for line in &lines[start..] {
+        let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+        let marker = if indentation <= 3 {
+            let trimmed = &line[indentation..];
+            if trimmed.starts_with("```") { Some("```") }
+            else if trimmed.starts_with("~~~") { Some("~~~") }
+            else { None }
+        } else {
+            None
+        };
+        if let Some(open) = fence {
+            if marker == Some(open) {
+                fence = None;
+            }
+        } else if let Some(marker) = marker {
+            fence = Some(marker);
+        } else {
+            let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
+            if (1..=3).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ') {
+                push_section(&mut sections, file, owner, &heading, &body);
+                heading = sanitize(line[hashes + 1..].trim_end_matches(['#', ' ']).trim());
+                body.clear();
+                continue;
+            }
+        }
+        body.push_str(line);
+        body.push('\n');
+    }
+    push_section(&mut sections, file, owner, &heading, &body);
+    sections
 }
 
 /// Remove control characters except `\n` and `\t`.
 pub fn sanitize(text: &str) -> String {
-    let _ = text;
-    todo!()
+    text.chars().filter(|ch| !ch.is_control() || *ch == '\n' || *ch == '\t').collect()
 }
 
 /// All sections of every git-tracked instruction file in `workspace`.
@@ -131,8 +224,18 @@ pub fn load_sections(
     workspace: &Path,
     tracked: &dyn Fn(&Path) -> Result<Vec<String>, String>,
 ) -> Result<Vec<RuleSection>, String> {
-    let _ = (workspace, tracked);
-    todo!()
+    let mut sections = Vec::new();
+    for file in tracked(workspace)? {
+        let file = file.replace('\\', "/");
+        if let Some(owner) = owner_of(&file) {
+            match read_rule_file(workspace, &file) {
+                Ok(Some(text)) => sections.extend(parse_sections(&file, owner, &text)),
+                Ok(None) => {},
+                Err(error) => return Err(format!("{file}: {error}")),
+            }
+        }
+    }
+    Ok(sections)
 }
 
 /// Sections relevant to `task`, for the agent `agent_id`, within `max_tokens`.
@@ -154,8 +257,33 @@ pub fn relevant_rules(
     max_tokens: usize,
     count_tokens: &dyn Fn(&str) -> usize,
 ) -> Vec<RuleSection> {
-    let _ = (sections, task, agent_id, max_tokens, count_tokens);
-    todo!()
+    let (counts, idf) = term_corpus(sections);
+    let task_terms = term_counts(task);
+    let mut seen = BTreeSet::new();
+    let mut ranked = Vec::new();
+    for (index, section) in sections.iter().enumerate() {
+        if !seen.insert(&section.hash) || section.owner == agent_id {
+            continue;
+        }
+        let score: f64 = task_terms.keys()
+            .filter(|term| counts[index].contains_key(*term))
+            .map(|term| idf[term]).sum();
+        if score > 0.0 {
+            ranked.push((index, score));
+        }
+    }
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut remaining = max_tokens;
+    let mut result = Vec::new();
+    for (index, _) in ranked {
+        let section = &sections[index];
+        let tokens = count_tokens(&format!("{}\n{}", section.heading, section.text));
+        if tokens <= remaining {
+            remaining -= tokens;
+            result.push(section.clone());
+        }
+    }
+    result
 }
 
 /// Pairs of sections that may contradict, for an LLM to judge.
@@ -168,8 +296,58 @@ pub fn relevant_rules(
 /// at least [`CONFLICT_SIMILARITY`]. Highest similarity first (ties: by
 /// `(a.file, a.heading, b.file, b.heading)`), at most `max_pairs`.
 pub fn conflict_candidates(sections: &[RuleSection], max_pairs: usize) -> Vec<ConflictPair> {
-    let _ = (sections, max_pairs);
-    todo!()
+    if max_pairs == 0 {
+        return Vec::new();
+    }
+    let (counts, idf) = term_corpus(sections);
+    let vectors: Vec<BTreeMap<String, f64>> = counts.iter().map(|terms| {
+        terms.iter().map(|(term, count)| (term.clone(), *count as f64 * idf[term])).collect()
+    }).collect();
+    let norms: Vec<f64> = vectors.iter()
+        .map(|vector| vector.values().map(|value| value * value).sum::<f64>().sqrt())
+        .collect();
+    let mut pairs = Vec::new();
+    for (i, a) in sections.iter().enumerate() {
+        if a.text.trim().chars().count() < MIN_CONFLICT_CHARS {
+            continue;
+        }
+        for (j, b) in sections.iter().enumerate().skip(i + 1) {
+            if a.owner == b.owner || a.hash == b.hash
+                || b.text.trim().chars().count() < MIN_CONFLICT_CHARS {
+                continue;
+            }
+            let mut shared = 0;
+            let mut dot = 0.0;
+            for (term, value) in &vectors[i] {
+                if let Some(other) = vectors[j].get(term) {
+                    shared += 1;
+                    dot += value * other;
+                }
+            }
+            let similarity = if norms[i] == 0.0 || norms[j] == 0.0 {
+                0.0
+            } else {
+                (dot / (norms[i] * norms[j])).clamp(0.0, 1.0)
+            };
+            if shared >= MIN_SHARED_TERMS && similarity >= CONFLICT_SIMILARITY {
+                let (a, b) = if (&a.file, &a.heading) < (&b.file, &b.heading) {
+                    (a, b)
+                } else if (&b.file, &b.heading) < (&a.file, &a.heading) {
+                    (b, a)
+                } else {
+                    // Equal keys cannot meet ConflictPair's strict ordering contract.
+                    continue;
+                };
+                pairs.push(ConflictPair { a: a.clone(), b: b.clone(), similarity });
+            }
+        }
+    }
+    pairs.sort_by(|a, b| b.similarity.total_cmp(&a.similarity).then_with(|| {
+        (&a.a.file, &a.a.heading, &a.b.file, &a.b.heading)
+            .cmp(&(&b.a.file, &b.a.heading, &b.b.file, &b.b.heading))
+    }));
+    pairs.truncate(max_pairs);
+    pairs
 }
 
 /// Save `section` as `<workspace>/.comp/rules/<hash>.md` unless it exists.
@@ -177,15 +355,94 @@ pub fn conflict_candidates(sections: &[RuleSection], max_pairs: usize) -> Vec<Co
 /// line, then the text and a trailing newline. Written through a temporary
 /// file and rename. Returns the path.
 pub fn snapshot(workspace: &Path, section: &RuleSection) -> std::io::Result<PathBuf> {
-    let _ = (workspace, section);
-    todo!()
+    let directory = workspace.join(".comp").join("rules");
+    std::fs::create_dir_all(&directory)?;
+    let path = directory.join(format!("{}.md", section.hash));
+    if path.exists() {
+        return Ok(path);
+    }
+    let temporary = directory.join(format!("{}.md.tmp-{}", section.hash, std::process::id()));
+    let content = format!("<!-- file: {} -->\n<!-- heading: {} -->\n\n{}\n",
+        section.file, section.heading, section.text);
+    std::fs::write(&temporary, content)?;
+    std::fs::rename(&temporary, &path)?;
+    Ok(path)
 }
 
 /// True only when `<workspace>/.comp/config.json` parses and has
 /// `ruleSharing.enabled` equal to the JSON boolean `true`.
 pub fn rule_sharing_enabled(workspace: &Path) -> bool {
-    let _ = workspace;
-    todo!()
+    let Ok(bytes) = std::fs::read(workspace.join(".comp").join("config.json")) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    value.get("ruleSharing").and_then(|rules| rules.get("enabled"))
+        .and_then(serde_json::Value::as_bool) == Some(true)
+}
+
+// Commit only nonempty, sanitized sections, hashing exactly the returned content.
+fn push_section(sections: &mut Vec<RuleSection>, file: &str, owner: &str, heading: &str, body: &str) {
+    let heading = sanitize(heading);
+    let text = sanitize(body).trim().to_owned();
+    if text.is_empty() {
+        return;
+    }
+    let hash = format!("{:x}", Sha256::digest(format!("{heading}\n{text}").as_bytes()));
+    sections.push(RuleSection {
+        file: file.replace('\\', "/"), owner: owner.to_owned(), heading, text, hash,
+    });
+}
+
+// Tokenize maximal ASCII and CJK runs independently; delimiters flush each run.
+fn term_counts(text: &str) -> BTreeMap<String, usize> {
+    fn cjk(ch: char) -> bool {
+        matches!(ch, '\u{3040}'..='\u{309f}' | '\u{30a0}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}')
+    }
+    let mut counts = BTreeMap::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_alphanumeric() {
+            let mut word = String::from(ch.to_ascii_lowercase());
+            while chars.peek().is_some_and(|next| next.is_ascii_alphanumeric()) {
+                word.push(chars.next().unwrap().to_ascii_lowercase());
+            }
+            if word.len() >= 2 && !STOPWORDS.contains(&word.as_str()) {
+                *counts.entry(word).or_insert(0) += 1;
+            }
+        } else if cjk(ch) {
+            let mut run = vec![ch];
+            while chars.peek().is_some_and(|next| cjk(*next)) {
+                run.push(chars.next().unwrap());
+            }
+            if run.len() == 1 {
+                *counts.entry(ch.to_string()).or_insert(0) += 1;
+            } else {
+                for pair in run.windows(2) {
+                    *counts.entry(pair.iter().collect::<String>()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    counts
+}
+
+// Compute document frequency over the full input, before filtering or deduplication.
+fn term_corpus(sections: &[RuleSection]) -> (Vec<BTreeMap<String, usize>>, BTreeMap<String, f64>) {
+    let counts: Vec<_> = sections.iter()
+        .map(|section| term_counts(&format!("{}\n{}", section.heading, section.text)))
+        .collect();
+    let mut frequencies = BTreeMap::new();
+    for terms in &counts {
+        for term in terms.keys() {
+            *frequencies.entry(term.clone()).or_insert(0usize) += 1;
+        }
+    }
+    let idf = frequencies.into_iter().map(|(term, frequency)| {
+        (term, (1.0 + sections.len() as f64 / frequency as f64).ln())
+    }).collect();
+    (counts, idf)
 }
 
 #[cfg(test)]
