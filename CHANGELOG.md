@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
   - `comp-daemon record-turn [workspace_root]` を追加（`daemon/src/mcp/record_turn.rs`）。Stop フックの入力 JSON を受け取り、transcript から最後の依頼と応答を取り出してロック付きで `.comp/history/` へ追記する。bash・node は不要。追記失敗時は spill へ退避して終了コード 1、終了コード 2 は返さない
   - 「comP: Setup Agents」で Claude Code を選ぶと、`.claude/settings.local.json` にこのフックを登録する（`src/mcp/AgentSetup.ts`）。既存の設定とほかのフックは保持し、古い record-turn は置き換える。不正な JSON は書き換えない。`history-record` を既に使うプロジェクトには入れない。拡張更新・移動で古くなったパスは `repairStaleConfigs` が直す。結果は「comP Setup」出力に表示
   - CLAUDE.md に追記する Session Continuity の文から、事実と異なる「フックがプロンプトごとに履歴を自動注入する」を削除し、Stop フックによる記録の説明に置き換えた
-- テスト追加: Rust `mcp::record_turn::tests`（34件）・`test_parse_cli_subcommand_record_turn`、TypeScript `AgentSetupHistoryHook.test.ts`（45件）
+- テスト追加: Rust `mcp::record_turn::tests`（35件）・`test_parse_cli_subcommand_record_turn`、TypeScript `AgentSetupHistoryHook.test.ts`（45件）
 
 ## [0.11.6] - 2026-09-24
 
