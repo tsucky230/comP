@@ -211,7 +211,7 @@ LLM の自発性に依存せず harness 側で確実に記録・注入する仕�
 | `Stop` | `comp-daemon record-turn`（comP リポジトリでは `history-record.sh` 経由） | `transcript_path` を解析し、ロック付きで `.comp/history/` へ追記（失敗時は spill へ退避。4.2.1 参照） |
 | `UserPromptSubmit` | `context-inject.sh` | `.comp/history/` 直近 5 件を読み `additionalContext`（`<system-reminder>`）として自動注入 |
 
-`Stop` フックは、拡張機能の「comP: Setup Agents」で Claude Code を選ぶと、各プロジェクトの `.claude/settings.local.json` に `"<comp-daemon の絶対パス>" record-turn "<ワークスペース>"` として登録される（マシン固有のパスを含むため、共有される `settings.json` には書かない）。拡張機能の更新やプロジェクトの移動で古くなったパスは、起動時の `repairStaleConfigs` が書き直す。`settings.json` か `settings.local.json` に既に `history-record` があるプロジェクトには、二重記録を避けるため登録しない。`UserPromptSubmit` の自動注入は comP リポジトリの開発用フックのみで、初期設定では入らない。
+`Stop` フックは会話の記録（β版、設定 `comp.conversationRecording.enabled`、既定OFF）の一部で、ONのときに拡張機能の「comP: Setup Agents」で Claude Code を選ぶと、各プロジェクトの `.claude/settings.local.json` に `"<comp-daemon の絶対パス>" record-turn "<ワークスペース>"` として登録される（マシン固有のパスを含むため、共有される `settings.json` には書かない）。拡張機能の更新やプロジェクトの移動で古くなったパスは、起動時の `repairStaleConfigs` が書き直す。`settings.json` か `settings.local.json` に既に `history-record` があるプロジェクトには、二重記録を避けるため登録しない。拡張機能は設定を起動時と変更時に `.comp/config.json` の `conversationRecording` へ書き写し、`record-turn` は transcript を読む前にそれを確かめて、`enabled` が `true` でなければ何も記録しない（OFFにするとフックは残ったまま記録だけが止まる。外すのはコマンド `comp.removeHistoryHooks`）。企画と今後の計画は `docs/dev/CONVERSATION_RECORDING_ja.md`。`UserPromptSubmit` の自動注入は comP リポジトリの開発用フックのみで、初期設定では入らない。
 
 ```mermaid
 sequenceDiagram

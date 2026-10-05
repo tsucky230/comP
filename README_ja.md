@@ -115,7 +115,7 @@ comP が各ツールの実際の設定ファイルへ直接書き込み、既存
 
 | エージェント | 書き込み先 |
 | --- | --- |
-| **Claude Code** | `.mcp.json`（任意で `claude mcp add --scope user` も実行）と、各往復を `.comp/history/` に記録する Stop フック（`.claude/settings.local.json`） |
+| **Claude Code** | `.mcp.json`（任意で `claude mcp add --scope user` も実行）。会話の記録（β版）がONなら、各往復を `.comp/history/` に記録する Stop フック（`.claude/settings.local.json`）も |
 | **Codex** | `~/.codex/config.toml` と `.codex/config.toml` |
 | **GitHub Copilot** | `.vscode/mcp.json` |
 | **Cursor** | `.cursor/mcp.json` と `~/.cursor/mcp.json` |
@@ -273,6 +273,17 @@ VS Code 設定からの除外も可能：
 ```json
 { "comp.exclude": ["env", "data", "logs"] }
 ```
+
+---
+
+## 会話の記録（β版）
+
+既定はOFFです。VS Code の設定で `comp.conversationRecording.enabled` をONにしてから **comP: Setup Agents** で
+Claude Code を選ぶと、各往復が `.comp/history/` に記録され、あとで `session_recall` から読めます。設定をOFFに
+戻すと記録はすぐ止まり、フックは **comP: 会話記録フックを外す** で外せます。記録はワークスペースの中だけに
+残ります。`.comp/` は git に含めないでください。詳細は
+[設定の手引き](docs/user/CONFIGURATION.md#conversation-recording-beta) と
+[企画書](docs/dev/CONVERSATION_RECORDING_ja.md)。
 
 ---
 

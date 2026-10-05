@@ -8,6 +8,25 @@ All settings are under `comp.*` in VS Code settings (`Ctrl+,`).
 | `comp.enableCodeLens` | boolean | `true` | Show dependency counts as CodeLens above symbols |
 | `comp.autoIndex` | boolean | `true` | Automatically index files on workspace open. Also gates the branch-switch watcher — see [Branch switches](./MCP_SETUP.md#branch-switches) — since disabling auto-indexing means no automatic reindex should fire from either path. |
 | `comp.exclude` | string[] | `[]` | Additional directory names to exclude from indexing. Synced to `.comp/config.json` on activation. Changes take effect after Force Re-index. |
+| `comp.conversationRecording.enabled` | boolean | `false` | **Beta.** Record each conversation turn to `.comp/history/`. See [Conversation recording (beta)](#conversation-recording-beta). |
+| `comp.conversationRecording.claudeCode` | boolean | `true` | **Beta.** Record Claude Code turns (Stop hook). Only takes effect while `comp.conversationRecording.enabled` is on. |
+
+## Conversation recording (beta)
+
+Off by default. When `comp.conversationRecording.enabled` is on:
+
+1. The setting is synced to `.comp/config.json` (`conversationRecording`) on activation and whenever it changes.
+2. **comP: Setup Agents** with Claude Code selected installs a Stop hook into `.claude/settings.local.json`:
+   `"<comp-daemon>" record-turn "<workspace>"`. It is never written to the shared `settings.json`.
+3. Each Claude Code turn (request up to 600 characters, response up to 400) is appended to `.comp/history/log-YYYY-MM.jsonl`.
+
+Turning the setting off stops recording immediately — `record-turn` checks `.comp/config.json` before reading
+anything — but leaves the hook installed. Run **comP: Remove Conversation Recording Hooks**
+(`comp.removeHistoryHooks`) to remove it; other hooks and settings in the file are kept and a `.bak` backup is taken.
+
+Records never leave the workspace, but they contain conversation text. Keep `.comp/` out of version control
+(add it to `.gitignore`). Other agents are not recorded automatically yet; the instruction files ask them to call
+`session_log` after each task. Plan and status: [docs/dev/CONVERSATION_RECORDING_ja.md](../dev/CONVERSATION_RECORDING_ja.md).
 
 ## Workspace vs User settings
 

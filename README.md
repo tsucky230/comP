@@ -115,7 +115,7 @@ merging with any MCP servers you already have. Nothing is copied by hand.
 
 | Agent | Written to |
 | --- | --- |
-| **Claude Code** | `.mcp.json` (plus optional `claude mcp add --scope user`), and a Stop hook in `.claude/settings.local.json` that records each turn to `.comp/history/` |
+| **Claude Code** | `.mcp.json` (plus optional `claude mcp add --scope user`); with conversation recording (beta) on, also a Stop hook in `.claude/settings.local.json` that records each turn to `.comp/history/` |
 | **Codex** | `~/.codex/config.toml` and `.codex/config.toml` |
 | **GitHub Copilot** | `.vscode/mcp.json` |
 | **Cursor** | `.cursor/mcp.json` and `~/.cursor/mcp.json` |
@@ -274,6 +274,16 @@ You can also exclude paths from VS Code settings:
 ```json
 { "comp.exclude": ["env", "data", "logs"] }
 ```
+
+---
+
+## Conversation Recording (Beta)
+
+Off by default. Turn on `comp.conversationRecording.enabled` in VS Code settings, then run
+**comP: Setup Agents** and pick Claude Code: each turn is recorded to `.comp/history/` so `session_recall`
+can restore it later. Turning the setting off stops recording at once; **comP: Remove Conversation Recording Hooks**
+removes the hook. Records stay in the workspace — keep `.comp/` out of git. Details:
+[Configuration](docs/user/CONFIGURATION.md#conversation-recording-beta).
 
 ---
 

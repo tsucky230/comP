@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Added
+
+- **会話の自動記録をβ版の設定にした（既定OFF）**: 設定画面に `comp.conversationRecording.enabled`（既定OFF）と `comp.conversationRecording.claudeCode`（既定ON）を「(β版)」付きで追加（`package.json`、`package.nls*.json`）。ONのときだけ初期設定が Claude Code の Stop フックを入れる。設定は起動時と変更時に `.comp/config.json` の `conversationRecording` へ同期し（`src/config/conversationRecording.ts`。壊れた JSON は上書きせず警告）、`record-turn` は transcript を読む前にそれを確かめて、ONでなければ何も記録しない。OFFにするとフックは残したまま記録だけが止まる
+- コマンド「comP: 会話記録フックを外す」（`comp.removeHistoryHooks`）: `.claude/settings.local.json` から `record-turn` のフックだけを外す（ほかのフック・設定は保持、`.bak` を作成）
+- OFFからONに切り替えたとき、フックが入っていなければ Setup Agents の実行を案内する通知を出す
+- 企画書 `docs/dev/CONVERSATION_RECORDING_ja.md`（β版の方針、エージェント別のフック調査、既知の制約、正式版にする条件）
+
 ### Fixed
 
 - **comP リポジトリ以外では Claude Code の会話が履歴に記録されない問題を修正**: 記録用の Stop フック（`history-record.sh`）は comP リポジトリの開発用で、初期設定は他のプロジェクトにフックを入れていなかった。さらにこのフックは transcript の本文を最上位の `content` から読んでいたが、実際の形式は `message.content` のため、comP リポジトリでも記録されていなかった
