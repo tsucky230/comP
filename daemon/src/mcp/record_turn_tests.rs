@@ -71,6 +71,21 @@ fn latest_last_prompt_is_used() {
 }
 
 #[test]
+fn user_line_after_last_prompt_wins() {
+    // TCR-1: a newer user line beats an older last-prompt line (Stop may run first).
+    let t = jsonl(&[user_text("old"), last_prompt("old"), user_text("new prompt"), assistant_text("a")]);
+    assert_eq!(extract_turn(&t, None).unwrap().request, "new prompt");
+}
+
+#[test]
+fn text_between_system_reminders_is_kept() {
+    let t = jsonl(&[user_text("<system-reminder>a</system-reminder>
+body
+<system-reminder>b</system-reminder>")]);
+    assert!(extract_turn(&t, None).unwrap().request.contains("body"));
+}
+
+#[test]
 fn falls_back_to_user_lines_without_last_prompt() {
     let t = jsonl(&[user_text("one"), assistant_text("a1"), user_text("two"), assistant_text("a2")]);
     assert_eq!(extract_turn(&t, None).unwrap().request, "two");

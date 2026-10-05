@@ -1,9 +1,9 @@
 {
-  "commit": "0255843286f2c8503057fb29c719e70c4cf81355",
+  "commit": "4c0e78baaab123bb2e57820a35667912b673e6ca",
   "files": {
-    "daemon/src/mcp/record_turn_tests.rs": "a860f98e9f2e3f2d3ff9dd0d0d20f5ae01f8a5d3b9d9a3b14455164a0388d535"
+    "daemon/src/mcp/record_turn_tests.rs": "cb3cf75c90deee8751bb955a50e804abbb9a404f85e839541eab38ff5f1bc67e"
   },
-  "frozen_at": "2026-10-05T02:03:19Z",
+  "frozen_at": "2026-10-05T02:11:38Z",
   "history": [
     {
       "approved_by": null,
@@ -16,6 +16,18 @@
       },
       "note": null,
       "request": "initial"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-10-05T02:11:38Z",
+      "commit": "4c0e78baaab123bb2e57820a35667912b673e6ca",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "user行がlast-promptより後なら優先 / system-reminder間の本文保持",
+      "request": "TCR-1"
     }
   ],
   "metrics": {
