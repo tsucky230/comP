@@ -1,9 +1,10 @@
 {
-  "commit": "4c0e78baaab123bb2e57820a35667912b673e6ca",
+  "commit": "ccc59875793badb630a181fc7386a444311654c4",
   "files": {
-    "daemon/src/mcp/record_turn_tests.rs": "cb3cf75c90deee8751bb955a50e804abbb9a404f85e839541eab38ff5f1bc67e"
+    "daemon/src/mcp/record_turn_tests.rs": "cb3cf75c90deee8751bb955a50e804abbb9a404f85e839541eab38ff5f1bc67e",
+    "src/mcp/tests/AgentSetupHistoryHook.test.ts": "fbe7afe0d79c0a7d533a093db3ebbba5e512b772592fd95433785b0fd26670b6"
   },
-  "frozen_at": "2026-10-05T02:11:38Z",
+  "frozen_at": "2026-10-05T03:32:11Z",
   "history": [
     {
       "approved_by": null,
@@ -28,6 +29,18 @@
       },
       "note": "user行がlast-promptより後なら優先 / system-reminder間の本文保持",
       "request": "TCR-1"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-10-05T03:32:11Z",
+      "commit": "ccc59875793badb630a181fc7386a444311654c4",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "AgentSetup historyHook テスト追加",
+      "request": "TCR-2"
     }
   ],
   "metrics": {
@@ -36,7 +49,8 @@
     "test_functions": 0
   },
   "paths": [
-    "daemon/src/mcp/record_turn_tests.rs"
+    "daemon/src/mcp/record_turn_tests.rs",
+    "src/mcp/tests/AgentSetupHistoryHook.test.ts"
   ],
   "version": 1
 }

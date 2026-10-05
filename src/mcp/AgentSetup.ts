@@ -85,6 +85,13 @@ export interface GenerateConfigResult {
   command?: string;
   /** Present only when at least one target failed */
   manualFallback?: ManualFallback[];
+  /**
+   * Claude Code only: the Stop hook (`comp-daemon record-turn`) written into
+   * `<workspace>/.claude/settings.local.json`. Kept out of `writes` so a hook
+   * that could not be installed never turns a working MCP registration into a
+   * reported failure.
+   */
+  historyHook?: WriteOutcome;
 }
 
 /** Runs an external command. Injectable so tests never spawn a real process. */
@@ -315,8 +322,8 @@ export class AgentSetupManager {
         "   - `session_recall({ \"limit\": 5 })` — 直近N件を表示",
         "2. 過去に何をしたかを確認し、その文脈のまま作業を続ける",
         "",
-        "**補足**: フック機構もプロンプトごとに直近の履歴を自動的に注入します（`<system-reminder>`）が、",
-        "過去の作業を手動で確認したり特定のタスクを検索したりする場合は、明示的に `session_recall` を呼ぶと便利です。",
+        "**補足**: Claude Code では、comP の初期設定が `.claude/settings.local.json` に Stop フック（`comp-daemon record-turn`）を入れ、",
+        "各往復を `.comp/history/` に記録します。`session_recall` はこの記録を読みます。",
       ].join("\n");
     }
     return [
@@ -332,8 +339,8 @@ export class AgentSetupManager {
       "   - `session_recall({ \"limit\": 5 })` — show last N interactions",
       "2. Review what was done previously and continue in that context",
       "",
-      "**Note**: The hook system also auto-injects recent history into each prompt (`<system-reminder>`),",
-      "but explicit `session_recall` is useful to manually review past work or search specific tasks.",
+      "**Note**: With Claude Code, comP setup installs a Stop hook (`comp-daemon record-turn`) in",
+      "`.claude/settings.local.json` that records each turn to `.comp/history/`; `session_recall` reads those records.",
     ].join("\n");
   }
 
@@ -1305,6 +1312,7 @@ export class AgentSetupManager {
 
     if (agentName === "Claude Code") {
       result.command = this.generateClaudeCodeCommand(daemonPath);
+      result.historyHook = this.ensureHistoryHook(daemonPath);
     }
 
     if (failed.length > 0) {
@@ -1547,7 +1555,7 @@ export class AgentSetupManager {
    * Never throws — a failure here must not block activation.
    */
   repairStaleConfigs(): RepairEntry[] {
-    return this.repairTargets().map((target) => {
+    const entries = this.repairTargets().map((target) => {
       try {
         return target.format === "toml" ? this.repairTomlTarget(target) : this.repairTarget(target);
       } catch (error) {
@@ -1558,6 +1566,173 @@ export class AgentSetupManager {
         };
       }
     });
+    try {
+      entries.push(this.repairHistoryHook());
+    } catch (error) {
+      entries.push({ file: this.historyHookFile(), status: "failed", reason: describeError(error) });
+    }
+    return entries;
+  }
+
+  /** Where setup puts the Claude Code Stop hook: machine-specific, so never the shared settings.json. */
+  private historyHookFile(): string {
+    return path.join(this.workspaceRoot, ".claude", "settings.local.json");
+  }
+
+  /**
+   * The hook command line: both paths quoted and with forward slashes.
+   *
+   * WHY forward slashes: Claude Code runs hook commands through a shell, which
+   * on Windows may be Git Bash, where backslashes inside double quotes are
+   * fragile; cmd.exe and PowerShell accept forward slashes just as well.
+   */
+  private historyHookCommand(daemonPath: string): string {
+    const fwd = (p: string) => p.replace(/\\/g, "/");
+    return `"${fwd(daemonPath)}" record-turn "${fwd(this.workspaceRoot)}"`;
+  }
+
+  /**
+   * Read settings.local.json for a hook edit: the parsed document plus its
+   * hooks.Stop array, created empty when absent. Throws on invalid JSON or a
+   * shape Claude Code itself would not accept, so the caller never rewrites a
+   * file it does not understand.
+   */
+  private static loadHookSettings(text: string | null): { doc: Record<string, unknown>; stop: unknown[] } {
+    const parsed: unknown = text === null ? {} : JSON.parse(text);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("settings file is not a JSON object");
+    }
+    const doc = parsed as Record<string, unknown>;
+    const hooks = doc["hooks"] ?? {};
+    if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) {
+      throw new Error("\"hooks\" is not an object");
+    }
+    const stop = (hooks as Record<string, unknown>)["Stop"] ?? [];
+    if (!Array.isArray(stop)) {
+      throw new Error("\"hooks.Stop\" is not an array");
+    }
+    doc["hooks"] = hooks;
+    (hooks as Record<string, unknown>)["Stop"] = stop;
+    return { doc, stop };
+  }
+
+  /** Every `{type: "command", command}` object under hooks.Stop that runs record-turn. */
+  private static recordTurnHooks(stop: unknown[]): Record<string, unknown>[] {
+    const found: Record<string, unknown>[] = [];
+    for (const group of stop) {
+      const inner = (group as Record<string, unknown> | null)?.["hooks"];
+      if (!Array.isArray(inner)) continue;
+      for (const hook of inner) {
+        const command = (hook as Record<string, unknown> | null)?.["command"];
+        if (typeof command === "string" && /(^|\s)record-turn(\s|$)/.test(command)) {
+          found.push(hook as Record<string, unknown>);
+        }
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Install the Stop hook that records each Claude Code turn into .comp/history.
+   *
+   * Never throws. Skips (rather than fails) when installing would be wrong:
+   * a path the shell would misread, a binary that does not exist yet, or a
+   * project that already records through its own history-record hook — adding
+   * ours there would write every turn twice.
+   */
+  private ensureHistoryHook(daemonPath: string): WriteOutcome {
+    const file = this.historyHookFile();
+    const base = { path: file, scope: "workspace" as const };
+
+    if (HOOK_UNSAFE_CHARACTERS.test(daemonPath) || HOOK_UNSAFE_CHARACTERS.test(this.workspaceRoot)) {
+      return { ...base, status: "skipped", reason: "the daemon or workspace path contains shell metacharacters" };
+    }
+    if (!fs.existsSync(daemonPath)) {
+      return { ...base, status: "skipped", reason: `daemon binary not found: ${daemonPath}` };
+    }
+    for (const name of ["settings.json", "settings.local.json"]) {
+      const candidate = path.join(this.workspaceRoot, ".claude", name);
+      if (fs.existsSync(candidate) && fs.readFileSync(candidate, "utf-8").includes("history-record")) {
+        return { ...base, status: "skipped", reason: `${name} already records history with history-record` };
+      }
+    }
+
+    try {
+      const text = fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : null;
+      const { doc, stop } = AgentSetupManager.loadHookSettings(text);
+      const command = this.historyHookCommand(daemonPath);
+      const existing = AgentSetupManager.recordTurnHooks(stop);
+
+      if (existing.length === 1 && existing[0]["command"] === command) {
+        return { ...base, status: "skipped", reason: "the record-turn hook is already installed" };
+      }
+      if (existing.length > 0) {
+        existing[0]["command"] = command;
+        // Extra copies would record every turn more than once.
+        for (const group of stop) {
+          const inner = (group as Record<string, unknown> | null)?.["hooks"];
+          if (Array.isArray(inner)) {
+            (group as Record<string, unknown>)["hooks"] = inner.filter(
+              (h) => h === existing[0] || !existing.includes(h as Record<string, unknown>)
+            );
+          }
+        }
+      } else {
+        stop.push({ hooks: [{ type: "command", command, timeout: HOOK_TIMEOUT_SECONDS }] });
+      }
+
+      const backupPath = this.backupIfExists(file);
+      this.atomicWrite(file, JSON.stringify(doc, null, 2) + "\n");
+      return { ...base, status: "written", ...(backupPath ? { backupPath } : {}) };
+    } catch (error) {
+      return { ...base, status: "failed", reason: describeError(error) };
+    }
+  }
+
+  /**
+   * The repairTarget() counterpart for the Stop hook: rewrite its daemon path
+   * after an extension upgrade, and its workspace argument after a move.
+   */
+  private repairHistoryHook(): RepairEntry {
+    const file = this.historyHookFile();
+    if (!fs.existsSync(file)) {
+      return { file, status: "missing" };
+    }
+
+    let loaded: { doc: Record<string, unknown>; stop: unknown[] };
+    try {
+      loaded = AgentSetupManager.loadHookSettings(fs.readFileSync(file, "utf-8"));
+    } catch (error) {
+      return { file, status: "failed", reason: `invalid settings: ${describeError(error)}` };
+    }
+
+    const hook = AgentSetupManager.recordTurnHooks(loaded.stop)[0];
+    if (!hook) {
+      return { file, status: "skipped", reason: "no record-turn hook" };
+    }
+    const command = hook["command"] as string;
+    const match = /^"([^"]+)" record-turn(?: "([^"]*)")?\s*$/.exec(command);
+    if (!match) {
+      return { file, status: "skipped", reason: "record-turn command is not in the form setup writes" };
+    }
+
+    const exeBroken = !fs.existsSync(match[1]);
+    const wsStale = match[2] !== this.workspaceRoot.replace(/\\/g, "/");
+    if (!exeBroken && !wsStale) {
+      return { file, status: "healthy" };
+    }
+    const exe = exeBroken ? this.resolveRepairPath("workspace") : match[1];
+    if (!exe) {
+      return { file, status: "skipped", reason: "no replacement binary available" };
+    }
+    if (HOOK_UNSAFE_CHARACTERS.test(exe) || HOOK_UNSAFE_CHARACTERS.test(this.workspaceRoot)) {
+      return { file, status: "skipped", reason: "the daemon or workspace path contains shell metacharacters" };
+    }
+
+    const replacement = this.historyHookCommand(exe);
+    hook["command"] = replacement;
+    this.atomicWrite(file, JSON.stringify(loaded.doc, null, 2) + "\n");
+    return { file, status: "repaired", from: command, to: replacement };
   }
 
   /**
@@ -1939,6 +2114,17 @@ const COMMAND_TIMEOUT_MS = 15_000;
  * so registration is skipped and the user runs the command themselves.
  */
 const SHELL_METACHARACTERS = /["&|<>^%]/;
+
+/**
+ * Characters that make a quoted path unsafe in a hook command line.
+ *
+ * Wider than SHELL_METACHARACTERS because the hook may run under Git Bash,
+ * where `$` and backticks still expand inside double quotes.
+ */
+const HOOK_UNSAFE_CHARACTERS = /["&|<>^%$`]/;
+
+/** Claude Code hook timeout, in seconds. record-turn reads one file and appends one line. */
+const HOOK_TIMEOUT_SECONDS = 10;
 
 /**
  * Quote one token for cmd.exe.

@@ -407,6 +407,22 @@ function renderSetupReport(
         lines.push(`         ${t("Reason:", "理由:")} ${write.reason}`);
       }
     }
+    if (result.historyHook) {
+      const hook = result.historyHook;
+      const mark = hook.status === "written" ? "OK  " : hook.status === "skipped" ? "SKIP" : "FAIL";
+      lines.push(
+        t(
+          `  [${mark}] ${hook.path}  (Stop hook: records each turn to .comp/history)`,
+          `  [${mark}] ${hook.path}  (Stop フック: 各往復を .comp/history に記録)`
+        )
+      );
+      if (hook.backupPath) {
+        lines.push(`         ${t("Backup:", "バックアップ:")} ${hook.backupPath}`);
+      }
+      if (hook.reason) {
+        lines.push(`         ${t("Reason:", "理由:")} ${hook.reason}`);
+      }
+    }
     for (const file of result.constitutionFiles) {
       lines.push(
         t(
