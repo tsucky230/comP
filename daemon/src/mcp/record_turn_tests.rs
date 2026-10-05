@@ -232,7 +232,19 @@ struct Ws {
     dir: tempfile::TempDir,
 }
 impl Ws {
-    fn new() -> Self { Ws { dir: tempfile::tempdir().unwrap() } }
+    /// A workspace with conversation recording switched on (TCR-4: recording is opt-in).
+    fn new() -> Self {
+        let ws = Ws::bare();
+        ws.config(r#"{"conversationRecording": {"enabled": true, "agents": {"claude-code": true}}}"#);
+        ws
+    }
+    /// A workspace with no .comp/config.json at all.
+    fn bare() -> Self { Ws { dir: tempfile::tempdir().unwrap() } }
+    fn config(&self, text: &str) {
+        let dir = self.path().join(".comp");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), text).unwrap();
+    }
     fn path(&self) -> &Path { self.dir.path() }
     fn s(&self) -> String { self.path().to_string_lossy().into_owned() }
     fn transcript(&self, lines: &[Value]) -> String {
@@ -469,5 +481,97 @@ fn month_file_follows_now_ms() {
                                 &mut real_append(&mut calls));
         assert_eq!(r, RecordResult::Recorded {
             hist_path: ws.hist_dir().join(format!("log-{}.jsonl", month)) });
+    }
+}
+
+// ---- conversation recording switch (beta, opt-in) ----
+
+fn assert_off(ws: &Ws, expect_in_reason: &str) {
+    let tr = ws.transcript(&[user_text("secret prompt"), assistant_text("a")]);
+    let mut calls = vec![];
+    let r = run_record_turn(Some(&ws.s()), None, &hook_json(&tr, &ws.s(), json!({})), NOW,
+                            &mut real_append(&mut calls));
+    match &r {
+        RecordResult::NothingToRecord { reason } => {
+            assert!(reason.contains(expect_in_reason), "reason {:?} lacks {:?}", reason, expect_in_reason)
+        }
+        other => panic!("expected NothingToRecord, got {:?}", other),
+    }
+    assert_eq!(exit_code(&r), 0);
+    assert!(calls.is_empty());
+    assert!(ws.spills().is_empty());
+    assert!(!ws.hist_dir().join("log-2026-09.jsonl").exists());
+}
+
+#[test]
+fn recording_is_off_without_config_file() {
+    assert_off(&Ws::bare(), "off");
+}
+
+#[test]
+fn recording_is_off_unless_enabled_is_literally_true() {
+    for cfg in [
+        r#"{}"#,
+        r#"{"exclude": []}"#,
+        r#"{"conversationRecording": {}}"#,
+        r#"{"conversationRecording": {"enabled": false}}"#,
+        r#"{"conversationRecording": {"enabled": "true"}}"#,
+        r#"{"conversationRecording": {"enabled": 1}}"#,
+        r#"{"conversationRecording": {"enabled": null}}"#,
+        r#"{"conversationRecording": true}"#,
+    ] {
+        let ws = Ws::bare();
+        ws.config(cfg);
+        assert_off(&ws, "off");
+    }
+}
+
+#[test]
+fn recording_is_off_when_claude_code_agent_is_disabled() {
+    for agents in [r#"{"claude-code": false}"#] {
+        let ws = Ws::bare();
+        ws.config(&format!(r#"{{"conversationRecording": {{"enabled": true, "agents": {}}}}}"#, agents));
+        assert_off(&ws, "off");
+    }
+}
+
+#[test]
+fn invalid_config_json_is_off_and_says_so() {
+    for bad in ["{", "", "not json", "[1]"] {
+        let ws = Ws::bare();
+        ws.config(bad);
+        assert_off(&ws, "config.json");
+    }
+}
+
+#[test]
+fn enabled_without_agents_map_records() {
+    for cfg in [
+        r#"{"conversationRecording": {"enabled": true}}"#,
+        r#"{"conversationRecording": {"enabled": true, "agents": {}}}"#,
+        r#"{"conversationRecording": {"enabled": true, "agents": {"gemini-cli": false}}}"#,
+        r#"{"exclude": ["x"], "conversationRecording": {"enabled": true, "agents": {"claude-code": true}}}"#,
+    ] {
+        let ws = Ws::bare();
+        ws.config(cfg);
+        let tr = ws.transcript(&[user_text("q")]);
+        let mut calls = vec![];
+        let r = run_record_turn(Some(&ws.s()), None, &hook_json(&tr, &ws.s(), json!({})), NOW,
+                                &mut real_append(&mut calls));
+        assert!(matches!(r, RecordResult::Recorded { .. }), "{} gave {:?}", cfg, r);
+    }
+}
+
+#[test]
+fn switch_is_checked_before_the_transcript_is_touched() {
+    // Off + a transcript that does not exist: the reason must be the switch, not the file.
+    let ws = Ws::bare();
+    let missing = ws.path().join("nope.jsonl").to_string_lossy().into_owned();
+    let mut calls = vec![];
+    let r = run_record_turn(Some(&ws.s()), None, &hook_json(&missing, &ws.s(), json!({})), NOW,
+                            &mut real_append(&mut calls));
+    match r {
+        RecordResult::NothingToRecord { reason } => assert!(reason.contains("off"), "{}", reason),
+        other => panic!("{:?}", other),
     }
 }

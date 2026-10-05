@@ -1,10 +1,10 @@
 {
-  "commit": "6a151197c3daf4c28d1d5d646fa82d50168a06fc",
+  "commit": "e035ca2239b95042788b5bedf6f70bc54c05098a",
   "files": {
-    "daemon/src/mcp/record_turn_tests.rs": "01402ad49a5063b948c2ad4c936b3434ca6cb6cd0714a28f4234db83e85d5b1f",
+    "daemon/src/mcp/record_turn_tests.rs": "c1c8ecc2bed68d1d750271aaa9d42cd8dbc7e6415e9c3e17378c0a564a8d8a19",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts": "fbe7afe0d79c0a7d533a093db3ebbba5e512b772592fd95433785b0fd26670b6"
   },
-  "frozen_at": "2026-10-05T03:43:58Z",
+  "frozen_at": "2026-10-05T05:00:03Z",
   "history": [
     {
       "approved_by": null,
@@ -53,6 +53,18 @@
       },
       "note": "system-reminder 短片での減算アンダーフロー回帰",
       "request": "TCR-3"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-10-05T05:00:03Z",
+      "commit": "e035ca2239b95042788b5bedf6f70bc54c05098a",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "会話記録β版: 既定OFFのスイッチ。Ws::new は ON の config を持つ（ユーザー決定 2026-10-05）",
+      "request": "TCR-4"
     }
   ],
   "metrics": {
