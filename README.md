@@ -115,7 +115,7 @@ merging with any MCP servers you already have. Nothing is copied by hand.
 
 | Agent | Written to |
 | --- | --- |
-| **Claude Code** | `.mcp.json` (plus optional `claude mcp add --scope user`) |
+| **Claude Code** | `.mcp.json` (plus optional `claude mcp add --scope user`), and a Stop hook in `.claude/settings.local.json` that records each turn to `.comp/history/` |
 | **Codex** | `~/.codex/config.toml` and `.codex/config.toml` |
 | **GitHub Copilot** | `.vscode/mcp.json` |
 | **Cursor** | `.cursor/mcp.json` and `~/.cursor/mcp.json` |

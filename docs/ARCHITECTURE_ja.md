@@ -152,7 +152,7 @@ v0.11.1 のエージェント別分割以降、TypeScript側の `SessionMemoryMa
 
 ### 4.2 対話履歴ログ (`.comp/history/log-YYYY-MM.jsonl`)
 
-`session_log` MCPツール、または `comp-daemon append-history <workspace_root> <agent_id>` CLI サブコマンド（Stop hook の `history-record.sh` が呼ぶ）が追記する月別 JSONL ファイルです。1 行 = 1 エントリ（`SessionCall` と同じスキーマ、`agent` 付き）:
+`session_log` MCPツール、Claude Code の Stop フックが呼ぶ `comp-daemon record-turn [workspace_root]`、または `comp-daemon append-history <workspace_root> <agent_id>` CLI サブコマンドが追記する月別 JSONL ファイルです。1 行 = 1 エントリ（`SessionCall` と同じスキーマ、`agent` 付き）:
 
 ```json
 { "timestamp": 1751000000000, "query": "ユーザーの依頼テキスト", "outcome": "対応結果の要約", "agent": "claude-code" }
@@ -172,7 +172,7 @@ BM25 の対象言語フィルタには `jsonl` が含まれ（v0.9.3〜）、`ru
 - **ロック方式**: `std::fs::File::lock()`（Rust 1.89 で安定化された標準ライブラリの機能。追加の外部クレート依存は不要）で**排他ロック**を取得してから 1 行を単一の `write_all` で書き込む。
   - WHY 排他ロック: 当初 POSIX の `flock` を念頭に「追記は共有ロックで並行させ、コンパクションだけ排他ロックにする」設計を検討したが、**Windows の `LockFileEx` は POSIX の `flock` と異なり、共有ロックを保持したハンドルからの書き込みを `ERROR_LOCK_VIOLATION` (os error 33) で拒否する**ことが実装時に判明した（同一ハンドルでの自己書き込みでも拒否される）。そのため全ての書き手（追記・コンパクション）が排他ロックを取る設計に統一した。書き込みは1行分の一瞬で終わるため、複数エージェントが同時に書いても実質的な待ち合いは無視できる。
   - WHY `.read(true)` を追記専用オープンにも付与: Windows では `lock()`/`lock_shared()` の呼び出しに読み取り権限を持つハンドルが必要で、`append(true)` のみのハンドルは `ERROR_ACCESS_DENIED` (os error 5) になる（実機検証済み）。
-- **書き手の統一**: 以前は Stop hook (`history-record.sh`) が Node.js の `fs.appendFileSync` で直接ファイルへ書き込んでおり、このロック機構を経由しない「第3の書き手」だった。アドバイザリロックはロックを取ろうとする者同士しかブロックしないため、ロックを取らない書き手が1つでもいると排他制御は無意味になる。この問題を解消するため、Stop hook は `comp-daemon append-history` CLI サブコマンド経由（フル起動 (~48s) を避けるための軽量パス）に統一した。
+- **書き手の統一**: 以前は Stop hook (`history-record.sh`) が Node.js の `fs.appendFileSync` で直接ファイルへ書き込んでおり、このロック機構を経由しない「第3の書き手」だった。アドバイザリロックはロックを取ろうとする者同士しかブロックしないため、ロックを取らない書き手が1つでもいると排他制御は無意味になる。この問題を解消するため、Stop hook は comp-daemon の軽量 CLI サブコマンド経由（フル起動 (~48s) を避けるための軽量パス）に統一した。現在は `record-turn`（`daemon/src/mcp/record_turn.rs`）が Stop フックの入力 JSON を受け取り、transcript の `message.content` から最後の依頼と応答を取り出して `append_history_line` で追記する。追記に失敗したときは自分で spill ファイルへ退避し、終了コード 1 を返す（Stop フックで「停止を妨げる」意味になる 2 は返さない）。
 - **フォールバック（spill方式、Phase 3 B4）**: `comp-daemon` バイナリが未ビルド・パス解決失敗・実行時エラーの場合でも、履歴を完全にロストさせないためのフォールバックが必要です。旧実装は `fs.appendFileSync` で共有 jsonl に直接追記しており、これは上で排除したはずの「ロック非経由の第3の書き手」そのものでした（矛盾）。現在は一意な名前の `spill-<pid>-<epoch_ms>-<rand>.jsonl` へ**単独で**書き込みます（他の誰ともパスを取り合わないためロック不要）。この spill ファイルは、次に誰か（どのエージェントでも）が `append_history_line` 経由でロック付き追記を行った際に `merge_spill_files` が自動的に本体へ取り込んで削除します — 専用の「マージ実行」トリガーを用意せず、ロックを握る通常の追記自体が回収の機会になる設計です。フォールバック時に書かれる行は旧形式（`request`/`outcome`）のままですが、`SessionCall` の `#[serde(alias = "request")]` によりデシリアライズ時は通常の書き込みと区別なく読めます。
 
 #### 4.2.2 コンパクション（定期整理）
@@ -208,8 +208,10 @@ LLM の自発性に依存せず harness 側で確実に記録・注入する仕�
 
 | Hook イベント | スクリプト | 動作 |
 | --- | --- | --- |
-| `Stop` | `history-record.sh` | `transcript_path` を解析し、`comp-daemon append-history` 経由（失敗時は直接追記にフォールバック）で `.comp/history/` へ追記（4.2.1 参照） |
+| `Stop` | `comp-daemon record-turn`（comP リポジトリでは `history-record.sh` 経由） | `transcript_path` を解析し、ロック付きで `.comp/history/` へ追記（失敗時は spill へ退避。4.2.1 参照） |
 | `UserPromptSubmit` | `context-inject.sh` | `.comp/history/` 直近 5 件を読み `additionalContext`（`<system-reminder>`）として自動注入 |
+
+`Stop` フックは、拡張機能の「comP: Setup Agents」で Claude Code を選ぶと、各プロジェクトの `.claude/settings.local.json` に `"<comp-daemon の絶対パス>" record-turn "<ワークスペース>"` として登録される（マシン固有のパスを含むため、共有される `settings.json` には書かない）。拡張機能の更新やプロジェクトの移動で古くなったパスは、起動時の `repairStaleConfigs` が書き直す。`settings.json` か `settings.local.json` に既に `history-record` があるプロジェクトには、二重記録を避けるため登録しない。`UserPromptSubmit` の自動注入は comP リポジトリの開発用フックのみで、初期設定では入らない。
 
 ```mermaid
 sequenceDiagram

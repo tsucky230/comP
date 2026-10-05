@@ -115,7 +115,7 @@ comP が各ツールの実際の設定ファイルへ直接書き込み、既存
 
 | エージェント | 書き込み先 |
 | --- | --- |
-| **Claude Code** | `.mcp.json`（任意で `claude mcp add --scope user` も実行） |
+| **Claude Code** | `.mcp.json`（任意で `claude mcp add --scope user` も実行）と、各往復を `.comp/history/` に記録する Stop フック（`.claude/settings.local.json`） |
 | **Codex** | `~/.codex/config.toml` と `.codex/config.toml` |
 | **GitHub Copilot** | `.vscode/mcp.json` |
 | **Cursor** | `.cursor/mcp.json` と `~/.cursor/mcp.json` |
