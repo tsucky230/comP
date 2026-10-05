@@ -82,7 +82,8 @@ impl AppState {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // WHY checked before env_logger/full startup: lightweight CLI invocations
     // (`comp-daemon append-history <workspace_root> <agent_id>`, used by
-    // .claude/hooks/history-record.sh; `comp-daemon doctor <workspace_root>
+    // .claude/hooks/history-record.sh; `comp-daemon record-turn [workspace_root]`,
+    // the Claude Code Stop hook comP setup installs; `comp-daemon doctor <workspace_root>
     // [--repair]`, a manual diagnostic for the three .comp/ stores) must not pay
     // the cost of GraphDB open + background indexing, and must exit immediately
     // rather than falling into the long-running MCP stdio server loop below.

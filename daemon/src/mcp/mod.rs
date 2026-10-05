@@ -729,6 +729,7 @@ enum CliSubcommand {
     AppendHistory { workspace_root: String, agent_id: String },
     Doctor { workspace_root: String, repair: bool },
     CompactHistory { workspace_root: String },
+    RecordTurn { workspace_root: Option<String> },
 }
 
 /// Parse `args` (as given to `main`, so `args[0]` is the binary path) into a
@@ -739,6 +740,7 @@ enum CliSubcommand {
 /// - `append-history <workspace_root> <agent_id>`
 /// - `doctor <workspace_root> [--repair]`
 /// - `compact-history <workspace_root>`
+/// - `record-turn [workspace_root]` (Claude Code Stop hook; see record_turn.rs)
 fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
     if args.len() == 4 && args[1] == "append-history" {
         return Some(CliSubcommand::AppendHistory {
@@ -758,6 +760,9 @@ fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
     }
     if args.len() == 3 && args[1] == "compact-history" {
         return Some(CliSubcommand::CompactHistory { workspace_root: args[2].clone() });
+    }
+    if (args.len() == 2 || args.len() == 3) && args[1] == "record-turn" {
+        return Some(CliSubcommand::RecordTurn { workspace_root: args.get(2).cloned() });
     }
     None
 }
@@ -860,6 +865,36 @@ pub fn try_run_cli_subcommand(args: &[String]) -> Option<i32> {
                     Some(1)
                 }
             }
+        }
+        CliSubcommand::RecordTurn { workspace_root } => {
+            // WHY reading stdin leniently: a Stop hook must never block or crash the
+            // session; unreadable stdin becomes an empty string, which
+            // run_record_turn reports as Failed (exit 1, non-blocking).
+            let mut stdin_json = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut stdin_json);
+            let env_project_dir = std::env::var("CLAUDE_PROJECT_DIR").ok();
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let result = record_turn::run_record_turn(
+                workspace_root.as_deref(),
+                env_project_dir.as_deref(),
+                &stdin_json,
+                now_ms,
+                &mut |path, line| append_history_line(path, line),
+            );
+            match &result {
+                record_turn::RecordResult::Recorded { .. } => {}
+                record_turn::RecordResult::NothingToRecord { reason } => {
+                    eprintln!("record-turn: nothing to record ({})", reason);
+                }
+                record_turn::RecordResult::Failed { reason, spill } => match spill {
+                    Some(p) => eprintln!("record-turn failed: {} (saved to {})", reason, p.display()),
+                    None => eprintln!("record-turn failed: {}", reason),
+                },
+            }
+            Some(record_turn::exit_code(&result))
         }
         CliSubcommand::CompactHistory { workspace_root } => {
             match run_compact_history(&workspace_root) {
@@ -5239,6 +5274,24 @@ mod tests {
                 agent_id: "claude-code".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn test_parse_cli_subcommand_record_turn() {
+        let to_args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        assert_eq!(
+            parse_cli_subcommand(&to_args(&["comp-daemon", "record-turn"])),
+            Some(CliSubcommand::RecordTurn { workspace_root: None })
+        );
+        for ws in ["/ws", "E:/dev/YASAKANI", r"C:\Users\a b\proj"] {
+            assert_eq!(
+                parse_cli_subcommand(&to_args(&["comp-daemon", "record-turn", ws])),
+                Some(CliSubcommand::RecordTurn { workspace_root: Some(ws.to_string()) })
+            );
+        }
+        // Extra args must not silently start the MCP server loop inside a Stop hook,
+        // but they are not a valid record-turn either: fall through like other typos.
+        assert_eq!(parse_cli_subcommand(&to_args(&["comp-daemon", "record-turn", "/ws", "x"])), None);
     }
 
     #[test]
