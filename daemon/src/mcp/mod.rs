@@ -10,6 +10,7 @@
 // Protocol: JSON-RPC 2.0 over stdio
 
 mod compress;
+pub mod record_turn;
 
 use anyhow::{Result, anyhow};
 use log::info;

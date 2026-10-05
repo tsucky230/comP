@@ -1,0 +1,30 @@
+{
+  "commit": "0255843286f2c8503057fb29c719e70c4cf81355",
+  "files": {
+    "daemon/src/mcp/record_turn_tests.rs": "a860f98e9f2e3f2d3ff9dd0d0d20f5ae01f8a5d3b9d9a3b14455164a0388d535"
+  },
+  "frozen_at": "2026-10-05T02:03:19Z",
+  "history": [
+    {
+      "approved_by": null,
+      "at": "2026-10-05T02:03:19Z",
+      "commit": "0255843286f2c8503057fb29c719e70c4cf81355",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": null,
+      "request": "initial"
+    }
+  ],
+  "metrics": {
+    "asserts": 0,
+    "skip_markers": 0,
+    "test_functions": 0
+  },
+  "paths": [
+    "daemon/src/mcp/record_turn_tests.rs"
+  ],
+  "version": 1
+}
