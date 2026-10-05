@@ -460,3 +460,52 @@ fn rule_sharing_switch_is_strict() {
         assert_eq!(rule_sharing_enabled(d.path()), want, "{:?}", content);
     }
 }
+
+// ---- TCR-9: found with comP's real instruction files ----
+
+#[test]
+fn parse_trims_thematic_breaks_at_section_edges() {
+    for brk in ["---", "***", "___", "- - -", "-----"] {
+        let text = format!("# A
+text
+
+{}
+
+# B
+{}
+body
+", brk, brk);
+        let s = parse_sections("AGENTS.md", "codex", &text);
+        assert_eq!(s[0].text, "text", "break {:?}", brk);
+        assert_eq!(s[1].text, "body", "break {:?}", brk);
+    }
+    // A break in the middle of a body stays.
+    let s = parse_sections("AGENTS.md", "codex", "# A
+one
+---
+two
+");
+    assert_eq!(s[0].text, "one
+---
+two");
+}
+
+#[test]
+fn identifiers_with_underscores_are_single_terms() {
+    let s = vec![sec("AGENTS.md", "codex", "Tools", "Always call run_pipeline first and read_file never.")];
+    for task in ["run the tests", "read a file", "pipeline"] {
+        assert!(relevant_rules(&s, task, "claude-code", 1000, &words).is_empty(), "{}", task);
+    }
+    for task in ["run_pipeline", "use RUN_PIPELINE", "_run_pipeline_"] {
+        assert_eq!(relevant_rules(&s, task, "claude-code", 1000, &words).len(), 1, "{}", task);
+    }
+}
+
+#[test]
+fn conflicts_skip_pairs_with_the_same_content_words() {
+    let a = "Run the complete pytest suite before every commit, and push afterwards.";
+    let b = "Run the complete pytest suite before every commit; and push afterwards!";
+    let c = "Run complete pytest suite before every commit and push afterwards";
+    let s = vec![sec("CLAUDE.md", "claude-code", "T", a), sec("AGENTS.md", "codex", "T", b), sec("GEMINI.md", "gemini-cli", "T", c)];
+    assert!(conflict_candidates(&s, 20).is_empty());
+}

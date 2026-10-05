@@ -29,6 +29,8 @@ pub const MIN_CONFLICT_CHARS: usize = 40;
 pub const CONFLICT_SIMILARITY: f64 = 0.3;
 /// Minimum number of distinct shared terms for a conflict candidate.
 pub const MIN_SHARED_TERMS: usize = 2;
+/// At or above this similarity two sections say the same thing (see conflict_candidates).
+pub const DUPLICATE_SIMILARITY: f64 = 0.999;
 
 /// English words ignored when building terms.
 pub const STOPWORDS: &[&str] = &[
@@ -37,7 +39,9 @@ pub const STOPWORDS: &[&str] = &[
 ];
 
 // Terms (used by relevant_rules and conflict_candidates):
-// - ASCII: maximal runs of [a-z0-9] after lowercasing, 2+ characters, not in STOPWORDS.
+// - ASCII: maximal runs of [a-z0-9_] after lowercasing, with leading/trailing `_` removed,
+//   2+ characters, not in STOPWORDS. `_` is kept so identifiers such as `run_pipeline`
+//   stay one term instead of matching every text that says "run".
 // - CJK: maximal runs of Hiragana (U+3040–309F), Katakana (U+30A0–30FF, incl. U+30FC),
 //   and CJK Unified Ideographs (U+4E00–9FFF); each run yields its character bigrams
 //   (a single-character run yields that character).
@@ -166,6 +170,8 @@ pub fn read_rule_file(workspace: &Path, rel_path: &str) -> std::io::Result<Optio
 /// - A leading YAML front matter block (`---` on the first line … next `---`)
 ///   is dropped.
 /// - Text before the first heading becomes a section with an empty heading.
+/// - Thematic-break lines (only `-`, `*` or `_`, 3 or more, optionally spaced) at the
+///   start or end of a body are removed, so a `---` separator does not change a hash.
 /// - Sections whose body is empty after trimming are dropped.
 /// - Heading and body have control characters removed (see [`sanitize`]).
 pub fn parse_sections(file: &str, owner: &str, text: &str) -> Vec<RuleSection> {
@@ -289,6 +295,10 @@ pub fn relevant_rules(
 /// Pairs of sections that may contradict, for an LLM to judge.
 ///
 /// Vectors: raw term counts (heading + text) times IDF, over the given sections.
+///
+/// Pairs whose similarity is at least [`DUPLICATE_SIMILARITY`] use the same
+/// content words (they differ only in punctuation or stopwords) and are
+/// agreement, not conflict, so they are left out.
 ///
 /// Only pairs whose owners differ, whose hashes differ, where both texts are
 /// at least [`MIN_CONFLICT_CHARS`] characters, that share at least
