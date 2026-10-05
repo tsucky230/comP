@@ -11,11 +11,15 @@
 
 mod compress;
 pub mod record_turn;
+#[cfg(test)]
+#[path = "rule_sharing_tests.rs"]
+mod rule_sharing_tests;
 
 use anyhow::{Result, anyhow};
 use log::info;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use crate::rules;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SessionCall {
@@ -46,7 +50,23 @@ pub struct SessionCall {
     /// session_recall's formatting code from needing to unwrap a missing value.
     #[serde(default = "default_agent")]
     pub agent: String,
+    /// Rule-sharing (beta) sections handed out with this call, by reference; the
+    /// text is in `.comp/rules/<hash>.md`. Omitted from the JSON when empty so
+    /// records without rules keep their previous shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<RuleRef>,
 }
+
+/// Reference to one rule section returned by run_pipeline (see crate::rules).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RuleRef {
+    pub file: String,
+    pub heading: String,
+    pub hash: String,
+}
+
+/// Token budget for run_pipeline's `related_rules`, separate from `max_tokens`.
+pub const RELATED_RULES_MAX_TOKENS: usize = 1000;
 
 fn default_agent() -> String {
     "unknown".to_string()
@@ -291,6 +311,7 @@ fn record_mcp_call(
                 stale: false,
                 timestamp: now,
                 agent: agent_id.to_string(),
+                rules: Vec::new(),
             });
             found = true;
             break;
@@ -310,6 +331,7 @@ fn record_mcp_call(
                 stale: false,
                 timestamp: now,
                 agent: agent_id.to_string(),
+                rules: Vec::new(),
             }],
         });
     }
@@ -811,6 +833,7 @@ fn run_append_history(
         stale: false,
         timestamp: now,
         agent: agent_id.to_string(),
+        rules: Vec::new(),
     };
 
     let month = &format_epoch_ms(now)[0..7];
@@ -2976,6 +2999,7 @@ impl MCPServer {
             stale: false,
             timestamp: now,
             agent: self.state.agent_id.clone(),
+            rules: Vec::new(),
         };
 
         // Monthly file bounds each log while preserving full history.
@@ -3860,6 +3884,7 @@ mod tests {
                         stale: false,
                         timestamp: 1,
                         agent: "test".to_string(),
+                        rules: Vec::new(),
                     },
                     SessionCall {
                         query: "unrelated".to_string(),
@@ -3870,6 +3895,7 @@ mod tests {
                         stale: false,
                         timestamp: 2,
                         agent: "test".to_string(),
+                        rules: Vec::new(),
                     },
                 ],
             }],
