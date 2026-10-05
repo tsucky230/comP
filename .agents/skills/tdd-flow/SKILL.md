@@ -28,6 +28,7 @@ description: テスト駆動開発フローを実行。スケルトン承認後�
 `src/<module>/tests/<feature>_test.<ext>` に作成。
 
 **テスト命名規則**：
+
 ```
 describe('FeatureName', () => {
   describe('methodName', () => {
@@ -61,6 +62,7 @@ pytest --cov=src --cov-report=term-missing
 ```
 
 **基準**:
+
 - 行カバレッジ 80% 以上
 - 分岐カバレッジを優先確認
 - ビジネスロジック境界値は100%目標
@@ -68,6 +70,7 @@ pytest --cov=src --cov-report=term-missing
 ### 6. リファクタ
 
 テストGREENを維持しながら、コード品質改善：
+
 - 重複削除
 - 命名改善
 - スケルトンコメントと実装の一貫性確認
@@ -75,6 +78,7 @@ pytest --cov=src --cov-report=term-missing
 ### 7. 完了報告
 
 ユーザーに以下を報告：
+
 - 追加テスト数（正常/異常/境界値の内訳）
 - カバレッジ数値
 - 既存テストへの影響有無

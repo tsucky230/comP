@@ -34,6 +34,7 @@ git log origin/main..HEAD # push対象コミット確認
 | Rust | `cargo test --all` |
 
 **判定**:
+
 - 全テスト PASS
 - カバレッジ 80% 以上
 
@@ -46,6 +47,7 @@ git log origin/main..HEAD # push対象コミット確認
 | Rust | `cargo audit` |
 
 **判定**:
+
 - Critical/High = 0 件（必須）
 - Medium = 警告（push可だが記録）
 

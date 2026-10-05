@@ -55,6 +55,7 @@ description: 長時間タスク中にコンテキスト枯渇に備え、進捗�
 ### 2. メモリ反映
 
 AGENTS.md準拠で重要事項を `~/.Codex/projects/.../memory/` に追加：
+
 - 新しい設計判断 → project memory
 - ユーザー指摘・フィードバック → feedback memory
 
@@ -67,6 +68,7 @@ rtk gain >> temp/log/token_usage.txt
 ### 4. 復帰用ポインタ
 
 `temp/log/last_checkpoint.txt` に最新ファイル名を記録：
+
 ```bash
 echo "checkpoint_YYYYMMDD_HHmm.md" > temp/log/last_checkpoint.txt
 ```
