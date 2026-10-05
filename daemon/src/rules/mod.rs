@@ -339,7 +339,8 @@ pub fn conflict_candidates(sections: &[RuleSection], max_pairs: usize) -> Vec<Co
             } else {
                 (dot / (norms[i] * norms[j])).clamp(0.0, 1.0)
             };
-            if shared >= MIN_SHARED_TERMS && similarity >= CONFLICT_SIMILARITY {
+            if shared >= MIN_SHARED_TERMS && similarity >= CONFLICT_SIMILARITY
+                && similarity < DUPLICATE_SIMILARITY {
                 let (a, b) = if (&a.file, &a.heading) < (&b.file, &b.heading) {
                     (a, b)
                 } else if (&b.file, &b.heading) < (&a.file, &a.heading) {
@@ -395,7 +396,7 @@ pub fn rule_sharing_enabled(workspace: &Path) -> bool {
 // Commit only nonempty, sanitized sections, hashing exactly the returned content.
 fn push_section(sections: &mut Vec<RuleSection>, file: &str, owner: &str, heading: &str, body: &str) {
     let heading = sanitize(heading);
-    let text = sanitize(body).trim().to_owned();
+    let text = trim_thematic_breaks(sanitize(body).trim());
     if text.is_empty() {
         return;
     }
@@ -403,6 +404,26 @@ fn push_section(sections: &mut Vec<RuleSection>, file: &str, owner: &str, headin
     sections.push(RuleSection {
         file: file.replace('\\', "/"), owner: owner.to_owned(), heading, text, hash,
     });
+}
+
+// Drop thematic-break lines (---, ***, ___, spaced variants) from both ends of a body.
+fn trim_thematic_breaks(body: &str) -> String {
+    fn is_break(line: &str) -> bool {
+        let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        compact.len() >= 3
+            && (compact.chars().all(|c| c == '-') || compact.chars().all(|c| c == '*')
+                || compact.chars().all(|c| c == '_'))
+    }
+    let lines: Vec<&str> = body.lines().collect();
+    let mut start = 0;
+    let mut end = lines.len();
+    while start < end && (lines[start].trim().is_empty() || is_break(lines[start])) {
+        start += 1;
+    }
+    while end > start && (lines[end - 1].trim().is_empty() || is_break(lines[end - 1])) {
+        end -= 1;
+    }
+    lines[start..end].join("\n")
 }
 
 // Tokenize maximal ASCII and CJK runs independently; delimiters flush each run.
@@ -413,11 +434,12 @@ fn term_counts(text: &str) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
-        if ch.is_ascii_alphanumeric() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
             let mut word = String::from(ch.to_ascii_lowercase());
-            while chars.peek().is_some_and(|next| next.is_ascii_alphanumeric()) {
+            while chars.peek().is_some_and(|next| next.is_ascii_alphanumeric() || *next == '_') {
                 word.push(chars.next().unwrap().to_ascii_lowercase());
             }
+            let word = word.trim_matches('_').to_owned();
             if word.len() >= 2 && !STOPWORDS.contains(&word.as_str()) {
                 *counts.entry(word).or_insert(0) += 1;
             }
