@@ -141,6 +141,15 @@ fn user_line_with_only_system_reminder_is_not_a_request() {
 }
 
 #[test]
+fn short_system_reminder_fragments_do_not_panic() {
+    // TCR-3: a block shorter than the closing tag once underflowed `len - CLOSE.len()`.
+    for frag in ["<system-reminder>", "<system-reminder>x", "<system-reminder></system-reminde"] {
+        let t = jsonl(&[user_text(frag)]);
+        assert_eq!(extract_turn(&t, None).unwrap().request, frag, "fragment {:?}", frag);
+    }
+}
+
+#[test]
 fn broken_and_empty_lines_are_skipped() {
     let t = format!("{{not json\n\n{}\n[1,2]\n\"str\"\n{}\n",
                     user_text("ok prompt"), assistant_text("ok answer"));

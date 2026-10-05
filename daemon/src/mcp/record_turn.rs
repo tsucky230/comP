@@ -92,7 +92,8 @@ fn is_system_reminder_only(text: &str) -> bool {
     const CLOSE: &str = "</system-reminder>";
     let t = text.trim();
     // The first closing tag must be the end, so "<sr>a</sr> body <sr>b</sr>" keeps its body.
-    t.starts_with("<system-reminder>") && t.find(CLOSE) == Some(t.len() - CLOSE.len())
+    t.starts_with("<system-reminder>")
+        && t.len().checked_sub(CLOSE.len()).is_some_and(|end| t.find(CLOSE) == Some(end))
 }
 
 fn extract_text_from_content(content: &Value) -> Option<String> {
