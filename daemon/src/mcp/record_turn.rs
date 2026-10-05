@@ -25,6 +25,15 @@
 //!   joined text blocks of the last `type == "assistant"` line, else None.
 //! - request is cut to 600 chars, outcome to 400 chars (chars, not bytes).
 //! - agent is always "claude-code"; nothing in stdin or the transcript can set it.
+//! - switch (beta, opt-in): after the workspace is known and before the transcript
+//!   is read, `<workspace>/.comp/config.json` must have
+//!   `conversationRecording.enabled == true` (the JSON boolean) and must not have
+//!   `conversationRecording.agents."claude-code" == false`. Anything else — no
+//!   file, no key, a non-boolean, invalid JSON — is NothingToRecord with a reason
+//!   containing "off" (or "config.json" when the file is not valid JSON). WHY
+//!   unknown means off: the user opted in explicitly; an unreadable switch must
+//!   never start recording conversations on its own. The VS Code extension writes
+//!   this key from the `comp.conversationRecording.*` settings.
 //! - exit code (see `exit_code`): 0 = recorded, or nothing to record (no
 //!   transcript_path, transcript file missing, no request found). 1 = failure
 //!   (no workspace, stdin not JSON, append failed). Never 2: Claude Code treats
@@ -227,6 +236,31 @@ fn resolve_workspace(arg: Option<&str>, env: Option<&str>, cwd: Option<&str>) ->
         .map(|s| s.to_string())
 }
 
+/// Ok(()) when `.comp/config.json` switches recording on for Claude Code; the
+/// Err carries the reason otherwise (rules in the module doc).
+fn recording_switch(workspace: &Path) -> Result<(), String> {
+    let path = workspace.join(".comp").join("config.json");
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return Err("conversation recording is off (no .comp/config.json)".into()),
+    };
+    let config: Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => return Err(format!("conversation recording is off: .comp/config.json is not valid JSON ({})", e)),
+    };
+    if !config.is_object() {
+        return Err("conversation recording is off: .comp/config.json is not valid JSON (not an object)".into());
+    }
+    let section = &config["conversationRecording"];
+    if section["enabled"] != Value::Bool(true) {
+        return Err("conversation recording is off (comp.conversationRecording.enabled)".into());
+    }
+    if section["agents"][AGENT_ID] == Value::Bool(false) {
+        return Err("conversation recording is off for Claude Code (comp.conversationRecording.claudeCode)".into());
+    }
+    Ok(())
+}
+
 fn make_spill_path(hist_dir: &Path, now_ms: u64) -> PathBuf {
     let pid = process::id();
     let nanos = SystemTime::now()
@@ -285,6 +319,10 @@ pub fn run_record_turn(
             };
         }
     };
+
+    if let Err(reason) = recording_switch(Path::new(&workspace)) {
+        return RecordResult::NothingToRecord { reason };
+    }
 
     let transcript_path = stdin_obj
         .get("transcript_path")
