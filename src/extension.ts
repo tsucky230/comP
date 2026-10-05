@@ -16,6 +16,7 @@ import { SidebarPanel } from "./ui/SidebarPanel";
 import { DependencyCodeLensProvider } from "./ui/CodeLens";
 import { currentRecordingSettings, registerCommands } from "./ui/commands";
 import { syncConversationRecording } from "./config/conversationRecording";
+import { syncRuleSharing } from "./config/ruleSharing";
 import { registerChatParticipant } from "./mcp/chatParticipant";
 import { AgentSetupManager } from "./mcp/AgentSetup";
 import { isJapaneseLocale, t } from "./i18n";
@@ -231,6 +232,39 @@ function watchConversationRecording(context: vscode.ExtensionContext): void {
   );
 }
 
+/**
+ * Keep `.comp/config.json`'s ruleSharing section in step with
+ * `comp.ruleSharing.enabled`, which the daemon reads on every call.
+ */
+function watchRuleSharing(context: vscode.ExtensionContext): void {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return;
+  const sync = (): void => {
+    const enabled = vscode.workspace
+      .getConfiguration("comp.ruleSharing", folder.uri)
+      .get<boolean>("enabled", false);
+    try {
+      const result = syncRuleSharing(folder.uri.fsPath, { enabled });
+      if (result.status === "invalid") {
+        vscode.window.showWarningMessage(
+          t(
+            `comP: .comp/config.json is not valid JSON (${result.reason}), so rule sharing (beta) stays off. Fix the file to apply the setting.`,
+            `comP: .comp/config.json が正しい JSON ではないため（${result.reason}）、ルール共有（β版）はOFFのままです。ファイルを直すと設定が反映されます。`
+          )
+        );
+      }
+    } catch (error) {
+      console.warn(`[comP] failed to sync rule sharing setting: ${error}`);
+    }
+  };
+  sync();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("comp.ruleSharing")) sync();
+    })
+  );
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log("[comP] Extension activating...");
 
@@ -259,6 +293,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     registerCommands(context, () => daemonManager, statusBar);
     registerChatParticipant(context, () => daemonManager);
     watchConversationRecording(context);
+    watchRuleSharing(context);
 
     // 3. Inject lifecycle callbacks into SidebarPanel.
     // WHY: Prevent duplicate DaemonManager creation within SidebarPanel.

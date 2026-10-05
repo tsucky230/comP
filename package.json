@@ -140,6 +140,16 @@
             "preview"
           ],
           "markdownDescription": "%comp.conversationRecording.claudeCode.description%"
+        },
+        "comp.ruleSharing.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "order": 110,
+          "tags": [
+            "preview"
+          ],
+          "markdownDescription": "%comp.ruleSharing.enabled.description%"
         }
       }
     }

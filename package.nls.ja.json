@@ -2,5 +2,6 @@
   "comp.chatParticipant.description": "API仕様や長大なコードを賢く圧縮してLLMに質問を投げます。",
   "comp.conversationRecording.enabled.description": "**（β版）** AI エージェントとの会話を1往復ずつ `.comp/history/` に自動で記録し、次のセッションで `session_recall` から読めるようにします。既定はOFFです。\n\nONにすると、**comP: Setup Agents** が Claude Code 用の Stop フック（`comp-daemon record-turn`）を `.claude/settings.local.json` に入れます。記録はこのワークスペースの中だけに残り、外部には送りません。\n\nOFFに戻すと記録はすぐ止まりますが、入れたフックは残ります。外すときは **comP: 会話記録フックを外す**（`comp.removeHistoryHooks`）を実行してください。",
   "comp.conversationRecording.claudeCode.description": "**（β版）** Claude Code の会話を記録します（Stop フック）。`comp.conversationRecording.enabled` がONのときだけ有効です。",
-  "comp.removeHistoryHooks.title": "会話記録フックを外す（β版）"
+  "comp.removeHistoryHooks.title": "会話記録フックを外す（β版）",
+  "comp.ruleSharing.enabled.description": "**（β版）** AI エージェント同士で指示ファイルを共有します。ONにすると、`run_pipeline` が、作業に関係する*他のエージェント向け*の指示ファイル（`CLAUDE.md`、`AGENTS.md`、`GEMINI.md`、`.cursor/rules` など）の節も返し、新しいツール `check_rule_conflicts` が、矛盾していそうな節の組を一覧にしてエージェントに判断させます。既定はOFFです。\n\n読むのは、このワークスペースの中で git が管理しているファイルだけです。ホームにあるユーザー設定（`~/.claude/CLAUDE.md` など）は読みません。渡した節は `.comp/rules/` に1回だけ保存し、セッションの記録から参照するので、どのルールを渡したかを後から確かめられます。"
 }

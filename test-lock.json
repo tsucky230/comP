@@ -1,13 +1,14 @@
 {
-  "commit": "17ed49006605932cfa038732aea048e9a6d284e7",
+  "commit": "4891e2c8f8d2c626bb11a051daf4afc6bf524a2c",
   "files": {
     "daemon/src/mcp/record_turn_tests.rs": "c1c8ecc2bed68d1d750271aaa9d42cd8dbc7e6415e9c3e17378c0a564a8d8a19",
     "daemon/src/mcp/rule_sharing_tests.rs": "69e79a4d1f23823d360f75b32f91954a71a3ff52da6ffb801bfdf75d700314db",
     "daemon/src/rules/tests.rs": "6e3f775de69af300762a1c60cf7d462999c61e2cc851cfb3c81a9a2790c381f6",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts": "65132fdde0078562c83e8104d5f50f179a5315594d5b4954034d430a21114808",
-    "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05"
+    "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05",
+    "src/test/ruleSharing.test.ts": "9fcebac114562d39d954ee6ba396e151a772ce29e9c05e7536c18ea700ef8a66"
   },
-  "frozen_at": "2026-10-05T12:23:17Z",
+  "frozen_at": "2026-10-05T12:25:43Z",
   "history": [
     {
       "approved_by": null,
@@ -104,6 +105,18 @@
       },
       "note": "ルール共有（T2）: MCP 組み込みのテスト",
       "request": "TCR-7"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-10-05T12:25:43Z",
+      "commit": "4891e2c8f8d2c626bb11a051daf4afc6bf524a2c",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "ルール共有（T2）: 設定と同期のテスト",
+      "request": "TCR-8"
     }
   ],
   "metrics": {
@@ -116,7 +129,8 @@
     "src/mcp/tests/AgentSetupHistoryHook.test.ts",
     "src/test/conversationRecording.test.ts",
     "daemon/src/rules/tests.rs",
-    "daemon/src/mcp/rule_sharing_tests.rs"
+    "daemon/src/mcp/rule_sharing_tests.rs",
+    "src/test/ruleSharing.test.ts"
   ],
   "version": 1
 }

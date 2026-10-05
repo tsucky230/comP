@@ -45,16 +45,35 @@ export function syncConversationRecording(
   workspaceRoot: string,
   settings: ConversationRecordingSettings
 ): SyncResult {
+  return syncConfigSection(workspaceRoot, "conversationRecording", settings.enabled, (current) =>
+    section(current, settings)
+  );
+}
+
+/**
+ * Merge one top-level section of `.comp/config.json`, shared by every beta
+ * switch so they all follow the same rules: other keys are kept, nothing is
+ * written when the section is already equal, a missing file is created only
+ * to switch something on, and an unreadable file is reported, never replaced.
+ *
+ * `build` receives the current section (or `{}` when absent or malformed).
+ */
+export function syncConfigSection(
+  workspaceRoot: string,
+  key: string,
+  enabled: boolean,
+  build: (current: Record<string, unknown>) => Record<string, unknown>
+): SyncResult {
   const configPath = path.join(workspaceRoot, ".comp", "config.json");
 
   if (!fs.existsSync(configPath)) {
-    // A missing file already reads as "off" to record-turn; creating .comp/
+    // A missing file already reads as "off" to the daemon; creating .comp/
     // just to say so would litter workspaces that never use comP.
-    if (!settings.enabled) {
+    if (!enabled) {
       return { status: "unchanged", path: configPath };
     }
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify({ conversationRecording: section({}, settings) }, null, 2) + "\n", "utf-8");
+    fs.writeFileSync(configPath, JSON.stringify({ [key]: build({}) }, null, 2) + "\n", "utf-8");
     return { status: "written", path: configPath };
   }
 
@@ -68,12 +87,12 @@ export function syncConversationRecording(
     return { status: "invalid", path: configPath, reason: "not a JSON object" };
   }
 
-  const current = doc["conversationRecording"];
-  const next = section(isPlainObject(current) ? current : {}, settings);
+  const current = doc[key];
+  const next = build(isPlainObject(current) ? current : {});
   if (JSON.stringify(current) === JSON.stringify(next)) {
     return { status: "unchanged", path: configPath };
   }
-  doc["conversationRecording"] = next;
+  doc[key] = next;
   fs.writeFileSync(configPath, JSON.stringify(doc, null, 2) + "\n", "utf-8");
   return { status: "written", path: configPath };
 }
