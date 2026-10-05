@@ -10,6 +10,7 @@ All settings are under `comp.*` in VS Code settings (`Ctrl+,`).
 | `comp.exclude` | string[] | `[]` | Additional directory names to exclude from indexing. Synced to `.comp/config.json` on activation. Changes take effect after Force Re-index. |
 | `comp.conversationRecording.enabled` | boolean | `false` | **Beta.** Record each conversation turn to `.comp/history/`. See [Conversation recording (beta)](#conversation-recording-beta). |
 | `comp.conversationRecording.claudeCode` | boolean | `true` | **Beta.** Record Claude Code turns (Stop hook). Only takes effect while `comp.conversationRecording.enabled` is on. |
+| `comp.ruleSharing.enabled` | boolean | `false` | **Beta.** Share git-tracked instruction files between agents: `run_pipeline` returns other agents' relevant rules and `check_rule_conflicts` lists possible contradictions. See [Beta Features → Rule sharing](./BETA_FEATURES.md#rule-sharing). |
 
 ## Conversation recording (beta)
 

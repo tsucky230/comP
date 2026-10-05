@@ -5,6 +5,7 @@ comP は、AI エージェントとの会話を1往復ずつ `.comp/history/` �
 - 状態: β版（v0.11.7 で提供、2026-10-05）
 - 対象読者: comP の開発者・保守者
 - 利用者向けの手引き: [docs/user/BETA_FEATURES_ja.md](../user/BETA_FEATURES_ja.md)（英語版 [BETA_FEATURES.md](../user/BETA_FEATURES.md)）
+- 上位の企画: [MULTI_AGENT_TRACE_ja.md](./MULTI_AGENT_TRACE_ja.md)（複数エージェントの追跡の T1）
 
 ## 背景: 配布版の comP では、comP リポジトリ以外の会話がまったく記録されていなかった
 

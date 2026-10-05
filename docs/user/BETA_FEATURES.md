@@ -7,6 +7,7 @@ Feedback and bug reports are welcome on [GitHub Issues](https://github.com/tsuck
 | Feature | Setting | Status |
 | --- | --- | --- |
 | [Conversation recording](#conversation-recording) | `comp.conversationRecording.enabled` | Beta (Claude Code only) |
+| [Rule sharing](#rule-sharing) | `comp.ruleSharing.enabled` | Beta (unreleased; after 0.11.7) |
 
 Japanese version: [BETA_FEATURES_ja.md](./BETA_FEATURES_ja.md)
 
@@ -134,3 +135,43 @@ files (`AGENTS.md`, `GEMINI.md`, `.cursor/rules`, …) ask them to call `session
 which works only when the model follows the instruction. Most of these agents do have end-of-turn
 hooks, and support is planned agent by agent under the same switch, starting with Gemini CLI. Status
 and plan: [docs/dev/CONVERSATION_RECORDING_ja.md](../dev/CONVERSATION_RECORDING_ja.md) (Japanese).
+
+---
+
+## Rule sharing
+
+When several agents work in one repository, each has its own instruction file — `CLAUDE.md`,
+`AGENTS.md`, `GEMINI.md`, `.cursor/rules`, … — and they drift apart. With rule sharing on:
+
+- `run_pipeline` also returns the sections of **other** agents' instruction files that match the task
+  (`related_rules`), so Codex sees the testing rule written in `CLAUDE.md`, and so on. The caller's own
+  file is never included — it already reads that.
+- The sections handed out are saved once under `.comp/rules/<hash>.md` and referenced from the session
+  record, so `session_recall` shows which rules an agent was given, with the exact text of that time.
+- The `check_rule_conflicts` tool lists pairs of sections that may contradict. Ask your agent to run
+  it; it judges each pair and tells you about real contradictions. comP never edits instruction files.
+
+Part of the multi-agent trace plan: [docs/dev/MULTI_AGENT_TRACE_ja.md](../dev/MULTI_AGENT_TRACE_ja.md) (Japanese).
+
+### Turn it on
+
+Check **Rule Sharing: Enabled** in VS Code settings (`comp.ruleSharing.enabled`). The extension writes
+it to `.comp/config.json` (`ruleSharing.enabled`), and the daemon checks it on every call — no restart
+needed. Turn it off the same way; `run_pipeline` then returns exactly what it returned before.
+
+### What is read — and what is not
+
+| Read | Not read |
+| --- | --- |
+| `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `CONVENTIONS.md`, `.clinerules` (file or `*.md` inside), `.windsurfrules`, `.cursor/rules/**/*.md` / `*.mdc` — at these paths, and only if **git-tracked** | Untracked files, anything in your home directory (`~/.claude/CLAUDE.md` and other user settings), files outside the workspace (including symlinks pointing out), files over 64 KB, `SKILL.md` and instruction files in subfolders |
+
+These limits exist because instruction text from a repository is handed to other agents, which makes it
+a path for prompt injection. Returned text has control characters removed and carries a note telling the
+agent to treat it as reference and to put its own instructions and your request first.
+
+### Known limitations
+
+- Sections are chosen by shared words (weighted by rarity), not by meaning. Short sections that share a
+  common word such as "test" or "run" can be included even when they matter little.
+- Only `run_pipeline` returns related rules (not `get_context`).
+- Outside a git repository the feature reports `unavailable` instead of reading anything.

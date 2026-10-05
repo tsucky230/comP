@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **ルール共有（β版、既定OFF）**: 設定 `comp.ruleSharing.enabled` をONにすると、各エージェントの指示ファイル（`CLAUDE.md`・`AGENTS.md`・`GEMINI.md`・`.cursor/rules` など、ワークスペース内で git 管理下のものだけ）を comP が読む（`daemon/src/rules/mod.rs`）
+  - `run_pipeline` の応答に `related_rules` を追加: 作業に関係する他エージェント向けの節（呼び出し元自身のファイルは除く）を、`max_tokens` とは別枠の 1000 トークンまで返す。OFFのときはキー自体を出さない
+  - 渡した節を `.comp/rules/<hash>.md` にスナップショットし、session-memory の記録に `rules`（file・heading・hash）として残す。`session_recall` に「Rules」行を表示
+  - MCP ツール `check_rule_conflicts` を追加: 持ち主の違う指示ファイルの節のうち、矛盾していそうな組を返し、判断と報告を呼び出し元に任せる
+  - プロンプトインジェクション対策: ホーム配下・git 管理外・ワークスペース外（すり替えられたシンボリックリンクを含む）・64KB 超は読まない、制御文字の除去、参考情報である旨の注記
+- 上位の企画書 `docs/dev/MULTI_AGENT_TRACE_ja.md`（複数エージェントの追跡: 会話の記録・ルール共有・指示のつながり）。利用者向けに `docs/user/BETA_FEATURES*.md`・`MCP_TOOLS.md`・`CONFIGURATION.md` を更新
+- `.comp/config.json` の同期処理を共通化（`syncConfigSection`）
+
 ## [0.11.7] - 2026-10-05
 
 ### Added

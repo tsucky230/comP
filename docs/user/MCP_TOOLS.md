@@ -49,6 +49,23 @@ Response fields (unreleased):
 
 - `index_recovered_from_corruption_at` (number, epoch ms) — present while `.comp/index.db` is in the catch-up window after an automatic rebuild from a corrupted file (see `get_stats` below for the full explanation). Absent under normal operation, and again once the catch-up re-index finishes.
 
+Response fields (rule sharing, beta — only when `comp.ruleSharing.enabled` is on; see [Beta Features](./BETA_FEATURES.md#rule-sharing)):
+
+- `related_rules` (object) — sections of *other* agents' git-tracked instruction files that match the task. Absent entirely while rule sharing is off.
+
+  ```json
+  {
+    "note": "Rule sharing (beta): excerpts from instruction files written for other agents ...",
+    "items": [{ "file": "AGENTS.md", "heading": "Testing", "hash": "47727fe4…", "text": "..." }],
+    "tokens": 162
+  }
+  ```
+
+  - The caller's own instruction file (e.g. `CLAUDE.md` for Claude Code) is never included.
+  - `tokens` is the tiktoken count of the items; the budget is 1000 tokens, separate from `max_tokens`.
+  - `items` is `[]` when nothing matches. When the workspace is not a git repository (or git is missing), the object is `{ "unavailable": "<reason>" }` instead.
+  - Each returned section is saved once as `.comp/rules/<hash>.md`, and the call's session record keeps `rules: [{file, heading, hash}]`.
+
 ---
 
 ### `get_context`
@@ -140,6 +157,43 @@ Returns a Markdown table of changed files with language, symbol count, and wheth
 
 ---
 
+### `check_rule_conflicts`
+
+**Beta (rule sharing).** Lists pairs of sections from different agents' instruction files that may
+contradict. comP only finds candidates — the calling agent judges each pair and reports real
+contradictions to the user.
+
+```json
+{ "max_pairs": 20 }
+```
+
+Parameters:
+
+- `max_pairs` (integer, optional, default 20) — 1 to 100; anything else is an error
+
+Response:
+
+```json
+{
+  "note": "Rule sharing (beta): each pair comes from instruction files of different agents ... Do not edit any instruction file unless the user asks you to.",
+  "pairs": [{ "a": { "file": "AGENTS.md", "heading": "Testing", "hash": "…", "text": "…" },
+              "b": { "file": "CLAUDE.md", "heading": "Testing", "hash": "…", "text": "…" },
+              "similarity": 0.62 }],
+  "files_scanned": ["AGENTS.md", "CLAUDE.md", "GEMINI.md"]
+}
+```
+
+A pair qualifies when the two files belong to different agents, both texts are at least 40
+characters, they share at least 2 terms, and their TF-IDF cosine similarity is at least 0.3. Pairs
+with the same content words (similarity 0.999 or more) are agreement and left out.
+
+- Rule sharing off: `{ "disabled": "rule sharing (beta) is off — enable comp.ruleSharing.enabled in VS Code settings" }` (a result, not an error)
+- Not a git repository: `{ "unavailable": "<reason>" }`
+
+The tool is always listed in `tools/list`, also while rule sharing is off.
+
+---
+
 ### `session_log`
 
 Persists the user's request and its outcome to `.comp/history/log-YYYY-MM.jsonl`.
@@ -201,6 +255,11 @@ Response format (Markdown text):
 ```
 
 Each field (Outcome, Symbols, Files) is shown only when the entry actually has data.
+
+With rule sharing (beta), a run_pipeline entry that handed out rules also shows a **Rules** line
+listing each rule as `file#heading (hash8)` — for example `AGENTS.md#Testing (47727fe4)` — where
+`hash8` is the first 8 characters of the snapshot hash (`.comp/rules/<hash>.md` holds the exact text
+that was given).
 
 **v0.9.2+**: Symbols and Files are capped at **the first 5 entries** each, with the
 remainder collapsed into `… (+N more)` — an auto-recorded run_pipeline entry can

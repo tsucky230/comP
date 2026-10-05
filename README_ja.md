@@ -284,6 +284,11 @@ Claude Code を選ぶと、各往復が `.comp/history/` に記録され、あ�
 残ります。`.comp/` は git に含めないでください。今のところ Claude Code だけが対象です。使い方と困ったときは
 [ベータ機能](docs/user/BETA_FEATURES_ja.md#会話の記録)、計画は [企画書](docs/dev/CONVERSATION_RECORDING_ja.md)。
 
+**ルール共有（β版・未リリース）** — `comp.ruleSharing.enabled` をONにすると、`run_pipeline` が、git 管理下にある
+*他のエージェント向け*の指示ファイル（`CLAUDE.md`、`AGENTS.md` など）から作業に関係するルールも渡し、どのルールを
+渡したかを記録します。`check_rule_conflicts` は矛盾していそうなルールを一覧にします。詳細は
+[ベータ機能 → ルール共有](docs/user/BETA_FEATURES_ja.md#ルール共有)。
+
 ---
 
 ## トークン予算・圧縮レベルの制御

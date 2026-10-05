@@ -285,6 +285,11 @@ can restore it later. Turning the setting off stops recording at once; **comP: R
 removes the hook. Records stay in the workspace — keep `.comp/` out of git. Claude Code only for now.
 Guide and troubleshooting: [Beta Features](docs/user/BETA_FEATURES.md#conversation-recording).
 
+**Rule sharing (beta, unreleased)** — with `comp.ruleSharing.enabled` on, `run_pipeline` also hands an agent the
+relevant rules from *other* agents' git-tracked instruction files (`CLAUDE.md`, `AGENTS.md`, …), records which
+rules it gave, and `check_rule_conflicts` lists rules that may contradict. See
+[Beta Features → Rule sharing](docs/user/BETA_FEATURES.md#rule-sharing).
+
 ---
 
 ## Controlling Token Budget & Compression Level
