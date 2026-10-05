@@ -23,7 +23,7 @@ so it should only run for people who chose it.
 
 ### Requirements
 
-- A comP release newer than 0.11.6 (the `comp-daemon record-turn` command is not in 0.11.6 or earlier)
+- comP 0.11.7 or later (the `comp-daemon record-turn` command is not in 0.11.6 or earlier)
 - Claude Code. Other agents are not recorded automatically yet — see [Other agents](#other-agents)
 
 Verified on 2026-10-05 with Windows 11 and Claude Code 2.1.172: the hook fired at the end of a real

@@ -417,7 +417,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.11.4** | **Fixed VS Code Marketplace / Open VSX publish silently failing on Gallery API timeout in CI** | ✅ Released |
 | **v0.11.5** | **Fixed run_pipeline ranking bias where header-rich Markdown files dominated unrelated search results (#7)** | ✅ Released |
 | **v0.11.6** | **Tool errors now show the cause (e.g. `Missing 'task' parameter`) instead of a bare "Internal error"** | ✅ Released |
-| Next | **Conversation recording (beta, off by default) — Claude Code turns recorded automatically; see [Beta Features](docs/user/BETA_FEATURES.md)** | 🟡 Beta |
+| **v0.11.7** | **Conversation recording (beta, off by default) — Claude Code turns recorded automatically; see [Beta Features](docs/user/BETA_FEATURES.md)** | ✅ Released (beta) |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---
