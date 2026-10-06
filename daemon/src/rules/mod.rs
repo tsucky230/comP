@@ -339,8 +339,9 @@ pub fn conflict_candidates(sections: &[RuleSection], max_pairs: usize) -> Vec<Co
             } else {
                 (dot / (norms[i] * norms[j])).clamp(0.0, 1.0)
             };
-            if shared >= MIN_SHARED_TERMS && similarity >= CONFLICT_SIMILARITY
-                && similarity < DUPLICATE_SIMILARITY {
+            if shared >= MIN_SHARED_TERMS
+                && (CONFLICT_SIMILARITY..DUPLICATE_SIMILARITY).contains(&similarity)
+            {
                 let (a, b) = if (&a.file, &a.heading) < (&b.file, &b.heading) {
                     (a, b)
                 } else if (&b.file, &b.heading) < (&a.file, &a.heading) {

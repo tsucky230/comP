@@ -2133,7 +2133,7 @@ impl MCPServer {
                 response["related_rules"] = json!({ "unavailable": reason });
             }
             Some(RelatedRules::Items(items)) => {
-                let tokens: usize = items.iter().map(|s| rule_tokens(s)).sum();
+                let tokens: usize = items.iter().map(rule_tokens).sum();
                 response["related_rules"] = json!({
                     "note": RELATED_RULES_NOTE,
                     "items": items.iter().map(section_json).collect::<Vec<_>>(),

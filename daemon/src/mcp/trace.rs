@@ -85,7 +85,8 @@
 //!     `tool_use` block named Edit, Write or MultiEdit with a string
 //!     `input.file_path`, or NotebookEdit with a string `input.notebook_path`;
 //!     deduplicated keeping first occurrence, at most MAX_TOUCHED_FILES.
-//!   Unparseable lines are skipped.
+//!
+//! `extract_turn_meta` skips unparseable lines.
 
 use super::SessionCall;
 

@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Fixed
+
+- CI の clippy（`-D warnings`）で 0.11.8 のビルドが止まっていた3件を修正（`trace.rs` の doc コメントの字下げ、`run_pipeline` の冗長なクロージャ、`rules` の範囲比較）
+
 ## [0.11.8] - 2026-10-07
 
 ### Added
