@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-10-07
+
 ### Added
 
 - **ルール共有（β版、既定OFF）**: 設定 `comp.ruleSharing.enabled` をONにすると、各エージェントの指示ファイル（`CLAUDE.md`・`AGENTS.md`・`GEMINI.md`・`.cursor/rules` など、ワークスペース内で git 管理下のものだけ）を comP が読む（`daemon/src/rules/mod.rs`）

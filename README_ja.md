@@ -284,7 +284,7 @@ Claude Code を選ぶと、各往復が `.comp/history/` に記録され、あ�
 残ります。`.comp/` は git に含めないでください。今のところ Claude Code だけが対象です。使い方と困ったときは
 [ベータ機能](docs/user/BETA_FEATURES_ja.md#会話の記録)、計画は [企画書](docs/dev/CONVERSATION_RECORDING_ja.md)。
 
-**ルール共有（β版・未リリース）** — `comp.ruleSharing.enabled` をONにすると、`run_pipeline` が、git 管理下にある
+**ルール共有（β版・v0.11.8 以降）** — `comp.ruleSharing.enabled` をONにすると、`run_pipeline` が、git 管理下にある
 *他のエージェント向け*の指示ファイル（`CLAUDE.md`、`AGENTS.md` など）から作業に関係するルールも渡し、どのルールを
 渡したかを記録します。`check_rule_conflicts` は矛盾していそうなルールを一覧にします。詳細は
 [ベータ機能 → ルール共有](docs/user/BETA_FEATURES_ja.md#ルール共有)。
@@ -420,6 +420,7 @@ MCP 2024-11-05 準拠クライアントは原則対応。問題があれば [Iss
 | **v0.11.5** | **見出しの多いMarkdownファイルが無関係な検索結果で上位を独占するrun_pipelineのランキング不具合を修正（#7）** | ✅ リリース済み |
 | **v0.11.6** | **ツール呼び出しの失敗が、原因の分からない「Internal error」ではなく詳細付きで表示されるよう修正** | ✅ リリース済み |
 | **v0.11.7** | **会話の記録（β版・既定OFF）— Claude Code の往復を自動で記録。[ベータ機能](docs/user/BETA_FEATURES_ja.md) を参照** | ✅ リリース済み（β版） |
+| **v0.11.8** | **ルール共有（β版・既定OFF）、複数エージェントの追跡（往復と委譲のつながり）、session_recall の順位付き検索、記録の伏せ字** | ✅ リリース済み（β版） |
 | v1.0 | API 安定化・コミュニティ統合 | ⚪ 計画中 |
 
 ---

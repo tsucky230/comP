@@ -285,7 +285,7 @@ can restore it later. Turning the setting off stops recording at once; **comP: R
 removes the hook. Records stay in the workspace — keep `.comp/` out of git. Claude Code only for now.
 Guide and troubleshooting: [Beta Features](docs/user/BETA_FEATURES.md#conversation-recording).
 
-**Rule sharing (beta, unreleased)** — with `comp.ruleSharing.enabled` on, `run_pipeline` also hands an agent the
+**Rule sharing (beta, v0.11.8+)** — with `comp.ruleSharing.enabled` on, `run_pipeline` also hands an agent the
 relevant rules from *other* agents' git-tracked instruction files (`CLAUDE.md`, `AGENTS.md`, …), records which
 rules it gave, and `check_rule_conflicts` lists rules that may contradict. See
 [Beta Features → Rule sharing](docs/user/BETA_FEATURES.md#rule-sharing).
@@ -423,6 +423,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.11.5** | **Fixed run_pipeline ranking bias where header-rich Markdown files dominated unrelated search results (#7)** | ✅ Released |
 | **v0.11.6** | **Tool errors now show the cause (e.g. `Missing 'task' parameter`) instead of a bare "Internal error"** | ✅ Released |
 | **v0.11.7** | **Conversation recording (beta, off by default) — Claude Code turns recorded automatically; see [Beta Features](docs/user/BETA_FEATURES.md)** | ✅ Released (beta) |
+| **v0.11.8** | **Rule sharing (beta, off by default); multi-agent trace (turns ↔ delegations), ranked session_recall, secret redaction in records** | ✅ Released (beta) |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---

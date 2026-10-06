@@ -7,7 +7,7 @@ Feedback and bug reports are welcome on [GitHub Issues](https://github.com/tsuck
 | Feature | Setting | Status |
 | --- | --- | --- |
 | [Conversation recording](#conversation-recording) | `comp.conversationRecording.enabled` | Beta (Claude Code only) |
-| [Rule sharing](#rule-sharing) | `comp.ruleSharing.enabled` | Beta (unreleased; after 0.11.7) |
+| [Rule sharing](#rule-sharing) | `comp.ruleSharing.enabled` | Beta (0.11.8) |
 
 Japanese version: [BETA_FEATURES_ja.md](./BETA_FEATURES_ja.md)
 

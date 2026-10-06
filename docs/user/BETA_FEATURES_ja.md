@@ -5,7 +5,7 @@
 | 機能 | 設定 | 状態 |
 | --- | --- | --- |
 | [会話の記録](#会話の記録) | `comp.conversationRecording.enabled` | β版（Claude Code のみ） |
-| [ルール共有](#ルール共有) | `comp.ruleSharing.enabled` | β版（未リリース。0.11.7 の次の版） |
+| [ルール共有](#ルール共有) | `comp.ruleSharing.enabled` | β版（0.11.8） |
 
 英語版: [BETA_FEATURES.md](./BETA_FEATURES.md)
 
