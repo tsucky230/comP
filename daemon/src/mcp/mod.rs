@@ -2765,8 +2765,48 @@ impl MCPServer {
     /// WHY: Description quality directly controls when AI agents call each tool.
     /// "Call ONLY when..." / "Do NOT call..." constraints prevent accidental invocations
     /// that would pollute the context window mid-implementation.
+    ///
+    /// WHY annotations on every tool: MCP reads a missing destructiveHint or
+    /// openWorldHint as true, so clients that gate on them (Codex's approval prompt
+    /// and its auto-review) treat an unannotated comP as a remote connector that may
+    /// ship the repository elsewhere. comP is a local stdio daemon that never talks
+    /// to the network.
     pub async fn handle_tools_list(&self) -> Result<Value> {
-        Ok(json!({
+        // run_pipeline and get_context append to comP's own .comp/session-memory, but
+        // leave the user's files untouched, so they still count as read-only.
+        // session_log is excluded because writing the caller's record is its purpose.
+        // A tool missing from this list is declared non-read-only, the safe default.
+        const READ_ONLY_TOOLS: [&str; 12] = [
+            "run_pipeline",
+            "get_context",
+            "get_impact_graph",
+            "list_indexed_files",
+            "session_recall",
+            "check_rule_conflicts",
+            "get_symbol",
+            "get_dependencies",
+            "get_file_summary",
+            "get_project_overview",
+            "get_git_diff_context",
+            "compress_file",
+        ];
+
+        let mut list = Self::tool_definitions();
+        if let Some(tools) = list["tools"].as_array_mut() {
+            for tool in tools {
+                let read_only = tool["name"].as_str().is_some_and(|name| READ_ONLY_TOOLS.contains(&name));
+                tool["annotations"] = json!({
+                    "readOnlyHint": read_only,
+                    "destructiveHint": false,
+                    "openWorldHint": false
+                });
+            }
+        }
+        Ok(list)
+    }
+
+    fn tool_definitions() -> Value {
+        json!({
             "tools": [
                 {
                     "name": "run_pipeline",
@@ -3002,7 +3042,7 @@ impl MCPServer {
                     }
                 }
             ]
-        }))
+        })
     }
 
     /// MCP tools/call — dispatches to the appropriate tool handler
@@ -6037,6 +6077,76 @@ mod tests {
 
         assert!(markdown.contains("claude did this"), "claude-code's own record must surface");
         assert!(markdown.contains("codex did that"), "codex's record must surface even though this daemon is running as claude-code");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Codex's `requires_mcp_tool_approval` (openai/codex, core/src/mcp_tool_call.rs)
+    /// for the default `auto` approval mode. MCP treats an absent destructiveHint or
+    /// openWorldHint as true, so an unannotated tool is approval-bound — and under
+    /// Codex's auto-review that means a reviewer judging comP as an unknown connector.
+    fn codex_auto_mode_requires_approval(annotations: &Value) -> bool {
+        let destructive = annotations["destructiveHint"].as_bool();
+        if destructive == Some(true) {
+            return true;
+        }
+        if annotations["readOnlyHint"].as_bool().unwrap_or(false) {
+            return false;
+        }
+        destructive.unwrap_or(true) || annotations["openWorldHint"].as_bool().unwrap_or(true)
+    }
+
+    #[tokio::test]
+    async fn test_tools_list_declares_local_non_destructive_annotations() {
+        assert!(
+            codex_auto_mode_requires_approval(&Value::Null),
+            "the mirrored Codex rule must treat a missing annotations object as approval-bound"
+        );
+
+        let temp_dir = std::env::temp_dir().join("comP_test_tool_annotations");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let state = Arc::new(crate::AppState::new(temp_dir.to_str().unwrap(), "test-agent").await.expect("Failed to create AppState"));
+        let server = MCPServer::new(state);
+
+        let list = server.handle_tools_list().await.unwrap();
+        let tools = list["tools"].as_array().unwrap();
+
+        // session_log exists to write the caller's request into .comp/history, so it
+        // is the one tool that cannot claim to be read-only.
+        let expected: &[(&str, bool)] = &[
+            ("run_pipeline", true),
+            ("get_context", true),
+            ("get_impact_graph", true),
+            ("list_indexed_files", true),
+            ("session_recall", true),
+            ("check_rule_conflicts", true),
+            ("session_log", false),
+            ("get_symbol", true),
+            ("get_dependencies", true),
+            ("get_file_summary", true),
+            ("get_project_overview", true),
+            ("get_git_diff_context", true),
+            ("compress_file", true),
+        ];
+
+        let mut listed: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        listed.sort_unstable();
+        let mut wanted: Vec<&str> = expected.iter().map(|(name, _)| *name).collect();
+        wanted.sort_unstable();
+        assert_eq!(listed, wanted, "a newly listed tool needs its annotations decided in this table");
+
+        for (name, read_only) in expected {
+            let tool = tools.iter().find(|t| t["name"] == *name).unwrap();
+            let annotations = &tool["annotations"];
+            assert_eq!(annotations["readOnlyHint"], json!(*read_only), "{name}: readOnlyHint");
+            assert_eq!(annotations["destructiveHint"], json!(false), "{name}: destructiveHint");
+            assert_eq!(annotations["openWorldHint"], json!(false), "{name}: openWorldHint");
+            assert!(
+                !codex_auto_mode_requires_approval(annotations),
+                "{name}: Codex would still route this call to approval / auto-review"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

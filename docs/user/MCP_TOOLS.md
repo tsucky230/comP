@@ -7,6 +7,23 @@ comP exposes tools via the Model Context Protocol (JSON-RPC 2.0 over stdio).
 Run `comP: Setup Agent MCP` from the VS Code Command Palette to auto-configure
 Claude Code, Cursor, Cline, Windsurf, or Continue.
 
+## Tool annotations
+
+Every tool carries MCP annotations, which clients such as Codex use to decide
+whether a call needs approval. The daemon runs locally and never sends anything
+over the network, and no tool deletes or overwrites your files:
+
+| Tool | `readOnlyHint` | `destructiveHint` | `openWorldHint` |
+| --- | --- | --- | --- |
+| `session_log` | `false` | `false` | `false` |
+| All other tools | `true` | `false` | `false` |
+
+`session_log` exists to append your request and its outcome to `.comp/history/`,
+so it is the one tool that does not claim to be read-only. `run_pipeline` and
+`get_context` also append to comP's own `.comp/session-memory/`, but leave your
+files untouched, so they count as read-only. For what this changes in Codex, see
+[MCP Setup → Codex's auto-review denies comP's tools](./MCP_SETUP.md#codexs-auto-review-denies-comps-tools).
+
 ## Tools
 
 ### `run_pipeline`

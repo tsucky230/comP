@@ -423,6 +423,181 @@ describe("AgentSetupManager", () => {
       expect(merged).to.include('command = "/usr/bin/other"');
     });
 
+    // Lines of comP's own table and its sub-tables, as Codex would read them.
+    const compSectionLines = (text: string): string[] => {
+      const lines = text.split("\n");
+      const start = lines.findIndex((line) => line.trim() === "[mcp_servers.comp]");
+      const section: string[] = [];
+      for (let i = start + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^\s*\[/.test(line) && !/^\s*\[\s*mcp_servers\.comp[.\]]/.test(line)) break;
+        section.push(line);
+      }
+      return section;
+    };
+
+    it("keeps the per-tool approvals Codex saved under the comp table", async () => {
+      // Codex's "always allow" writes these sub-tables. Dropping them on re-setup
+      // put every comP call back in front of Codex's approval prompt / auto-review.
+      writeText(
+        codexGlobal(),
+        [
+          "[mcp_servers.comp]",
+          'command = "/gone/comp-daemon"',
+          "args = []",
+          "",
+          "[mcp_servers.comp.tools.run_pipeline]",
+          'approval_mode = "approve"',
+          "",
+          "[mcp_servers.comp.tools.get_context]",
+          'approval_mode = "approve"',
+          "",
+          '[mcp_servers.comp.tools."session_log"]',
+          'approval_mode = "prompt"',
+          "",
+          "[mcp_servers.other]",
+          'command = "/usr/bin/other"',
+          "",
+        ].join("\n")
+      );
+
+      await manager.generateConfig("Codex");
+
+      const merged = readText(codexGlobal());
+      expect(merged).to.not.include("/gone/comp-daemon");
+      expect(merged.split("[mcp_servers.comp]")).to.have.lengthOf(2);
+      const section = compSectionLines(merged).join("\n");
+      expect(section).to.include("[mcp_servers.comp.tools.run_pipeline]\napproval_mode = \"approve\"");
+      expect(section).to.include("[mcp_servers.comp.tools.get_context]\napproval_mode = \"approve\"");
+      expect(section).to.include('[mcp_servers.comp.tools."session_log"]\napproval_mode = "prompt"');
+      expect(merged).to.include('[mcp_servers.other]\ncommand = "/usr/bin/other"');
+    });
+
+    it("keeps keys the user added to the comp table and replaces only command, args and env", async () => {
+      writeText(
+        codexGlobal(),
+        [
+          "[mcp_servers.comp]",
+          'command = "/gone/comp-daemon"',
+          'args = ["--old"]',
+          'env = { RUST_LOG = "trace" }',
+          "# approve comP once for every project",
+          'default_tools_approval_mode = "approve"',
+          "startup_timeout_sec = 30",
+          'enabled_tools = ["run_pipeline", "get_context"]',
+          'env_vars = ["HOME"]',
+          'tools.get_symbol.approval_mode = "approve"',
+          "",
+        ].join("\n")
+      );
+
+      await manager.generateConfig("Codex");
+
+      const section = compSectionLines(readText(codexGlobal()));
+      for (const kept of [
+        "# approve comP once for every project",
+        'default_tools_approval_mode = "approve"',
+        "startup_timeout_sec = 30",
+        'enabled_tools = ["run_pipeline", "get_context"]',
+        'env_vars = ["HOME"]',
+        'tools.get_symbol.approval_mode = "approve"',
+      ]) {
+        expect(section, kept).to.include(kept);
+      }
+      const joined = section.join("\n");
+      expect(joined).to.not.include("/gone/comp-daemon");
+      expect(joined).to.not.include("--old");
+      expect(joined).to.not.include('RUST_LOG = "trace"');
+      expect(section.filter((line) => /^command\s*=/.test(line))).to.have.lengthOf(1);
+      expect(section.filter((line) => /^args\s*=/.test(line))).to.have.lengthOf(1);
+      expect(section.filter((line) => /^env\s*=/.test(line))).to.have.lengthOf(1);
+    });
+
+    it("drops command, args and env however they were spelled, so no key is defined twice", async () => {
+      // A second definition of command/args/env next to comP's own would make
+      // the whole config.toml unparseable for Codex.
+      writeText(
+        codexGlobal(),
+        [
+          "[mcp_servers.comp]",
+          '"command" = "/gone/quoted"',
+          "'args' = []",
+          'env.RUST_LOG = "trace"',
+          'env . COMP_AGENT_ID = "stale"',
+          '"env".FOO = "bar"',
+          "  command = '/gone/indented'",
+          'env_vars = ["HOME"]',
+          "",
+        ].join("\n")
+      );
+
+      await manager.generateConfig("Codex");
+
+      const joined = compSectionLines(readText(codexGlobal())).join("\n");
+      for (const dropped of ["/gone/quoted", "'args' = []", 'RUST_LOG = "trace"', '"stale"', '"bar"', "/gone/indented"]) {
+        expect(joined, dropped).to.not.include(dropped);
+      }
+      expect(joined).to.include('env_vars = ["HOME"]');
+    });
+
+    it("collapses comP's marker comments that drifted away from the table into one", async () => {
+      // Codex rewrites config.toml on its own (trust, approvals), which can leave
+      // the marker separated from the table. Each later setup then added one more.
+      const marker = "# comP MCP server — generated by the comP VS Code extension";
+      writeText(
+        codexGlobal(),
+        [
+          marker,
+          'model = "gpt-test"',
+          marker,
+          marker,
+          "# my own note",
+          'service_tier = "priority"',
+          marker,
+          "[mcp_servers.comp]",
+          'command = "/gone/comp-daemon"',
+          "args = []",
+          "",
+        ].join("\n")
+      );
+
+      await manager.generateConfig("Codex");
+
+      const merged = readText(codexGlobal());
+      expect(merged.split(marker)).to.have.lengthOf(2);
+      expect(merged).to.include(`${marker}\n[mcp_servers.comp]`);
+      expect(merged).to.include("# my own note");
+      expect(merged).to.include('model = "gpt-test"');
+      expect(merged).to.include('service_tier = "priority"');
+    });
+
+    it("gives the same Codex config when setup runs twice over user additions", async () => {
+      writeText(
+        codexGlobal(),
+        [
+          'model = "gpt-test"',
+          "",
+          "[mcp_servers.comp]",
+          'command = "/gone/comp-daemon"',
+          "args = []",
+          'default_tools_approval_mode = "approve"',
+          "",
+          "[mcp_servers.comp.tools.run_pipeline]",
+          'approval_mode = "approve"',
+          "",
+          "[mcp_servers.other]",
+          'command = "/usr/bin/other"',
+          "",
+        ].join("\n")
+      );
+
+      await manager.generateConfig("Codex");
+      const first = readText(codexGlobal());
+      await manager.generateConfig("Codex");
+
+      expect(readText(codexGlobal())).to.equal(first);
+    });
+
     it("refuses to guess a merge when Codex uses an inline mcp_servers table", async () => {
       const original = 'mcp_servers = { other = { command = "/usr/bin/other" } }\n';
       writeText(codexGlobal(), original);
