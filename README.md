@@ -424,6 +424,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.11.6** | **Tool errors now show the cause (e.g. `Missing 'task' parameter`) instead of a bare "Internal error"** | ✅ Released |
 | **v0.11.7** | **Conversation recording (beta, off by default) — Claude Code turns recorded automatically; see [Beta Features](docs/user/BETA_FEATURES.md)** | ✅ Released (beta) |
 | **v0.11.8** | **Rule sharing (beta, off by default); multi-agent trace (turns ↔ delegations), ranked session_recall, secret redaction in records** | ✅ Released (beta) |
+| **v0.11.9** | **Codex auto-review no longer denies comP: every tool declares MCP annotations (local, read-only); Setup Agents keeps Codex's saved tool approvals** | ✅ Released |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---
