@@ -255,7 +255,7 @@ impl DocumentParser {
         let mut slide_names = Vec::new();
         for i in 0..archive.len() {
             let f = archive.by_index(i)?;
-            let name = f.name().to_string();
+            let name = f.name()?.into_owned();
             if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
                 slide_names.push(name);
             }
@@ -386,7 +386,7 @@ impl DocumentParser {
         let mut slide_names = Vec::new();
         for i in 0..archive.len() {
             let f = archive.by_index(i)?;
-            let name = f.name().to_string();
+            let name = f.name()?.into_owned();
             if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
                 slide_names.push(name);
             }
@@ -796,12 +796,12 @@ Run npm install to get started.
     fn test_office_document_parsers() -> Result<()> {
         use tempfile::NamedTempFile;
         use std::io::Write;
-        use zip::write::FileOptions;
+        use zip::write::SimpleFileOptions;
 
         // 1. Mock DOCX
         let docx_file = NamedTempFile::new()?;
         let mut zip = zip::ZipWriter::new(docx_file.as_file());
-        zip.start_file("word/document.xml", FileOptions::default())?;
+        zip.start_file("word/document.xml", SimpleFileOptions::default())?;
         zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello from Word docx</w:t></w:r></w:p></w:body></w:document>"#)?;
         zip.finish()?;
 
@@ -816,7 +816,7 @@ Run npm install to get started.
         // 2. Mock PPTX
         let pptx_file = NamedTempFile::new()?;
         let mut zip = zip::ZipWriter::new(pptx_file.as_file());
-        zip.start_file("ppt/slides/slide1.xml", FileOptions::default())?;
+        zip.start_file("ppt/slides/slide1.xml", SimpleFileOptions::default())?;
         zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Hello from Slide 1</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#)?;
         zip.finish()?;
 
@@ -831,9 +831,9 @@ Run npm install to get started.
         // 3. Mock XLSX
         let xlsx_file = NamedTempFile::new()?;
         let mut zip = zip::ZipWriter::new(xlsx_file.as_file());
-        zip.start_file("xl/workbook.xml", FileOptions::default())?;
+        zip.start_file("xl/workbook.xml", SimpleFileOptions::default())?;
         zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="Sales" sheetId="1" r:id="rId1"/></sheets></workbook>"#)?;
-        zip.start_file("xl/sharedStrings.xml", FileOptions::default())?;
+        zip.start_file("xl/sharedStrings.xml", SimpleFileOptions::default())?;
         zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>Hello from Excel cell</t></si></sst>"#)?;
         zip.finish()?;
 

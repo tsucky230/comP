@@ -132,6 +132,16 @@ while running — in VS Code-based editors, Command Palette →
 
 Details: [docs/user/MCP_SETUP.md](docs/user/MCP_SETUP.md)
 
+### Claude Code shows "Conflicting scopes"
+
+This means `comp` is registered for both the current project and your user account
+with different daemon paths. In v0.11.10, opening VS Code updates old paths from
+earlier comP extension installs. A project that intentionally uses a development
+binary can still show the warning. From that project's directory, run
+`claude mcp list` and `claude mcp get comp`, then choose which registration to keep.
+See the [MCP setup guide](docs/user/MCP_SETUP.md#resolve-a-claude-code-scope-conflict)
+for the commands and their effects.
+
 ---
 
 ## How to Use It
@@ -425,6 +435,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.11.7** | **Conversation recording (beta, off by default) — Claude Code turns recorded automatically; see [Beta Features](docs/user/BETA_FEATURES.md)** | ✅ Released (beta) |
 | **v0.11.8** | **Rule sharing (beta, off by default); multi-agent trace (turns ↔ delegations), ranked session_recall, secret redaction in records** | ✅ Released (beta) |
 | **v0.11.9** | **Codex auto-review no longer denies comP: every tool declares MCP annotations (local, read-only); Setup Agents keeps Codex's saved tool approvals** | ✅ Released |
+| **v0.11.10** | **Refresh old Claude Code MCP daemon paths after a VS Code extension upgrade, including user scope** | ✅ Released |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---
