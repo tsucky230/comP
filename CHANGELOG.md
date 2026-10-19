@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-10-20
+
+### Fixed
+
+- VS Code拡張の更新後、Claude Codeのユーザースコープが旧版の`comp-daemon`を指し続ける問題を修正。起動時にcomP拡張の旧パスだけを現行バイナリへ更新し、`~/.claude.json.bak`を残す。プロジェクト側も、旧版の実行ファイルが残っていても更新する。動作中の開発用バイナリは維持する。
+
 ## [0.11.9] - 2026-10-09
 
 ### Fixed

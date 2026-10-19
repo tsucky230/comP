@@ -1240,7 +1240,7 @@ describe("AgentSetupManager", () => {
       // Each case gets a private tree so repairs in one test cannot leak into another
       const caseDir = path.join(tmpRoot, `case-${caseIndex++}`);
       ws = path.join(caseDir, "workspace");
-      extDir = path.join(caseDir, "extension");
+      extDir = path.join(caseDir, "tsucky230.comp-vscode-0.11.9");
       globalConfig = path.join(caseDir, "global", "mcp_config.json");
       devBinary = path.join(ws, "daemon", "target", "release", devBinaryName);
       bundledBinary = path.join(extDir, "daemon", "target", "release", bundledBinaryName);
@@ -1392,6 +1392,111 @@ describe("AgentSetupManager", () => {
 
       expect(entryFor(entries, cfg)?.status).to.equal("repaired");
       expect(readJson(cfg).mcpServers.comp.command).to.equal(devBinary);
+    });
+
+    it("updates an old installed extension path even while that binary still exists", () => {
+      const cfg = path.join(ws, ".mcp.json");
+      const oldExtensionBinary = path.join(
+        tmpRoot, "tsucky230.comp-vscode-0.11.6", "daemon", "target", "release", bundledBinaryName
+      );
+      fs.mkdirSync(path.dirname(oldExtensionBinary), { recursive: true });
+      fs.writeFileSync(oldExtensionBinary, "");
+      writeJson(cfg, { mcpServers: { comp: { command: oldExtensionBinary } } });
+
+      expect(entryFor(repairManager.repairStaleConfigs(), cfg)?.status).to.equal("repaired");
+      expect(readJson(cfg).mcpServers.comp.command).to.equal(devBinary);
+    });
+
+    it("repairs an old Claude user-scope extension binary without changing the project dev binary", () => {
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      const projectConfig = path.join(ws, ".mcp.json");
+      const oldExtensionBinary = path.join(
+        tmpRoot, "tsucky230.comp-vscode-0.11.6", "daemon", "target", "release", bundledBinaryName
+      );
+      writeJson(userConfig, {
+        mcpServers: {
+          comp: { type: "stdio", command: oldExtensionBinary, args: ["--flag"], env: { RUST_LOG: "info" } },
+          other: { command: "other-server" },
+        },
+        projects: { example: { accepted: true } },
+      });
+      writeJson(projectConfig, { mcpServers: { comp: { command: devBinary } } });
+      const original = fs.readFileSync(userConfig, "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, userConfig)?.status).to.equal("repaired");
+      expect(readJson(userConfig).mcpServers.comp.command).to.equal(bundledBinary);
+      expect(readJson(userConfig).mcpServers.comp.args).to.deep.equal(["--flag"]);
+      expect(readJson(userConfig).mcpServers.other.command).to.equal("other-server");
+      expect(readJson(userConfig).projects.example.accepted).to.be.true;
+      expect(fs.readFileSync(userConfig + ".bak", "utf-8")).to.equal(original);
+      expect(readJson(projectConfig).mcpServers.comp.command).to.equal(devBinary);
+    });
+
+    it("leaves a healthy Claude user-scope command and unknown broken commands untouched", () => {
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      writeJson(userConfig, { mcpServers: { comp: { command: bundledBinary } } });
+      const healthy = fs.readFileSync(userConfig, "utf-8");
+      expect(entryFor(repairManager.repairStaleConfigs(), userConfig)?.status).to.equal("healthy");
+      expect(fs.readFileSync(userConfig, "utf-8")).to.equal(healthy);
+
+      const customCommand = path.join(tmpRoot, "custom", bundledBinaryName);
+      writeJson(userConfig, { mcpServers: { comp: { command: customCommand } } });
+      const custom = fs.readFileSync(userConfig, "utf-8");
+      expect(entryFor(repairManager.repairStaleConfigs(), userConfig)?.status).to.equal("skipped");
+      expect(fs.readFileSync(userConfig, "utf-8")).to.equal(custom);
+    });
+
+    it("updates a Claude user-scope extension path even while the old binary exists", () => {
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      const oldExtensionBinary = path.join(
+        tmpRoot, "tsucky230.comp-vscode-0.11.6", "daemon", "target", "release", bundledBinaryName
+      );
+      fs.mkdirSync(path.dirname(oldExtensionBinary), { recursive: true });
+      fs.writeFileSync(oldExtensionBinary, "");
+      writeJson(userConfig, { mcpServers: { comp: { command: oldExtensionBinary } } });
+
+      expect(entryFor(repairManager.repairStaleConfigs(), userConfig)?.status).to.equal("repaired");
+      expect(readJson(userConfig).mcpServers.comp.command).to.equal(bundledBinary);
+    });
+
+    it("aligns user and project registrations to the bundled binary outside a dev workspace", () => {
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      const projectConfig = path.join(ws, ".mcp.json");
+      const oldExtensionBinary = path.join(
+        tmpRoot, "tsucky230.comp-vscode-0.11.6", "daemon", "target", "release", bundledBinaryName
+      );
+      fs.rmSync(devBinary);
+      writeJson(userConfig, { mcpServers: { comp: { command: oldExtensionBinary } } });
+      writeJson(projectConfig, { mcpServers: { comp: { command: oldExtensionBinary } } });
+
+      repairManager.repairStaleConfigs();
+
+      expect(readJson(userConfig).mcpServers.comp.command).to.equal(bundledBinary);
+      expect(readJson(projectConfig).mcpServers.comp.command).to.equal(bundledBinary);
+    });
+
+    it("does not rewrite malformed Claude user settings", () => {
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      fs.mkdirSync(path.dirname(userConfig), { recursive: true });
+      fs.writeFileSync(userConfig, "{ invalid", "utf-8");
+
+      expect(entryFor(repairManager.repairStaleConfigs(), userConfig)?.status).to.equal("failed");
+      expect(fs.readFileSync(userConfig, "utf-8")).to.equal("{ invalid");
+    });
+
+    it("leaves Claude user scope untouched when no bundled binary is available", () => {
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      const oldExtensionBinary = path.join(
+        tmpRoot, "tsucky230.comp-vscode-0.11.6", "daemon", "target", "release", bundledBinaryName
+      );
+      writeJson(userConfig, { mcpServers: { comp: { command: oldExtensionBinary } } });
+      fs.rmSync(bundledBinary);
+      const before = fs.readFileSync(userConfig, "utf-8");
+
+      expect(entryFor(repairManager.repairStaleConfigs(), userConfig)?.status).to.equal("skipped");
+      expect(fs.readFileSync(userConfig, "utf-8")).to.equal(before);
     });
 
     it("repairs .gemini/settings.json under the mcpServers key (Gemini CLI, workspace)", () => {

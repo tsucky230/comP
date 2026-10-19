@@ -132,6 +132,21 @@ comP が各ツールの実際の設定ファイルへ直接書き込み、既存
 
 詳細: [docs/user/MCP_SETUP.md](docs/user/MCP_SETUP.md)
 
+### Claude Codeで「Conflicting scopes」と表示されたら
+
+`comp`がプロジェクト用と全プロジェクト共通の両方に登録され、実行ファイルの
+パスが異なるという警告です。拡張機能の更新で古くなったパスは、修正を含む版の
+comPをインストールするとVS Code起動時に更新されます。ただし、comPの開発用
+バイナリなど、**両方のパスが有効でも異なる場合は警告が残ります**。
+
+警告が出たプロジェクトのディレクトリで`claude mcp list`と
+`claude mcp get comp`を実行し、残す登録を決めてください。開発用を残すなら
+`claude mcp remove comp --scope user`（他のプロジェクトでも共通登録を失う）、
+全プロジェクト共通を残すなら`claude mcp remove comp --scope project`
+（このプロジェクトの`.mcp.json`から`comp`が消える）です。**どちらか一方だけ**
+実行してClaude Codeを再起動します。詳しい判断材料は
+[MCP設定ガイド](docs/user/MCP_SETUP.md#resolve-a-claude-code-scope-conflict)を参照してください。
+
 ---
 
 ## 実際の使い方

@@ -156,7 +156,7 @@ export interface AgentSetupOptions {
  * - `failed`   — file exists but could not be parsed or written
  * - `skipped`  — no comp entry, or the recorded command must not be touched
  *                (variable reference, relative path, unresolvable replacement)
- * - `healthy`  — recorded command points at an existing file, nothing to do
+ * - `healthy`  — recorded command already points at a suitable file
  * - `repaired` — command and/or COMP_WORKSPACE_ROOT was rewritten
  */
 export type RepairStatus = "repaired" | "healthy" | "skipped" | "missing" | "failed";
@@ -1613,6 +1613,59 @@ export class AgentSetupManager {
     return fs.existsSync(candidate) ? candidate : null;
   }
 
+  /** Only paths shipped by this VS Code extension are safe to refresh by version. */
+  private isInstalledExtensionBinary(command: string): boolean {
+    const extensionDir = path.dirname(path.dirname(path.dirname(path.dirname(command))));
+    if (!/^tsucky230\.comp-vscode-\d+\.\d+\.\d+(?:[-.][^\\/]*)?$/.test(path.basename(extensionDir))) {
+      return false;
+    }
+    const bundledBinaryName = process.platform === "win32" ? "comp-daemon-win.exe"
+      : process.platform === "darwin" ? "comp-daemon-macos" : "comp-daemon-linux";
+    const expected = path.join(extensionDir, "daemon", "target", "release", bundledBinaryName);
+    const normalize = (value: string): string => {
+      const resolved = path.resolve(value);
+      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    };
+    return normalize(command) === normalize(expected);
+  }
+
+  /**
+   * Refresh Claude Code's user registration when it points at an older comP
+   * extension. Unlike a general JSON repair, this never adopts an unrelated
+   * command: ~/.claude.json is shared across all projects and owned by Claude.
+   */
+  private repairClaudeCodeUserScope(): RepairEntry {
+    const file = path.join(this.homeDir, ".claude.json");
+    if (!fs.existsSync(file)) return { file, status: "missing" };
+
+    let doc: unknown;
+    try {
+      doc = JSON.parse(fs.readFileSync(file, "utf-8"));
+    } catch (error) {
+      return { file, status: "failed", reason: `invalid JSON: ${describeError(error)}` };
+    }
+    const server = readObjectPath(doc, ["mcpServers", "comp"]);
+    if (!server) return { file, status: "skipped", reason: "no comp server entry" };
+
+    const command = server["command"];
+    if (typeof command !== "string" || !path.isAbsolute(command) || command.includes("${")) {
+      return { file, status: "skipped", reason: "command is not an absolute binary path" };
+    }
+    const replacement = this.bundledDaemonPath();
+    if (!replacement) return { file, status: "skipped", reason: "no bundled binary available" };
+    if (!this.isInstalledExtensionBinary(command)) {
+      return { file, status: "skipped", reason: "command is not a comP extension binary" };
+    }
+    if (path.resolve(command) === path.resolve(replacement)) {
+      return { file, status: "healthy" };
+    }
+
+    server["command"] = replacement;
+    this.backupIfExists(file);
+    this.atomicWrite(file, JSON.stringify(doc, null, 2) + "\n");
+    return { file, status: "repaired", from: command, to: replacement };
+  }
+
   /**
    * Every MCP config file comP is known to have written, in a fixed order.
    *
@@ -1661,13 +1714,15 @@ export class AgentSetupManager {
   }
 
   /**
-   * Rewrite MCP config files whose daemon path no longer resolves.
+   * Rewrite MCP config files whose daemon path no longer resolves or points at
+   * an older installed version of this extension.
    *
    * WHY this exists: VS Code installs extensions into
-   * `<publisher>.<name>-<version>` and deletes the old directory on upgrade.
-   * Config files generated earlier keep pointing at the removed executable, so
-   * MCP clients fail to start while the extension itself keeps working — the
-   * daemon it spawns is resolved at runtime, the config files are not.
+   * `<publisher>.<name>-<version>` and may remove the old directory on upgrade.
+   * Config files generated earlier keep pointing at the old executable, so
+   * MCP clients run an outdated daemon or fail to start while the extension
+   * itself keeps working — the daemon it spawns is resolved at runtime, the
+   * config files are not.
    *
    * WHY it runs unconditionally instead of on version change: globalState is
    * shared across the whole VS Code installation, not per workspace. Guarding on
@@ -1688,6 +1743,15 @@ export class AgentSetupManager {
         };
       }
     });
+    try {
+      entries.push(this.repairClaudeCodeUserScope());
+    } catch (error) {
+      entries.push({
+        file: path.join(this.homeDir, ".claude.json"),
+        status: "failed",
+        reason: describeError(error),
+      });
+    }
     try {
       entries.push(this.repairHistoryHook());
     } catch (error) {
@@ -1939,8 +2003,9 @@ export class AgentSetupManager {
    * 3. no comp server object, or command absent/empty/non-string
    * 4. command contains `${...}` — a variable the host expands, not our business
    * 5. command is relative — deliberately made portable by the user
-   * 6. command resolves to an existing file — nothing to rewrite there
-   * 7. otherwise rewrite, but only if a replacement binary actually exists
+   * 6. command resolves to an existing file — rewrite only if it belongs to an
+   *    older installed version of this extension
+   * 7. rewrite only if a replacement binary actually exists
    *
    * COMP_WORKSPACE_ROOT is refreshed in the same pass for workspace-scoped files
    * only, since a global file legitimately points at a different project. Steps 4
@@ -1986,8 +2051,12 @@ export class AgentSetupManager {
 
     const commandBroken = !fs.existsSync(command);
     let replacement: string | null = null;
-    if (commandBroken) {
-      replacement = this.resolveRepairPath(target.scope);
+    const availableReplacement = this.resolveRepairPath(target.scope);
+    const installedExtensionChanged = availableReplacement !== null &&
+      this.isInstalledExtensionBinary(command) &&
+      path.resolve(command) !== path.resolve(availableReplacement);
+    if (commandBroken || installedExtensionChanged) {
+      replacement = availableReplacement;
       if (!replacement) {
         // Swapping one broken path for another would only hide the failure.
         return { file, status: "skipped", reason: "no replacement binary available" };
@@ -1996,7 +2065,7 @@ export class AgentSetupManager {
 
     const envRepaired = target.scope === "workspace" && this.refreshWorkspaceRootEnv(server);
 
-    if (!commandBroken && !envRepaired) {
+    if (!replacement && !envRepaired) {
       return { file, status: "healthy" };
     }
 

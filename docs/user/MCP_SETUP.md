@@ -28,7 +28,11 @@ re-read their MCP configuration while running. See
 
 If you selected Claude Code, comP also offers to register itself for **every**
 project by running `claude mcp add --scope user`. Answering "Not now" leaves
-the project-level registration in place.
+the project-level registration in place. Answering "Register" leaves **both**
+registrations in place: the project registration takes precedence in that project,
+while the user registration is available elsewhere. If they point at different
+daemon binaries, Claude Code reports a scope conflict; see
+[Resolve a Claude Code scope conflict](#resolve-a-claude-code-scope-conflict).
 
 ---
 
@@ -199,14 +203,15 @@ Problems with conversation recording (beta) are covered in
 ### MCP stopped working after upgrading comP
 
 VS Code installs extensions into a directory that carries the version number
-(`~/.vscode/extensions/<publisher>.comp-vscode-<version>`) and deletes the old one
-on upgrade. Config files record the absolute path of `comp-daemon`, so an upgrade
-leaves them pointing at an executable that no longer exists. The VS Code sidebar
-keeps working — it resolves its binary at runtime — but MCP clients fail to start
-the server.
+(`~/.vscode/extensions/<publisher>.comp-vscode-<version>`). Config files record
+the absolute path of `comp-daemon`, so an upgrade can leave them pointing at the
+old version, whether or not its directory still exists. The VS Code sidebar
+keeps working — it resolves its binary at runtime — but MCP clients can run an
+outdated daemon or fail to start the server.
 
 comP repairs this automatically: every time the extension activates it checks the
-known config files and rewrites any `command` that no longer resolves. **Restart
+known config files and rewrites a `command` that no longer resolves or points at
+an older installed comP extension, even if the old binary still exists. **Restart
 your agent after seeing the "comP: repaired N MCP config(s)" notification.**
 
 Files that are checked:
@@ -215,22 +220,60 @@ Files that are checked:
 | --- | --- |
 | `.vscode/mcp.json` | workspace |
 | `.mcp.json` | workspace |
+| `~/.claude.json` (`mcpServers.comp` only) | Claude Code user |
 | `.cursor/mcp.json` | workspace |
 | `~/.cursor/mcp.json` | global |
 | `~/.codeium/windsurf/mcp_config.json` | global |
 | Cline `cline_mcp_settings.json` | global |
 | `~/.gemini/antigravity-ide/mcp_config.json` | global |
+| `.gemini/settings.json`, `~/.gemini/settings.json` | workspace, global |
+| `.codex/config.toml`, `~/.codex/config.toml` | workspace, global |
 | `.comp/config/*.json` (legacy) | workspace |
 
 A value is deliberately left alone when it is a relative path, when it contains a
-`${...}` variable, or when no replacement binary can be found. The YAML configs
-(`.continue/mcpServers/comp.yaml`, `.aider.conf.yml`) and Gemini CLI's
-`.gemini/settings.json` are not repaired yet — re-run **comP: Setup Agents** for
-those.
+`${...}` variable, or when no replacement binary can be found. Claude Code's user
+registration is changed only when its command points into a versioned comP VS Code
+extension directory; comP backs up `~/.claude.json` before that change and leaves
+other settings in place. The YAML configs (`.continue/mcpServers/comp.yaml`,
+`.aider.conf.yml`) are not repaired yet — re-run **comP: Setup Agents** for those.
+
+Automatic repair is part of the extension you have installed. Version 0.11.10
+includes this user-scope repair; 0.11.9 does not. Repair does not remove either
+registration.
 
 `COMP_WORKSPACE_ROOT` is refreshed in the same pass for workspace-scoped files, so
 moving a project or opening the same checkout on another machine no longer breaks
 indexing. The value inside a global config is never touched.
+
+### Resolve a Claude Code scope conflict
+
+If `claude mcp list` or `/mcp` says `comp` has "Conflicting scopes", Claude Code
+found the same server name in user and project settings with different commands.
+Project scope wins inside that project. This is a warning about duplicate
+definitions; the OAuth sentence in the warning is generic and does not mean a
+local `comp-daemon` needs OAuth sign-in.
+
+From the **same project directory where the warning appeared**, run:
+
+```text
+claude mcp list
+claude mcp get comp
+```
+
+Check the two paths and decide which registration you want to keep:
+
+| Keep | Use when | One-time command | Effect |
+| --- | --- | --- | --- |
+| Project | This project intentionally uses its own daemon, such as a development build | `claude mcp remove comp --scope user` | Removes the machine-wide registration, so other projects lose that shared `comp` entry |
+| User | The installed extension's daemon should serve every project | `claude mcp remove comp --scope project` | Removes this project's `comp` entry from `.mcp.json`; other project servers remain |
+
+Run **only one** removal command after checking its effect. Restart Claude Code
+from the project directory, then run `claude mcp list` again. If Setup Agents is
+run later, choosing Claude Code creates the project entry again; choosing its
+optional user-scope registration creates both entries again. In the comP source
+checkout, the project entry may intentionally use a working development binary
+while the user entry uses the installed extension. Automatic repair preserves the
+development binary, so that difference requires the one-time scope choice above.
 
 ### Codex's auto-review denies comP's tools
 
