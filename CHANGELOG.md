@@ -13,6 +13,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - **`comP: Setup Agents` の Antigravity 登録先が古かった問題を修正**（`src/mcp/AgentSetup.ts`）: Antigravity 2.0 は MCP 設定を `~/.gemini/config/mcp_config.json` から読む（App・IDE・`agy` CLI・VS Code 拡張で共通）が、comP は以前の `~/.gemini/antigravity-ide/mcp_config.json` に書いていたため、Antigravity から comp が見えていなかった。書き込み先を新しいパスに変更し、旧パスは自動修復の対象としてだけ残す（新規作成・削除はしない）。あわせて、Antigravity 用の指示を Antigravity が読む `AGENTS.md` にも書くようにし、`~/.gemini/config`・`antigravity`・`antigravity-cli` からも検出し、再起動の案内を形態ごと（CLI は `agy` の `/mcp` で確認）に分けた
 - **Gemini CLI の案内に提供終了の注記を追加**: 2026-06-18 以降、Gemini CLI は Google AI Pro / Ultra と無料の個人アカウントでは使えない。再起動の案内と文書に、有料 API キーか Code Assist Standard / Enterprise ライセンスなら継続して使えること、それ以外は Antigravity を選ぶことを記載した
 
+### Security
+
+- **cargo audit の脆弱性2件（RUSTSEC-2026-0403 `zstd-safe`、RUSTSEC-2026-0410 `zstd-sys`）を解消**（`daemon/Cargo.toml`）: どちらも `parquet2` の既定機能が入れる zstd 0.12 経由で、`parquet2` に新しい版がないため上げられなかった。comP が読むのは圧縮されないフッターのメタデータ（`read_metadata`）だけなので、`parquet2` を `default-features = false` にして圧縮ライブラリ（zstd・brotli・gzip・lz4・snappy）を外した。zstd・snappy・gzip・brotli・lz4 で圧縮した parquet のメタデータを読む回帰テストを追加（`daemon/tests/data/compressed/`）
+- 残る警告（いずれも push を止めない）: `tokio` の RUSTSEC-2026-0386（unsound、修正版なし）、`lopdf` 経由の `ttf-parser` の RUSTSEC-2026-0192（メンテ終了）
+
+### Changed
+
+- **mocha を 10 から 11 に更新**: Node 26 では mocha 10 が使う yargs 16 が読み込めず、`npm test`（と pre-commit フック）が起動しなかった。mocha 11（yargs 17.7.3）は Node 26 と CI の 22・24 で動く。mocha 11 は Windows で一重引用符を外さないため、`test:unit` のグロブを二重引用符に変えた
+
 ### Docs
 
 - GitHub Pages（`docs/index.html`・`docs/index_ja.html`）を現行の動作に合わせて更新: ロードマップに v0.11.2〜v0.11.10 を追加し、v0.10.0 以前の「Markdown の手順書を開いて貼り付ける」説明を直接書き込み方式に改め、Continue・Gemini CLI を追加し、Marketplace からのインストールを先に記載

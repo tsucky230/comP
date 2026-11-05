@@ -872,4 +872,26 @@ Run npm install to get started.
 
         Ok(())
     }
+
+    // WHY: parquet2 is built without its compression codecs (Cargo.toml), and
+    // test.parquet above is uncompressed, so it cannot catch a codec being
+    // needed after all. Real files are usually compressed; the footer metadata
+    // comP reads must still parse for every codec pyarrow writes.
+    #[test]
+    fn test_parse_parquet_metadata_of_compressed_files() -> Result<()> {
+        for codec in ["zstd", "snappy", "gzip", "brotli", "lz4"] {
+            let path = format!("tests/data/compressed/{codec}.parquet");
+            let symbols = DocumentParser::parse_parquet(Path::new(&path))?;
+
+            let sig = symbols[0].signature.as_ref().unwrap();
+            assert!(sig.contains("Parquet File. Rows: 3, Columns: 3"), "{codec}: {sig}");
+            let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+            for column in ["id", "name", "score"] {
+                assert!(names.contains(&column), "{codec}: missing {column} in {names:?}");
+            }
+            let text = DocumentParser::extract_parquet_text(Path::new(&path))?;
+            assert!(text.contains("score:"), "{codec}: {text}");
+        }
+        Ok(())
+    }
 }

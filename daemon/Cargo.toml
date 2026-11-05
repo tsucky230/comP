@@ -35,7 +35,11 @@ tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
 tree-sitter-java = "0.23"
 lopdf = "0.42"
-parquet2 = "0.17.2"
+# WHY default-features = false: comP reads only the footer metadata
+# (read_metadata), which is never compressed. The default codecs pulled in
+# zstd 0.12, whose zstd-safe/zstd-sys carry RUSTSEC-2026-0403/0410 and cannot
+# be raised while parquet2 (no newer release) pins zstd ^0.12.
+parquet2 = { version = "0.17.2", default-features = false }
 tiktoken-rs = "0.12"
 
 [dev-dependencies]
