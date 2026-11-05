@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-11-05
+
 ### Fixed
 
 - **`comP: Setup Agents` の Antigravity 登録先が古かった問題を修正**（`src/mcp/AgentSetup.ts`）: Antigravity 2.0 は MCP 設定を `~/.gemini/config/mcp_config.json` から読む（App・IDE・`agy` CLI・VS Code 拡張で共通）が、comP は以前の `~/.gemini/antigravity-ide/mcp_config.json` に書いていたため、Antigravity から comp が見えていなかった。書き込み先を新しいパスに変更し、旧パスは自動修復の対象としてだけ残す（新規作成・削除はしない）。あわせて、Antigravity 用の指示を Antigravity が読む `AGENTS.md` にも書くようにし、`~/.gemini/config`・`antigravity`・`antigravity-cli` からも検出し、再起動の案内を形態ごと（CLI は `agy` の `/mcp` で確認）に分けた

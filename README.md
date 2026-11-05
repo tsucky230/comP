@@ -437,6 +437,7 @@ Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](ht
 | **v0.11.8** | **Rule sharing (beta, off by default); multi-agent trace (turns ↔ delegations), ranked session_recall, secret redaction in records** | ✅ Released (beta) |
 | **v0.11.9** | **Codex auto-review no longer denies comP: every tool declares MCP annotations (local, read-only); Setup Agents keeps Codex's saved tool approvals** | ✅ Released |
 | **v0.11.10** | **Refresh old Claude Code MCP daemon paths after a VS Code extension upgrade, including user scope** | ✅ Released |
+| **v0.11.11** | **Antigravity 2.0 support (`~/.gemini/config/mcp_config.json`, shared by App / IDE / `agy` CLI / VS Code extension); zstd vulnerabilities removed from the daemon; tests run on Node 26** | ✅ Released |
 | v1.0 | API stabilization, community integrations | ⚪ Planned |
 
 ---

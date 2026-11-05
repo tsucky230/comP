@@ -47,7 +47,7 @@
   <header class="hero">
     <div class="container hero-container">
       <div class="hero-content">
-        <div class="badge animate-fade-in" data-version="0.11.10">v0.11.10 — Claude MCP の古いパスを修復</div>
+        <div class="badge animate-fade-in" data-version="0.11.11">v0.11.11 — Antigravity 2.0 に対応</div>
         <h1 class="animate-fade-in">AIは、質問のたびに<br>プロジェクト全体を<span class="gradient-text">読み直している。</span></h1>
         <p class="hero-desc animate-fade-in">comP（コンプ）は、AIコーディングアシスタントの「記憶」になるシステムです。プロジェクトの構成図とインデックスを自動生成し、AIが探し回らずに関連コードへ一瞬でたどり着けるようにします。オープンソース・完全ローカル動作。</p>
         <div class="hero-cta animate-fade-in">
@@ -304,6 +304,14 @@
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.11</div>
+          <div class="roadmap-content">
+            <h4>Antigravity 2.0 に対応</h4>
+            <p>Antigravity 2.0 は、App・IDE・<code>agy</code> CLI・VS Code 拡張のどれも、MCP 設定を <code>~/.gemini/config/mcp_config.json</code> から読みます。これまでの comP は読まれなくなったパスに書いていたため、comp が表示されませんでした。Setup Agents はこのファイルに書くようになり、Antigravity 用の指示を <code>AGENTS.md</code> にも書き、Gemini CLI は有料の API キーか Code Assist のライセンスがある場合だけ使えることを案内します。あわせて、デーモンから parquet2 の使っていない圧縮ライブラリを外して zstd の脆弱性2件をなくし、Node 26 でもテストが動くようにしました。</p>
+            <span class="status-tag">✅ リリース済み</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -320,7 +328,7 @@
           <span class="step-num">1</span>
           <h4>拡張機能のインストール</h4>
           <p>VS Code の<b>拡張機能</b>（<code>Ctrl+Shift+X</code>）で <b>「comP - Code Context Engine」</b> を検索し、<b>インストール</b>を押します。リリースされた <code>.vsix</code> ファイルをダウンロードして、次のコマンドでインストールすることもできます：</p>
-          <pre><code>code --install-extension comP-0.11.10.vsix</code></pre>
+          <pre><code>code --install-extension comP-0.11.11.vsix</code></pre>
         </div>
         <div class="step">
           <span class="step-num">2</span>
