@@ -103,7 +103,7 @@
         <div class="detail-content">
           <h3>Deep Integration with VSCode</h3>
           <p>Starts with a single click from the sidebar and watches workspace changes to keep indexes incrementally updated with 'stale' status tracking.</p>
-          <p>Generates Model Context Protocol (MCP) server configuration for Claude Code, Codex, Cursor, Cline, Windsurf, GitHub Copilot, and other major AI agents.</p>
+          <p>Writes itself into the Model Context Protocol (MCP) configuration of Claude Code, Codex, Cursor, Cline, Windsurf, Continue, GitHub Copilot, Antigravity, Aider and Gemini CLI — merged with the servers already there, nothing to paste.</p>
         </div>
       </div>
 
@@ -281,6 +281,30 @@
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.2–v0.11.6</div>
+          <div class="roadmap-content">
+            <h4>Self-Recovery, Exact Token Counts & Gemini CLI</h4>
+            <p>All three persistent stores (session memory, history and <code>.comp/index.db</code>) recover automatically from corruption. <code>run_pipeline</code> counts tokens exactly with tiktoken-rs instead of estimating. <b>comP: Setup Agents</b> gains Gemini CLI, and its config is repaired after upgrades like the others. Header-heavy Markdown files no longer crowd out relevant results (#7), and a failing tool now says why (for example <code>Missing 'task' parameter</code>) instead of a bare "Internal error".</p>
+            <span class="status-tag">✅ Released</span>
+          </div>
+        </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.7–v0.11.8</div>
+          <div class="roadmap-content">
+            <h4>Working Across Several Agents (Beta)</h4>
+            <p>Two opt-in beta features, both off by default. Conversation recording saves each Claude Code turn to <code>.comp/history/</code> automatically. Rule sharing lets <code>run_pipeline</code> return the relevant sections of other agents' instruction files (<code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>GEMINI.md</code>, <code>.cursor/rules</code> …), and the new <code>check_rule_conflicts</code> tool lists sections that may contradict each other. Records can now link turns to the delegations they started, <code>session_recall</code> ranks its matches, and API-key-shaped secrets are masked before anything is written. See <a href="https://github.com/tsucky230/comP/blob/main/docs/user/BETA_FEATURES.md">Beta Features</a>.</p>
+            <span class="status-tag">✅ Released (beta)</span>
+          </div>
+        </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.9–v0.11.10</div>
+          <div class="roadmap-content">
+            <h4>Agent Setup That Keeps Working</h4>
+            <p>Codex's automatic review no longer denies comP's tools: every tool now declares MCP annotations (local, read-only), and re-running Setup Agents keeps the tool approvals Codex saved. After a VS Code extension upgrade, comP also refreshes old daemon paths in Claude Code's registrations, user scope included.</p>
+            <span class="status-tag">✅ Released</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -296,7 +320,7 @@
         <div class="step">
           <span class="step-num">1</span>
           <h4>Install the Extension</h4>
-          <p>Download the release <code>.vsix</code> file and drag-and-drop it into VSCode, or install via command line:</p>
+          <p>In VS Code, open <b>Extensions</b> (<code>Ctrl+Shift+X</code>), search for <b>"comP - Code Context Engine"</b> and click <b>Install</b>. Or download the release <code>.vsix</code> file and install it from the command line:</p>
           <pre><code>code --install-extension comP-0.11.10.vsix</code></pre>
         </div>
         <div class="step">
@@ -307,16 +331,18 @@
         <div class="step">
           <span class="step-num">3</span>
           <h4>Link Your Coding Agent</h4>
-          <p>Open the Command Palette → <code>comP: Setup Agents</code> and select your agent. comP will open a new Markdown tab with step-by-step instructions and automatically generated LLM prompts to easily set up your agent. You can also verify the agent's connection status directly in the comP sidebar.</p>
+          <p>Open the Command Palette → <code>comP: Setup Agents</code> and pick your agents — the ones already on your machine are preselected. comP writes itself into the config files each agent actually reads, merging with the MCP servers already there, so nothing is copied by hand. Then restart the agent: the per-agent steps are printed to the "comP Setup" output panel, and the comP sidebar shows when an agent last connected.</p>
           <ul style="margin-top:0.75rem;padding-left:1.2rem;line-height:1.8">
-            <li><strong>Claude Code</strong>: Follow the Markdown guide to copy the <code>claude mcp add comp</code> command. If you miss it, use the path from <code>.comp/config/claude_desktop_config.json</code></li>
-            <li><strong>Codex</strong>: Written to <code>~/.codex/config.toml</code> and <code>.codex/config.toml</code> automatically (the project file needs a trusted project)</li>
-            <li><strong>Cursor</strong>: Merge config into <code>~/.cursor/mcp.json</code> or <code>.cursor/mcp.json</code></li>
-            <li><strong>Cline</strong>: Paste config in VSCode Settings → <em>Cline › MCP Servers</em></li>
-            <li><strong>Windsurf</strong>: Merge into <code>~/.codeium/windsurf/mcp_config.json</code></li>
-            <li><strong>GitHub Copilot</strong>: Written to <code>.vscode/mcp.json</code> automatically</li>
-            <li><strong>Antigravity</strong>: Written to <code>~/.gemini/antigravity-ide/mcp_config.json</code> automatically</li>
-            <li><strong>Aider</strong>: Written to <code>.aider.conf.yml</code> in your workspace root automatically</li>
+            <li><strong>Claude Code</strong>: <code>.mcp.json</code>, plus an optional user-scope registration through <code>claude mcp add --scope user</code></li>
+            <li><strong>Codex</strong>: <code>~/.codex/config.toml</code> and <code>.codex/config.toml</code> (the project file needs a trusted project)</li>
+            <li><strong>GitHub Copilot</strong>: <code>.vscode/mcp.json</code></li>
+            <li><strong>Cursor</strong>: <code>.cursor/mcp.json</code> and <code>~/.cursor/mcp.json</code></li>
+            <li><strong>Cline</strong>: its MCP settings in VS Code's global storage</li>
+            <li><strong>Windsurf</strong>: <code>~/.codeium/windsurf/mcp_config.json</code></li>
+            <li><strong>Continue.dev</strong>: <code>.continue/mcpServers/comp.yaml</code> (project and home)</li>
+            <li><strong>Antigravity</strong> (App, IDE, <code>agy</code> CLI and VS Code extension): <code>~/.gemini/config/mcp_config.json</code></li>
+            <li><strong>Aider</strong>: <code>.aider.conf.yml</code> in your workspace root</li>
+            <li><strong>Gemini CLI</strong>: <code>.gemini/settings.json</code> and <code>~/.gemini/settings.json</code> — only with a paid Gemini API key or a Code Assist Standard / Enterprise license, since personal accounts were cut off on 2026-06-18</li>
           </ul>
         </div>
       </div>

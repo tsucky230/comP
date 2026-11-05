@@ -157,12 +157,19 @@ describe("AgentSetupManager", () => {
       expect(readJson(result.configPath).servers.comp).to.exist;
     });
 
-    it("Antigravity writes the global gemini config", async () => {
+    // WHY only the global file: Antigravity also reads .agents/mcp_config.json,
+    // but which of the two wins when both name `comp` is undocumented, and the
+    // pre-2.0 antigravity-ide/ path is no longer read at all. fakeHome starts
+    // empty, so this also covers a machine where ~/.gemini/config is missing.
+    it("Antigravity writes only the global ~/.gemini/config/mcp_config.json", async () => {
       const result = await manager.generateConfig("Antigravity");
 
       expect(writtenPaths(result)).to.deep.equal([
-        path.join(fakeHome, ".gemini", "antigravity-ide", "mcp_config.json"),
+        path.join(fakeHome, ".gemini", "config", "mcp_config.json"),
       ]);
+      expect(fs.existsSync(path.join(testWorkspace, ".agents", "mcp_config.json"))).to.be.false;
+      expect(fs.existsSync(path.join(fakeHome, ".gemini", "antigravity-ide", "mcp_config.json"))).to.be
+        .false;
     });
 
     it("Aider writes .aider.conf.yml", async () => {
@@ -337,6 +344,28 @@ describe("AgentSetupManager", () => {
 
       expect(readJson(file).mcpServers.other.command).to.equal("x");
     });
+
+    // The empty object is what Antigravity itself leaves behind on a fresh
+    // install, so it must merge, not be treated as foreign.
+    for (const [label, existing] of [
+      ["an empty server list", { mcpServers: {} }],
+      ["other servers", { mcpServers: { other: { command: "x" } } }],
+      ["other servers and unknown keys", { mcpServers: { other: { command: "x" } }, extra: 1 }],
+    ] as const) {
+      it(`merges comp into an Antigravity config holding ${label}`, async () => {
+        const file = path.join(fakeHome, ".gemini", "config", "mcp_config.json");
+        writeJson(file, existing);
+
+        await manager.generateConfig("Antigravity");
+
+        const merged = readJson(file);
+        expect(merged.mcpServers.comp.env.COMP_AGENT_ID).to.equal("antigravity");
+        for (const name of Object.keys(existing.mcpServers)) {
+          expect(merged.mcpServers[name]).to.deep.equal((existing.mcpServers as any)[name]);
+        }
+        if ("extra" in existing) expect(merged.extra).to.equal(1);
+      });
+    }
 
     it("preserves other servers in the Cline settings", async () => {
       const file = path.join(
@@ -968,6 +997,7 @@ describe("AgentSetupManager", () => {
     // session_log itself, so their instruction file must ask for it.
     for (const [agent, file] of [
       ["Codex", "AGENTS.md"],
+      ["Antigravity", "AGENTS.md"],
       ["Gemini CLI", "GEMINI.md"],
       ["Aider", "CONVENTIONS.md"],
       ["GitHub Copilot", path.join(".github", "copilot-instructions.md")],
@@ -1169,12 +1199,23 @@ describe("AgentSetupManager", () => {
       expect(manager.detectInstalledAgents()).to.include("Gemini CLI");
     });
 
-    it("does not mistake Antigravity's ~/.gemini/antigravity-ide/ for Gemini CLI", () => {
-      fs.mkdirSync(path.join(fakeHome, ".gemini", "antigravity-ide"), { recursive: true });
+    // Each Antigravity flavour leaves a different directory: the shared config
+    // (App, IDE, CLI, VS Code extension), and per-flavour data folders. A user
+    // with only the CLI or only the VS Code extension must still be detected.
+    for (const dir of ["config", "antigravity", "antigravity-ide", "antigravity-cli"]) {
+      it(`detects Antigravity from ~/.gemini/${dir}/ without mistaking it for Gemini CLI`, () => {
+        fs.mkdirSync(path.join(fakeHome, ".gemini", dir), { recursive: true });
 
-      const detected = manager.detectInstalledAgents();
-      expect(detected).to.include("Antigravity");
-      expect(detected).to.not.include("Gemini CLI");
+        const detected = manager.detectInstalledAgents();
+        expect(detected).to.include("Antigravity");
+        expect(detected).to.not.include("Gemini CLI");
+      });
+    }
+
+    it("does not report Antigravity from a bare ~/.gemini/settings.json", () => {
+      writeJson(path.join(fakeHome, ".gemini", "settings.json"), {});
+
+      expect(manager.detectInstalledAgents()).to.not.include("Antigravity");
     });
   });
 
@@ -1204,6 +1245,39 @@ describe("AgentSetupManager", () => {
       const result = await jaManager.generateConfig("Codex");
 
       expect(result.restartHint).to.include("実行中の Codex を終了し");
+    });
+
+    const jaManagerFor = () =>
+      new AgentSetupManager(mockDaemon as any, testWorkspace, undefined, {
+        homeDir: fakeHome,
+        codexHome,
+        locale: "ja",
+      });
+
+    // One setup run covers every Antigravity flavour, so the hint has to tell
+    // each of them how to pick the file up, and where to confirm it worked.
+    it("covers the Antigravity CLI and VS Code extension, not just the editor", async () => {
+      for (const m of [manager, jaManagerFor()]) {
+        const hint = (await m.generateConfig("Antigravity")).restartHint;
+        expect(hint).to.include("agy");
+        expect(hint).to.include("/mcp");
+        expect(hint).to.include("VS Code");
+        expect(hint).to.include("~/.gemini/config/mcp_config.json");
+      }
+    });
+
+    // WHY: since 2026-06-18 Gemini CLI no longer serves personal Google
+    // accounts, so a user picking it there would get a config that never runs.
+    it("warns that Gemini CLI only keeps working with a paid key or a Code Assist license", async () => {
+      const en = (await manager.generateConfig("Gemini CLI")).restartHint;
+      expect(en).to.include("2026-06-18");
+      expect(en).to.match(/API key/);
+      expect(en).to.include("Antigravity");
+
+      const ja = (await jaManagerFor().generateConfig("Gemini CLI")).restartHint;
+      expect(ja).to.include("2026-06-18");
+      expect(ja).to.include("API キー");
+      expect(ja).to.include("Antigravity");
     });
   });
 
@@ -1521,6 +1595,27 @@ describe("AgentSetupManager", () => {
       const written = readJson(cfg);
       expect(written.mcpServers.comp.command).to.equal(bundledBinary);
       expect(written.mcpServers.comp.command).to.not.equal(devBinary);
+    });
+
+    // comP versions before this fix wrote here; Antigravity no longer reads it,
+    // but an old daemon path left in it is still repaired rather than abandoned.
+    it("repairs the legacy ~/.gemini/antigravity-ide/mcp_config.json with the bundled binary", () => {
+      const cfg = path.join(repairHomeDir, ".gemini", "antigravity-ide", "mcp_config.json");
+      writeJson(cfg, { mcpServers: { comp: { command: stalePath } } });
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("repaired");
+      expect(readJson(cfg).mcpServers.comp.command).to.equal(bundledBinary);
+    });
+
+    it("never creates the legacy Antigravity file when it is absent", () => {
+      const cfg = path.join(repairHomeDir, ".gemini", "antigravity-ide", "mcp_config.json");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, cfg)?.status).to.equal("missing");
+      expect(fs.existsSync(cfg)).to.be.false;
     });
 
     it("repairs the Cursor config whose comp entry sits at the document root", () => {

@@ -102,7 +102,7 @@
         <div class="detail-content">
           <h3>VS Codeに完全統合</h3>
           <p>VS Codeサイドバーからボタン1つで簡単に開始でき、コードの変更を監視してリアルタイムにインデックスを差分更新（stale状態の自動付与）します。</p>
-          <p>Claude Code, Codex, Cursor, Cline, Windsurf, GitHub Copilotなど、あらゆる主要AIエージェントのMCP（Model Context Protocol）設定を自動生成し、シームレスに連携可能です。</p>
+          <p>Claude Code・Codex・Cursor・Cline・Windsurf・Continue・GitHub Copilot・Antigravity・Aider・Gemini CLI の MCP（Model Context Protocol）設定ファイルへ、既存のサーバー設定とマージして直接書き込みます。手で貼り付ける作業はありません。</p>
         </div>
       </div>
 
@@ -280,6 +280,30 @@
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.2–v0.11.6</div>
+          <div class="roadmap-content">
+            <h4>自動復旧・正確なトークン数・Gemini CLI 対応</h4>
+            <p>3つの永続データ（セッションメモリ、履歴、<code>.comp/index.db</code>）が壊れても自動で復旧するようになりました。<code>run_pipeline</code> のトークン数は、推定ではなく tiktoken-rs で正確に数えます。<b>comP: Setup Agents</b> が Gemini CLI に対応し、その設定もほかのエージェントと同じくアップデート後に自動で修復されます。見出しの多い Markdown が無関係な検索結果の上位を占める偏り（#7）を直し、ツールが失敗したときは「Internal error」だけでなく原因（例: <code>Missing 'task' parameter</code>）を返すようにしました。</p>
+            <span class="status-tag">✅ リリース済み</span>
+          </div>
+        </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.7–v0.11.8</div>
+          <div class="roadmap-content">
+            <h4>複数エージェントでの併用（β版）</h4>
+            <p>既定OFFのβ版機能を2つ追加しました。会話の自動記録は、Claude Code の往復を <code>.comp/history/</code> へ自動で残します。ルール共有は、ほかのエージェント向けの指示ファイル（<code>CLAUDE.md</code>・<code>AGENTS.md</code>・<code>GEMINI.md</code>・<code>.cursor/rules</code> など）から作業に関係する節を <code>run_pipeline</code> が返すようにし、新しいツール <code>check_rule_conflicts</code> が矛盾していそうな節の組を一覧にします。あわせて、往復と委譲のつながりを記録に残せるようにし、<code>session_recall</code> の検索結果を順位付けし、API キーの形をした秘密を書き込む前に伏せ字にします。詳しくは <a href="https://github.com/tsucky230/comP/blob/main/docs/user/BETA_FEATURES_ja.md">β版の機能</a> を参照してください。</p>
+            <span class="status-tag">✅ リリース済み（β版）</span>
+          </div>
+        </div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.11.9–v0.11.10</div>
+          <div class="roadmap-content">
+            <h4>エージェント設定が壊れにくく</h4>
+            <p>Codex の自動審査が comP のツールを拒否しなくなりました。すべてのツールが MCP の注釈（ローカル・読み取り専用）を宣言し、Setup Agents をやり直しても Codex が保存したツールの承認を消しません。また、VS Code 拡張のアップデート後に、Claude Code の登録に残った古いデーモンのパスを、ユーザースコープも含めて更新します。</p>
+            <span class="status-tag">✅ リリース済み</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -295,7 +319,7 @@
         <div class="step">
           <span class="step-num">1</span>
           <h4>拡張機能のインストール</h4>
-          <p>リリースされた<code>.vsix</code>ファイルをダウンロードし、VS Codeにドラッグ＆ドロップするか、次のコマンドでインストールします：</p>
+          <p>VS Code の<b>拡張機能</b>（<code>Ctrl+Shift+X</code>）で <b>「comP - Code Context Engine」</b> を検索し、<b>インストール</b>を押します。リリースされた <code>.vsix</code> ファイルをダウンロードして、次のコマンドでインストールすることもできます：</p>
           <pre><code>code --install-extension comP-0.11.10.vsix</code></pre>
         </div>
         <div class="step">
@@ -306,16 +330,18 @@
         <div class="step">
           <span class="step-num">3</span>
           <h4>エージェントを紐付ける</h4>
-          <p>コマンドパレット → <code>comP: Setup Agents</code>を実行し、エージェントを選択します。comPは新しいタブでMarkdownの手順書（および自動設定用のLLMプロンプト）を開き、設定をサポートします。また、サイドバーからいつでもエージェントの接続状況（最終アクセス時刻）を確認できます。各エージェントの手順：</p>
+          <p>コマンドパレット → <code>comP: Setup Agents</code> を実行し、エージェントを選びます。この PC で見つかったエージェントは最初から選ばれています。comP は各エージェントが実際に読む設定ファイルへ、既存の MCP サーバー設定とマージして書き込むので、手で貼り付ける作業はありません。そのあとエージェントを再起動してください。エージェントごとの手順は出力パネル「comP Setup」に表示され、エージェントが最後に接続した時刻はサイドバーで確認できます。書き込み先：</p>
           <ul style="margin-top:0.75rem;padding-left:1.2rem;line-height:1.8">
-            <li><strong>Claude Code</strong>: 手順書に従い <code>claude mcp add comp</code> コマンドをコピーして実行します。手順書を見逃した場合は <code>.comp/config/claude_desktop_config.json</code> のパスを使用</li>
-            <li><strong>Codex</strong>: <code>~/.codex/config.toml</code> と <code>.codex/config.toml</code> に自動書き込み済み（プロジェクト側は「信頼済みプロジェクト」でのみ有効）</li>
-            <li><strong>Cursor</strong>: <code>~/.cursor/mcp.json</code> または <code>.cursor/mcp.json</code> にマージ</li>
-            <li><strong>Cline</strong>: VS Code設定 → <em>Cline › MCP Servers</em>に貼り付け</li>
-            <li><strong>Windsurf</strong>: <code>~/.codeium/windsurf/mcp_config.json</code> にマージ</li>
-            <li><strong>GitHub Copilot</strong>: <code>.vscode/mcp.json</code> に自動書き込み済み</li>
-            <li><strong>Antigravity</strong>: <code>~/.gemini/antigravity-ide/mcp_config.json</code>に自動書き込み済み</li>
-            <li><strong>Aider</strong>: ワークスペースルートの<code>.aider.conf.yml</code>に自動書き込み済み</li>
+            <li><strong>Claude Code</strong>: <code>.mcp.json</code>（任意で <code>claude mcp add --scope user</code> によるユーザースコープ登録も）</li>
+            <li><strong>Codex</strong>: <code>~/.codex/config.toml</code> と <code>.codex/config.toml</code>（プロジェクト側は「信頼済みプロジェクト」でのみ有効）</li>
+            <li><strong>GitHub Copilot</strong>: <code>.vscode/mcp.json</code></li>
+            <li><strong>Cursor</strong>: <code>.cursor/mcp.json</code> と <code>~/.cursor/mcp.json</code></li>
+            <li><strong>Cline</strong>: VS Code のグローバルストレージにある MCP 設定</li>
+            <li><strong>Windsurf</strong>: <code>~/.codeium/windsurf/mcp_config.json</code></li>
+            <li><strong>Continue.dev</strong>: <code>.continue/mcpServers/comp.yaml</code>（プロジェクトとホーム）</li>
+            <li><strong>Antigravity</strong>（App・IDE・<code>agy</code> CLI・VS Code 拡張）: <code>~/.gemini/config/mcp_config.json</code></li>
+            <li><strong>Aider</strong>: ワークスペースルートの <code>.aider.conf.yml</code></li>
+            <li><strong>Gemini CLI</strong>: <code>.gemini/settings.json</code> と <code>~/.gemini/settings.json</code>（有料の Gemini API キーか Code Assist Standard / Enterprise のライセンスがある場合のみ。個人アカウントは 2026-06-18 に提供終了）</li>
           </ul>
         </div>
       </div>

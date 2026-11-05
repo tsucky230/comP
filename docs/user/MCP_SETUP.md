@@ -46,7 +46,7 @@ daemon binaries, Claude Code reports a scope conflict; see
 | Cline | — | VS Code `globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
 | Windsurf | — | `~/.codeium/windsurf/mcp_config.json` |
 | Continue | `.continue/mcpServers/comp.yaml` | `~/.continue/mcpServers/comp.yaml` |
-| Antigravity | — | `~/.gemini/antigravity-ide/mcp_config.json` |
+| Antigravity | — | `~/.gemini/config/mcp_config.json` |
 | GitHub Copilot | `.vscode/mcp.json` | — |
 | Aider | `.aider.conf.yml` | — |
 | Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` |
@@ -168,8 +168,24 @@ MCP tools are only available in **Agent** mode — switch modes before testing.
 
 ### Antigravity
 
-Quit Antigravity completely and start it again. Reloading the window is not
-enough for a global config change.
+Antigravity 2.0 reads one machine-wide file, `~/.gemini/config/mcp_config.json`,
+from every flavour — the App, the IDE, the `agy` CLI and the VS Code extension
+(which runs the same `agy` backend) — so one setup run covers all of them.
+
+- **App / IDE**: quit Antigravity completely and start it again. Reloading the
+  window is not enough for a global config change.
+- **CLI**: leave the session and start `agy` again.
+- **VS Code extension**: quit VS Code completely and start it again.
+
+Verify by typing `/mcp` in an `agy` session: the MCP manager opens, and `comp`
+should be listed as connected.
+
+Antigravity also reads a project-level `.agents/mcp_config.json`, but comP does
+not write one: which file wins when both declare `comp` is not documented.
+
+Versions of comP before this change wrote to `~/.gemini/antigravity-ide/mcp_config.json`.
+Antigravity no longer reads that file, so if comp was missing from Antigravity,
+run **comP: Setup Agents** again. The old entry is left in place and harmless.
 
 ### GitHub Copilot
 
@@ -192,6 +208,12 @@ Restart the `gemini` session.
 Verify with `/mcp list` inside a session, or `gemini mcp list` from the shell —
 `comp` should show as `Connected`. stdio servers only connect in a trusted
 folder; run `gemini trust` first if it shows as `Disconnected` instead.
+
+Since 2026-06-18 Gemini CLI no longer serves Google AI Pro / Ultra or free
+personal accounts. It keeps working with a paid Gemini API key or a Gemini Code
+Assist Standard / Enterprise license. Without one, set up **Antigravity**
+instead — its CLI, `agy`, is the successor
+([Google's announcement](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/)).
 
 ---
 
@@ -225,7 +247,8 @@ Files that are checked:
 | `~/.cursor/mcp.json` | global |
 | `~/.codeium/windsurf/mcp_config.json` | global |
 | Cline `cline_mcp_settings.json` | global |
-| `~/.gemini/antigravity-ide/mcp_config.json` | global |
+| `~/.gemini/config/mcp_config.json` (Antigravity) | global |
+| `~/.gemini/antigravity-ide/mcp_config.json` (written by older comP; repaired only) | global |
 | `.gemini/settings.json`, `~/.gemini/settings.json` | workspace, global |
 | `.codex/config.toml`, `~/.codex/config.toml` | workspace, global |
 | `.comp/config/*.json` (legacy) | workspace |

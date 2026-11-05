@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Fixed
+
+- **`comP: Setup Agents` の Antigravity 登録先が古かった問題を修正**（`src/mcp/AgentSetup.ts`）: Antigravity 2.0 は MCP 設定を `~/.gemini/config/mcp_config.json` から読む（App・IDE・`agy` CLI・VS Code 拡張で共通）が、comP は以前の `~/.gemini/antigravity-ide/mcp_config.json` に書いていたため、Antigravity から comp が見えていなかった。書き込み先を新しいパスに変更し、旧パスは自動修復の対象としてだけ残す（新規作成・削除はしない）。あわせて、Antigravity 用の指示を Antigravity が読む `AGENTS.md` にも書くようにし、`~/.gemini/config`・`antigravity`・`antigravity-cli` からも検出し、再起動の案内を形態ごと（CLI は `agy` の `/mcp` で確認）に分けた
+- **Gemini CLI の案内に提供終了の注記を追加**: 2026-06-18 以降、Gemini CLI は Google AI Pro / Ultra と無料の個人アカウントでは使えない。再起動の案内と文書に、有料 API キーか Code Assist Standard / Enterprise ライセンスなら継続して使えること、それ以外は Antigravity を選ぶことを記載した
+
+### Docs
+
+- GitHub Pages（`docs/index.html`・`docs/index_ja.html`）を現行の動作に合わせて更新: ロードマップに v0.11.2〜v0.11.10 を追加し、v0.10.0 以前の「Markdown の手順書を開いて貼り付ける」説明を直接書き込み方式に改め、Continue・Gemini CLI を追加し、Marketplace からのインストールを先に記載
+- README の対応表から抜けていた Gemini CLI を追加し、「Gemini ❌ 非対応」を実態に合わせて修正
+
 ## [0.11.10] - 2026-10-20
 
 ### Fixed

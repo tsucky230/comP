@@ -122,8 +122,9 @@ merging with any MCP servers you already have. Nothing is copied by hand.
 | **Cline** | VS Code globalStorage MCP settings |
 | **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
 | **Continue.dev** | `.continue/mcpServers/comp.yaml` (project and home) |
-| **Antigravity** | `~/.gemini/antigravity-ide/mcp_config.json` |
+| **Antigravity** (App / IDE / `agy` CLI / VS Code extension) | `~/.gemini/config/mcp_config.json` |
 | **Aider** | `.aider.conf.yml` |
+| **Gemini CLI** | `.gemini/settings.json` and `~/.gemini/settings.json` (paid Gemini API key or Code Assist Standard / Enterprise license only — personal accounts were cut off on 2026-06-18) |
 
 **Then restart the agent.** None of these tools re-read their MCP configuration
 while running — in VS Code-based editors, Command Palette →
@@ -411,7 +412,7 @@ HEAD and worktree behavior, are in [MCP_SETUP.md](docs/user/MCP_SETUP.md#branch-
 | Claude Code / GitHub Copilot | ✅ Supported & verified |
 | Codex (CLI and VS Code extension) | ✅ Supported |
 | Cursor / Cline / Windsurf / Antigravity / Aider / Continue.dev | ✅ Supported |
-| Gemini | ❌ Not supported |
+| Gemini CLI | ✅ Supported (paid Gemini API key or Code Assist Standard / Enterprise license only) |
 
 Any MCP 2024-11-05-compliant client should work in principle. [Open an issue](https://github.com/tsucky230/comP/issues/new) if you hit a problem.
 

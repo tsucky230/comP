@@ -222,7 +222,7 @@ function readObjectPath(doc: unknown, keys: string[]): Record<string, unknown> |
  * | Cline          | —                                | VS Code globalStorage/saoudrizwan.claude-dev |
  * | Windsurf       | —                                | `~/.codeium/windsurf/mcp_config.json`       |
  * | Continue       | `.continue/mcpServers/comp.yaml` | `~/.continue/mcpServers/comp.yaml`          |
- * | Antigravity    | —                                | `~/.gemini/antigravity-ide/mcp_config.json` |
+ * | Antigravity    | —                                | `~/.gemini/config/mcp_config.json`          |
  * | GitHub Copilot | `.vscode/mcp.json`               | —                                           |
  * | Aider          | `.aider.conf.yml`                | —                                           |
  * | Codex          | `.codex/config.toml`             | `~/.codex/config.toml` (or `$CODEX_HOME`)   |
@@ -573,6 +573,9 @@ export class AgentSetupManager {
         ];
 
       case "Antigravity":
+        // WHY not also .agents/mcp_config.json: Antigravity reads both, but does
+        // not document which wins when each declares `comp`, so one global
+        // entry is the only shape whose behaviour is known.
         return [
           { path: this.antigravityConfigPath(), scope: "global", format: json(["mcpServers"]) },
         ];
@@ -612,6 +615,7 @@ export class AgentSetupManager {
 
     switch (agentName) {
       case "Codex":
+      case "Antigravity":
         return [...shared, ws("AGENTS.md")];
       case "Cursor":
         return [...shared, ws(".cursor", "rules")];
@@ -727,8 +731,20 @@ export class AgentSetupManager {
         );
       case "Antigravity":
         return this.t(
-          "Quit Antigravity completely and start it again.",
-          "Antigravity を完全に終了して起動し直してください。"
+          [
+            "comp was written to ~/.gemini/config/mcp_config.json, which every Antigravity flavour reads.",
+            "- App / IDE: quit Antigravity completely and start it again",
+            "- CLI: leave the session and start `agy` again",
+            "- VS Code extension: quit VS Code completely and start it again",
+            "Type `/mcp` in an `agy` session to open the MCP manager — comp should be listed as connected.",
+          ].join("\n"),
+          [
+            "comp を ~/.gemini/config/mcp_config.json に書きました。Antigravity のどの形態もこのファイルを読みます。",
+            "- App / IDE: Antigravity を完全に終了して起動し直す",
+            "- CLI: セッションを終了し、`agy` を起動し直す",
+            "- VS Code 拡張: VS Code を完全に終了して起動し直す",
+            "`agy` のセッションで `/mcp` と入力すると MCP の管理画面が開きます。comp が接続済みになっていれば成功です。",
+          ].join("\n")
         );
       case "GitHub Copilot":
         return this.t(
@@ -760,11 +776,13 @@ export class AgentSetupManager {
             "Restart the gemini CLI session.",
             "Run `/mcp list` inside a session, or `gemini mcp list` from the shell — comp should show as Connected.",
             "stdio servers only connect in a trusted folder; run `gemini trust` first if comp shows as Disconnected.",
+            "Since 2026-06-18 Gemini CLI no longer serves Google AI Pro / Ultra or free personal accounts. It keeps working with a paid Gemini API key or a Gemini Code Assist Standard / Enterprise license; otherwise set up Antigravity instead.",
           ].join("\n"),
           [
             "gemini CLI のセッションを再起動してください。",
             "セッション内で `/mcp list`、またはシェルから `gemini mcp list` を実行し、comp が Connected になっていれば成功です。",
             "stdio サーバーは信頼済みフォルダでしか接続されません。Disconnected の場合は先に `gemini trust` を実行してください。",
+            "2026-06-18 以降、Gemini CLI は Google AI Pro / Ultra と無料の個人アカウントでは使えません。有料の Gemini API キーか Gemini Code Assist Standard / Enterprise のライセンスがあれば引き続き使えます。どちらもない場合は、代わりに Antigravity を設定してください。",
           ].join("\n")
         );
       default:
@@ -1469,12 +1487,23 @@ export class AgentSetupManager {
     if (any(this.clineSettingsPath())) detected.push("Cline");
     if (any(home(".codeium", "windsurf"))) detected.push("Windsurf");
     if (any(ws(".continue"), home(".continue"))) detected.push("Continue");
-    if (any(home(".gemini", "antigravity-ide"))) detected.push("Antigravity");
+    // WHY four directories: the shared config/ only appears once something was
+    // configured, while each flavour (App, IDE, CLI) creates its own data folder.
+    if (
+      any(
+        home(".gemini", "config"),
+        home(".gemini", "antigravity"),
+        home(".gemini", "antigravity-ide"),
+        home(".gemini", "antigravity-cli")
+      )
+    ) {
+      detected.push("Antigravity");
+    }
     if (any(ws(".vscode"))) detected.push("GitHub Copilot");
     if (any(ws(".aider.conf.yml"), home(".aider.conf.yml"))) detected.push("Aider");
     // WHY settings.json specifically, not the bare ~/.gemini directory: that
-    // directory also holds Antigravity's antigravity-ide/ subfolder (see the
-    // Antigravity check above), so testing for it alone would misdetect
+    // directory also holds Antigravity's config/ and antigravity*/ subfolders
+    // (see the Antigravity check above), so testing for it alone would misdetect
     // Gemini CLI on any machine that only has Antigravity installed.
     if (any(ws(".gemini", "settings.json"), home(".gemini", "settings.json"))) {
       detected.push("Gemini CLI");
@@ -1693,6 +1722,7 @@ export class AgentSetupManager {
       json(home(".codeium", "windsurf", "mcp_config.json"), ["mcpServers", "comp"], "global"),
       ...(cline ? [json(cline, ["mcpServers", "comp"], "global")] : []),
       json(this.antigravityConfigPath(), ["mcpServers", "comp"], "global"),
+      json(this.legacyAntigravityConfigPath(), ["mcpServers", "comp"], "global"),
       // Codex keeps its servers in TOML, so these go through repairTomlTarget.
       {
         path: path.join(this.codexHome(), "config.toml"),
@@ -2318,12 +2348,21 @@ export class AgentSetupManager {
   }
 
   /**
-   * Antigravity MCP config path
-   *
-   * Antigravity (Google Gemini-based IDE) stores global MCP config at
-   * ~/.gemini/antigravity-ide/mcp_config.json.
+   * The global MCP config every Antigravity flavour reads — the App, the IDE,
+   * the `agy` CLI and the VS Code extension (which runs the same `agy` backend).
+   * See https://antigravity.google/docs/mcp.
    */
   private antigravityConfigPath(): string {
+    return path.join(this.homeDir, ".gemini", "config", "mcp_config.json");
+  }
+
+  /**
+   * Where comP wrote Antigravity's entry before Antigravity 2.0 moved its
+   * config to ~/.gemini/config/. Repaired only, never newly written: the
+   * directory is now just a per-flavour cache, so an entry here is inert, but
+   * one left by an older comP should not keep pointing at a removed binary.
+   */
+  private legacyAntigravityConfigPath(): string {
     return path.join(this.homeDir, ".gemini", "antigravity-ide", "mcp_config.json");
   }
 }

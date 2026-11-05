@@ -122,8 +122,9 @@ comP が各ツールの実際の設定ファイルへ直接書き込み、既存
 | **Cline** | VS Code globalStorage 配下の MCP 設定 |
 | **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
 | **Continue.dev** | `.continue/mcpServers/comp.yaml`（プロジェクトとホーム） |
-| **Antigravity** | `~/.gemini/antigravity-ide/mcp_config.json` |
+| **Antigravity**（App・IDE・`agy` CLI・VS Code 拡張） | `~/.gemini/config/mcp_config.json` |
 | **Aider** | `.aider.conf.yml` |
+| **Gemini CLI** | `.gemini/settings.json` と `~/.gemini/settings.json`（有料の Gemini API キーか Code Assist Standard / Enterprise のライセンスがある場合のみ。個人アカウントは 2026-06-18 に提供終了） |
 
 **そのあとエージェントを再起動してください。** どのツールも起動中に MCP 設定を
 読み直さないためです。VS Code 系エディタなら、コマンドパレット →
@@ -413,7 +414,7 @@ comP は数秒おきに現在の git ブランチをポーリングします（`
 | Claude Code / GitHub Copilot | ✅ 対応・確認済み |
 | Codex（CLI・VS Code 拡張の両方） | ✅ 対応 |
 | Cursor / Cline / Windsurf / Antigravity / Aider / Continue.dev | ✅ 対応 |
-| Gemini | ❌ 非対応 |
+| Gemini CLI | ✅ 対応（有料の Gemini API キーか Code Assist Standard / Enterprise のライセンスがある場合のみ） |
 
 MCP 2024-11-05 準拠クライアントは原則対応。問題があれば [Issue を作成](https://github.com/tsucky230/comP/issues/new) してください。
 
