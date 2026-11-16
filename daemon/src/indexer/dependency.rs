@@ -141,19 +141,18 @@ impl DependencyAnalyzer {
                 }
             }
 
-            // Generic calls — skip definition lines so `fn foo()` is not read as a
-            // call to `foo`, and skip control-flow keywords like `if (`/`while (`.
-            if !is_def_line("rust", trimmed) {
-                for caps in generic_call.captures_iter(line) {
-                    let name = caps.get(1).unwrap().as_str();
-                    if !is_call_keyword("rust", name) {
-                        deps.push(Dependency {
-                            from: "call".to_string(),
-                            to: name.to_string(),
-                            kind: EdgeKind::FunctionCall,
-                            line: line_no,
-                        });
-                    }
+            // Generic calls — skip the name a definition line declares so `fn foo()`
+            // is not read as a call to `foo`, and skip control-flow keywords like `if (`.
+            let defined = defined_name("rust", trimmed);
+            for caps in generic_call.captures_iter(line) {
+                let name = caps.get(1).unwrap().as_str();
+                if Some(name) != defined && !is_call_keyword("rust", name) {
+                    deps.push(Dependency {
+                        from: "call".to_string(),
+                        to: name.to_string(),
+                        kind: EdgeKind::FunctionCall,
+                        line: line_no,
+                    });
                 }
             }
         }
@@ -257,18 +256,17 @@ impl DependencyAnalyzer {
                 }
             }
 
-            // Extract bare calls (foo()), skipping definitions and keywords
-            if !is_def_line("typescript", trimmed) {
-                for caps in generic_call.captures_iter(line) {
-                    let name = caps.get(1).unwrap().as_str();
-                    if name != "new" && !is_call_keyword("typescript", name) {
-                        deps.push(Dependency {
-                            from: "call".to_string(),
-                            to: name.to_string(),
-                            kind: EdgeKind::FunctionCall,
-                            line: line_no,
-                        });
-                    }
+            // Extract bare calls (foo()), skipping the defined name and keywords
+            let defined = defined_name("typescript", trimmed);
+            for caps in generic_call.captures_iter(line) {
+                let name = caps.get(1).unwrap().as_str();
+                if Some(name) != defined && name != "new" && !is_call_keyword("typescript", name) {
+                    deps.push(Dependency {
+                        from: "call".to_string(),
+                        to: name.to_string(),
+                        kind: EdgeKind::FunctionCall,
+                        line: line_no,
+                    });
                 }
             }
         }
@@ -326,14 +324,11 @@ impl DependencyAnalyzer {
                 continue;
             }
 
-            // Skip definition lines so `def foo(` / `class Foo(` are not read as calls.
-            if is_def_line("python", trimmed) {
-                continue;
-            }
-
+            // Skip the defined name so `def foo(` / `class Foo(` are not read as calls.
+            let defined = defined_name("python", trimmed);
             for caps in generic_call.captures_iter(line) {
                 let name = caps.get(1).unwrap().as_str();
-                if !is_call_keyword("python", name) {
+                if Some(name) != defined && !is_call_keyword("python", name) {
                     deps.push(Dependency {
                         from: "call".to_string(),
                         to: name.to_string(),
@@ -362,13 +357,10 @@ impl DependencyAnalyzer {
             let line_no = (line_num + 1) as u32;
             let trimmed = line.trim_start();
 
-            if is_def_line("go", trimmed) {
-                continue;
-            }
-
+            let defined = defined_name("go", trimmed);
             for caps in generic_call.captures_iter(line) {
                 let name = caps.get(1).unwrap().as_str();
-                if !is_call_keyword("go", name) {
+                if Some(name) != defined && !is_call_keyword("go", name) {
                     deps.push(Dependency {
                         from: "call".to_string(),
                         to: name.to_string(),
@@ -502,6 +494,34 @@ fn is_def_line(language: &str, trimmed: &str) -> bool {
     }
 }
 
+/// The name a definition line declares (`pub fn foo(` → `foo`), or `None` for
+/// any other line.
+///
+/// WHY only this name is excluded, not the whole line: a one-line body such as
+/// `fn a() { b(); }` holds a real call; skipping the line dropped that edge.
+fn defined_name<'a>(language: &str, trimmed: &'a str) -> Option<&'a str> {
+    if !is_def_line(language, trimmed) {
+        return None;
+    }
+    let rest = match language {
+        "rust" => &trimmed[trimmed.find("fn ")? + 3..],
+        "typescript" | "javascript" => &trimmed[trimmed.find("function ")? + 9..],
+        "python" => {
+            let s = trimmed.strip_prefix("async ").unwrap_or(trimmed);
+            s.strip_prefix("def ").or_else(|| s.strip_prefix("class "))?
+        }
+        "go" => {
+            let s = trimmed.strip_prefix("func ")?.trim_start();
+            // A method: skip the receiver `(r *Repo)`.
+            if s.starts_with('(') { &s[s.find(')')? + 1..] } else { s }
+        }
+        _ => return None,
+    };
+    let rest = rest.trim_start();
+    let end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).unwrap_or(rest.len());
+    (end > 0).then(|| &rest[..end])
+}
+
 /// True when `name` is a control-flow keyword that may precede `(` but is not a call.
 fn is_call_keyword(language: &str, name: &str) -> bool {
     const COMMON: &[&str] = &["if", "for", "while", "switch", "return", "catch"];
@@ -509,7 +529,8 @@ fn is_call_keyword(language: &str, name: &str) -> bool {
         return true;
     }
     match language {
-        "rust" => matches!(name, "match" | "fn" | "let" | "loop" | "impl" | "mut"),
+        // `pub` precedes `(` in `pub(crate)` / `pub(super)`.
+        "rust" => matches!(name, "match" | "fn" | "let" | "loop" | "impl" | "mut" | "pub"),
         "typescript" | "javascript" => {
             matches!(name, "function" | "await" | "typeof" | "super" | "do" | "else")
         }
@@ -521,6 +542,10 @@ fn is_call_keyword(language: &str, name: &str) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "dependency_same_line_tests.rs"]
+mod same_line_tests;
 
 #[cfg(test)]
 mod tests {

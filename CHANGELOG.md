@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 - **設定 `comp.maxContextTokens` と `comp.enableCodeLens` が効いていなかった問題を修正**: どちらも package.json に宣言されているだけで、どのコードも読んでいなかった。`comp.enableCodeLens` をオフにすると CodeLens が消える（変更はすぐ反映）。`comp.maxContextTokens` は、明示的に設定したときだけ `.comp/config.json` の `default_budget_tokens` に書き込み、全エージェントのデーモンの `run_pipeline` の既定の予算になる。設定を消すと comP が書いた値だけを取り除き、手で書いた値は残す。`.comp/` のないフォルダには何も作らない（`src/config/budget.ts`）
 - **`get_impact_graph` が実質使えなかった問題を修正**: 必要な `symbol_id` を返すツールがなかった（ツール説明は「run_pipeline か get_context の結果から得る」としていたが、どちらも ID を返していなかった）。推測した ID を渡すと「影響なし」と返るので、誤った判断を招いていた。`get_context` の各結果に `id` を加え、ツール説明を合わせた
 - **未コミットの変更を先頭に並べる機能（`run_pipeline`）と `get_git_diff_context` が、条件によってファイルを照合できなかった問題を修正**: ワークスペースが git リポジトリのサブフォルダのときはリポジトリの最上位からのパスが、非ASCIIのファイル名は引用符付きでエスケープされたパスが返り、索引のパスと一致しなかった。`git diff --relative -z` で取るようにした。これにより `get_git_diff_context` は、ワークスペースの外の変更を一覧に出さなくなった
+- **関数の定義と同じ行に書いた呼び出しが、依存関係に入っていなかった問題を修正**（`daemon/src/indexer/dependency.rs`）: `fn a() { b(); }`・`def a(): return b()`・`func a() { b() }` のような1行の関数で、定義行を呼び出しの抽出から丸ごと外していたため、`a` → `b` のエッジができず、`get_impact_graph` と `get_dependencies` に出なかった（Rust・TypeScript/JavaScript・Python・Go）。定義行でも呼び出しを拾い、定義している名前だけを除くようにした
 
 ### Docs
 
