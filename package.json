@@ -103,12 +103,13 @@
         "comp.maxContextTokens": {
           "type": "number",
           "default": 8000,
-          "description": "Maximum tokens for context capsule (default: 8000 for Sonnet, 16000+ for Opus)"
+          "minimum": 1,
+          "description": "Token budget run_pipeline uses when the agent passes no max_tokens. When you set it, comP writes it to .comp/config.json (default_budget_tokens), which every agent's daemon reads; clearing it removes the value comP wrote."
         },
         "comp.enableCodeLens": {
           "type": "boolean",
           "default": true,
-          "description": "Show dependency information as code lens"
+          "description": "Show dependency counts as CodeLens above exported symbols"
         },
         "comp.autoIndex": {
           "type": "boolean",
@@ -150,6 +151,20 @@
             "preview"
           ],
           "markdownDescription": "%comp.ruleSharing.enabled.description%"
+        },
+        "comp.indexWorkspaceFolders": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "order": 120,
+          "markdownDescription": "%comp.indexWorkspaceFolders.description%"
+        },
+        "comp.blockHiddenHomeFolders": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "order": 130,
+          "markdownDescription": "%comp.blockHiddenHomeFolders.description%"
         }
       }
     }

@@ -575,21 +575,32 @@ impl GraphDB {
         limit: usize,
     ) -> Result<Vec<(String, String, String, i32)>> {
         // Return: (file_path, symbol_name, kind, line)
+        Ok(self
+            .search_symbols_with_ids(query, limit)?
+            .into_iter()
+            .map(|h| (h.path, h.name, h.kind, h.line))
+            .collect())
+    }
+
+    /// [`Self::search_symbols_by_name`] with each node's ID. get_context
+    /// returns the ID so an agent can pass it to get_impact_graph.
+    pub fn search_symbols_with_ids(&self, query: &str, limit: usize) -> Result<Vec<SymbolHit>> {
         let pattern = format!("%{}%", query);
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
-            "SELECT files.path, nodes.name, nodes.kind, nodes.line
+            "SELECT nodes.id, files.path, nodes.name, nodes.kind, nodes.line
              FROM nodes JOIN files ON nodes.file_id = files.id
              WHERE LOWER(nodes.name) LIKE LOWER(?)
              LIMIT ?"
         )?;
         let rows = stmt.query_map(rusqlite::params![pattern, limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i32>(3)?,
-            ))
+            Ok(SymbolHit {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                name: row.get(2)?,
+                kind: row.get(3)?,
+                line: row.get(4)?,
+            })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
@@ -927,6 +938,16 @@ pub struct DbNode {
     pub scope: Option<String>,
     pub is_exported: i32,
     pub signature: Option<String>,
+}
+
+/// One hit of [`GraphDB::search_symbols_with_ids`].
+#[derive(Clone, Debug)]
+pub struct SymbolHit {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    pub line: i32,
 }
 
 #[cfg(test)]

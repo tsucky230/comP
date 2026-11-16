@@ -132,7 +132,7 @@ v0.11.1 のエージェント別分割以降、TypeScript側の `SessionMemoryMa
 `SessionMemoryManager` クラスとそのテストは削除し、呼び出し元が Rust daemon へ直接 RPC で委譲する方式に統合しました。
 
 - **`mark_stale` RPC**（`daemon/src/mcp/mod.rs::handle_mark_stale`）: `.comp/session-memory/*.json` を全エージェント分スキャンし、`files` に指定パスを含む呼び出しへ `stale: true` を立てる。ファイルごとに `mark_stale_in_file` が `record_mcp_call` と同じサイドカーロック＋アトミック書込を使うため、対象エージェントのプロセスが同時に書き込んでいても安全。マッチが0件のファイルは書き込み自体を行わない（`tools/list` には載せない内部APIで、AIエージェントからは呼ばれない）。
-- **`get_stats` の `last_activity_at`**: `latest_activity_timestamp` が全session-memoryファイル＋全historyファイルを横断して最新タイムスタンプを計算し返す。`SidebarPanel.ts` は既に呼んでいる `getStats()` のレスポンスからこの値を読むだけになり、専用のファイルアクセスが不要になった。
+- **`getStats`（拡張機能専用の JSON-RPC。MCP ツールではない）の `last_activity_at`**: `latest_activity_timestamp` が全session-memoryファイル＋全historyファイルを横断して最新タイムスタンプを計算し返す。`SidebarPanel.ts` は既に呼んでいる `getStats()` のレスポンスからこの値を読むだけになり、専用のファイルアクセスが不要になった。
 - **`comp.exportDebugLog`**: 単一ファイルという前提が無くなったため、`session_recall` RPCが返す集約済みMarkdownをエクスポート対象に変更（出力拡張子も `.json` → `.md`）。
 
 各エントリ (`SessionCall`) は以下のフィールドを持ちます。
@@ -283,7 +283,7 @@ CREATE TABLE IF NOT EXISTS edges (
 1. `open_and_init` で通常どおり開き、`PRAGMA quick_check` を実行してから `Schema::apply_all` でスキーマを適用する。SQLite は破損したファイルでも `Connection::open` 自体は遅延評価で成功することが多いため、スキーマ変更前に明示的な整合性チェックを挟んでいる。
 2. これが失敗した場合、`quarantine_db_files` が `index.db` 本体を `index.db.corrupt-<epoch_ms>` へ退避する。WALモードが常時有効（`schema.rs::PRAGMA_INIT`）なため、`-wal` / `-shm` サイドカーが存在すれば同時に退避する — 本体だけ退避して `-wal` を放置すると、新規作成した空の `index.db` に対して SQLite が古い WAL の再生を試み、即座に再破損する無限ループに陥るため（Gemini レビュー指摘）。
 3. 退避後に `open_and_init` をもう一度実行し、新規の空DBを作成する。ここでも失敗する場合（権限・ディスク不足等、`.comp/` 自体が書き込み不可なケース）は `AppState::new` がエラーを返す。
-4. 復旧が成功した場合、`metadata` テーブルに `recovered_from_corruption_at`（epoch ms）を記録する。`run_pipeline` / `get_stats` のレスポンスに `index_recovered_from_corruption_at` として同じ値が含まれる（通常時はフィールド自体が存在しない）。これはバックグラウンド再インデックスが完了するまでの間、件数ゼロ（または一部のみ）の応答を「破損から復旧した直後で再構築中」なのか「本当に何も無い」のか区別できるようにするためで、区別できないと復旧直後にファイルが消えたと誤認したエージェントが不要な再生成・削除といった破壊的操作を行う危険がある（Gemini レビュー指摘）。
+4. 復旧が成功した場合、`metadata` テーブルに `recovered_from_corruption_at`（epoch ms）を記録する。`run_pipeline` と `getStats`（拡張機能専用）のレスポンスに `index_recovered_from_corruption_at` として同じ値が含まれる（通常時はフィールド自体が存在しない）。これはバックグラウンド再インデックスが完了するまでの間、件数ゼロ（または一部のみ）の応答を「破損から復旧した直後で再構築中」なのか「本当に何も無い」のか区別できるようにするためで、区別できないと復旧直後にファイルが消えたと誤認したエージェントが不要な再生成・削除といった破壊的操作を行う危険がある（Gemini レビュー指摘）。
 5. このフラグは `total_files == 0` のような件数ベースでは判定しない。`GraphDB::clear_recovery_marker()` が明示的に呼ばれるまで `metadata` に残り続ける設計で、`main.rs` のバックグラウンド再インデックス完了時、および `handle_force_reindex` 完了時に呼ばれる。件数ベースの判定では「再インデックスが一部完了してファイルが1件でも書かれた瞬間」にフラグが消えてしまい、エージェントが「残りのファイルは削除された」と誤認する恐れがあった（Gemini 設計レビュー指摘）。完了ベースにすることで、再構築が完全に終わるまでフラグが正しく出続ける。
 
 #### 5.1 degraded 起動とMutex poisoned対応（Phase 2）

@@ -55,6 +55,10 @@ pub struct WalkerConfig {
     /// Skip files larger than this size in bytes. Default: 5 MiB.
     /// WHY: Unbounded reads of huge binaries/generated files waste I/O and token budget.
     pub max_file_bytes: u64,
+    /// Index `.comp/history/*.jsonl` despite `.comp/` being hidden.
+    /// WHY a switch: conversation history belongs to the workspace it was
+    /// recorded in; an additional root's history must not leak into this index.
+    pub include_history: bool,
 }
 
 impl Default for WalkerConfig {
@@ -72,6 +76,7 @@ impl Default for WalkerConfig {
             ],
             custom_ignore_file: None,
             max_file_bytes: 5 * 1024 * 1024, // 5 MiB
+            include_history: true,
         }
     }
 }
@@ -172,12 +177,14 @@ impl FileWalker {
         // Supplemental scan for interaction history — must run before the
         // deleted-files diff so history rows registered by session_log's
         // index_file are not misclassified as deleted and purged.
-        self.scan_history_files(
-            previous_hashes,
-            &mut all_files,
-            &mut changed_files,
-            &mut found_paths,
-        );
+        if self.config.include_history {
+            self.scan_history_files(
+                previous_hashes,
+                &mut all_files,
+                &mut changed_files,
+                &mut found_paths,
+            );
+        }
 
         let deleted_files = previous_hashes
             .map(|h| {
@@ -259,7 +266,7 @@ impl FileWalker {
         // WHY: interaction history under .comp/history/ must be indexable so BM25 recall
         // (run_pipeline) can surface past requests/outcomes, even though .comp/ is an
         // otherwise hidden, non-source directory that is skipped wholesale.
-        if normalized.starts_with(".comp/history/") {
+        if self.config.include_history && normalized.starts_with(".comp/history/") {
             return false;
         }
         for segment in normalized.split('/') {

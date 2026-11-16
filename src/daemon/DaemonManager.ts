@@ -11,6 +11,7 @@ import * as vscode from "vscode";
 import { spawn, ChildProcess } from "child_process";
 import * as path from "path";
 import { readFileSync } from "fs";
+import { buildDaemonEnv } from "../config/daemonEnv";
 
 interface JSONRPCRequest {
   jsonrpc: "2.0";
@@ -60,11 +61,11 @@ export class DaemonManager {
 
     try {
       this.process = spawn(daemonPath, [], {
-        env: {
-          ...process.env,
-          COMP_WORKSPACE_ROOT: workspaceRoot,
-          RUST_LOG: "info",
-        },
+        env: buildDaemonEnv(
+          process.env,
+          workspaceRoot,
+          vscode.workspace.getConfiguration("comp").get<boolean>("blockHiddenHomeFolders", true)
+        ),
         cwd: workspaceRoot,
       });
 

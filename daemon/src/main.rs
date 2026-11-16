@@ -40,6 +40,10 @@ pub struct AppState {
     /// (.comp/session-memory/<agent_id>.json) so concurrent processes never write the same
     /// file. Set via COMP_AGENT_ID; defaults to "unknown" for clients not yet wired to set it.
     pub agent_id: String,
+    /// Protection of the home directory's hidden folders for every MCP path
+    /// check. Taken from the environment in [`AppState::new`]; a field so
+    /// tests can put a fake home in place without touching the environment.
+    pub home_policy: indexer::roots::HomePolicy,
 }
 
 impl AppState {
@@ -75,6 +79,7 @@ impl AppState {
             session_id,
             workspace_root: workspace_root.to_string(),
             agent_id: agent_id.to_string(),
+            home_policy: indexer::roots::HomePolicy::from_env(),
         })
     }
 }
@@ -131,18 +136,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let state_for_idx = Arc::clone(&state);
         let root_for_idx = workspace_root.clone();
-        // Read additional paths before spawning (no async needed)
-        let additional_paths = indexer::Indexer::read_additional_paths(&workspace_root);
         tokio::spawn(async move {
             info!("Starting initial workspace indexing...");
-            // WHY: Load hashes from previous session database to only re-index modified files.
-            let previous_hashes = state_for_idx.graph_db.get_all_file_hashes().unwrap_or_default();
-            let mut main_indexer = indexer::Indexer::new(&root_for_idx);
-            match main_indexer.index_workspace(Some(&previous_hashes), &state_for_idx.graph_db).await {
-                Ok((total, indexed, symbols)) => {
+            // WHY: index_all_roots compares against the hashes of the previous
+            // session's database, so only modified files are re-indexed.
+            match indexer::index_all_roots(&root_for_idx, &state_for_idx.graph_db).await {
+                Ok(summary) => {
                     info!(
                         "Initial indexing complete: indexed {}/{} files, {} symbols",
-                        indexed, total, symbols
+                        summary.indexed_files, summary.total_files, summary.symbols
                     );
                     // WHY here, unconditionally: this pass runs on every startup,
                     // not just ones following a corruption recovery — clearing an
@@ -157,17 +159,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 Err(e) => log::error!("Initial indexing failed: {}", e),
-            }
-
-            // Index additional paths (monorepo / multi-root support)
-            for extra_root in &additional_paths {
-                info!("Indexing additional path: {}", extra_root);
-                let extra_hashes = state_for_idx.graph_db.get_all_file_hashes().unwrap_or_default();
-                let mut extra_indexer = indexer::Indexer::new(extra_root);
-                match extra_indexer.index_workspace(Some(&extra_hashes), &state_for_idx.graph_db).await {
-                    Ok((t, i, s)) => info!("Additional path {}: indexed {}/{} files, {} symbols", extra_root, i, t, s),
-                    Err(e) => log::warn!("Failed to index additional path {}: {}", extra_root, e),
-                }
             }
 
             // Rebuild TF-IDF index after all indexing (main + additional) is complete

@@ -4,12 +4,14 @@ All settings are under `comp.*` in VS Code settings (`Ctrl+,`).
 
 | Setting | Type | Default | Description |
 | --- | --- | --- | --- |
-| `comp.maxTokens` | number | `8000` | Maximum tokens for `run_pipeline` context capsule |
-| `comp.enableCodeLens` | boolean | `true` | Show dependency counts as CodeLens above symbols |
+| `comp.maxContextTokens` | number | `8000` | Token budget `run_pipeline` uses when the agent passes no `max_tokens`. When you set it, comP writes it to `.comp/config.json` as `default_budget_tokens` (see [Compression Rules](#compression-rules)), which every agent's daemon reads, and keeps it in step when you change it. Clearing the setting removes the value comP wrote; a value you wrote there by hand stays. Nothing is written in a folder without `.comp/`. |
+| `comp.enableCodeLens` | boolean | `true` | Show dependency counts as CodeLens above exported symbols. Takes effect as soon as you change it. |
 | `comp.autoIndex` | boolean | `true` | Automatically index files on workspace open. Also gates the branch-switch watcher — see [Branch switches](./MCP_SETUP.md#branch-switches) — since disabling auto-indexing means no automatic reindex should fire from either path. |
 | `comp.exclude` | string[] | `[]` | Additional directory names to exclude from indexing. Synced to `.comp/config.json` on activation. Changes take effect after Force Re-index. |
 | `comp.conversationRecording.enabled` | boolean | `false` | **Beta.** Record each conversation turn to `.comp/history/`. See [Conversation recording (beta)](#conversation-recording-beta). |
 | `comp.conversationRecording.claudeCode` | boolean | `true` | **Beta.** Record Claude Code turns (Stop hook). Only takes effect while `comp.conversationRecording.enabled` is on. |
+| `comp.indexWorkspaceFolders` | boolean | `true` | In a multi-root workspace, add the other workspace folders to each folder's index. See [Multi-root workspaces](#multi-root-workspaces). |
+| `comp.blockHiddenHomeFolders` | boolean | `true` | Refuse additional roots in hidden folders of your home directory (`~/.ssh`, `~/AppData`, …). See [Hidden folders of the home directory](#hidden-folders-of-the-home-directory). |
 | `comp.ruleSharing.enabled` | boolean | `false` | **Beta.** Share git-tracked instruction files between agents: `run_pipeline` returns other agents' relevant rules and `check_rule_conflicts` lists possible contradictions. See [Beta Features → Rule sharing](./BETA_FEATURES.md#rule-sharing). |
 
 ## Conversation recording (beta)
@@ -92,6 +94,85 @@ into the same graph database:
   ]
 }
 ```
+
+Relative entries are resolved against the workspace root. The change takes
+effect at the next daemon start or **comP: Force Re-index**.
+
+How the additional directories appear in results:
+
+- Files in the workspace root keep their relative path (`src/main.rs`).
+- Files in an additional directory are listed by absolute path with forward
+  slashes (`E:/dev/shared-lib/src/lib.rs`), so two directories can both
+  contain a `README.md` without colliding, and an agent can open the path as is.
+- Dependencies are resolved across directories: `get_impact_graph` follows a
+  call from the workspace root into an additional directory.
+
+Entries that are ignored (with a warning in the daemon log): a path that is not
+an existing directory, the workspace root itself or anything inside it, a
+parent of the workspace root, and duplicates. Removing an entry removes that
+directory's files from the index at the next start or re-index.
+
+Each additional directory uses its own `.comp/ignore` and the `exclude` list
+of its own `.comp/config.json`, if it has them. `get_git_diff_context`,
+session memory and conversation history cover the workspace root only.
+
+### Hidden folders of the home directory
+
+`.comp/config.json` lives in the repository, so a repository you just cloned
+can name any directory as an additional root — `"additional_paths":
+["../../.ssh"]`, for example. To keep such a file from exposing your secrets,
+comP refuses, by default:
+
+- an additional root that is, or is inside, a protected folder directly under
+  your home directory: any folder whose name starts with `.` (`.ssh`, `.aws`,
+  `.config`, `.claude`, …), `AppData` (Windows) and `Library` (macOS). A
+  symlink that leads into one is judged by where it leads;
+- any file in those folders when an additional root is wider, such as the
+  home directory itself: it is neither indexed nor readable through
+  `compress_file` or file updates.
+
+`AppData\Local\Temp` (the Windows temp directory) is not protected. The
+workspace root itself is never judged, so opening `~/.config/nvim` as your
+workspace keeps working. Refused entries are reported as warnings in the
+daemon log.
+
+Only the process environment can turn this off: set
+`COMP_ALLOW_HIDDEN_HOME_ROOTS` to `1` (or `true`). In VS Code, set
+`comp.blockHiddenHomeFolders` to `false`; this is a machine-level setting, so a
+repository's `.vscode/settings.json` cannot change it, and it applies to the
+daemon the extension starts. For a daemon an agent starts (Claude Code, Codex,
+…), add `COMP_ALLOW_HIDDEN_HOME_ROOTS=1` to the `env` of that agent's comp MCP
+entry and restart the agent.
+
+### Multi-root workspaces
+
+When a VS Code workspace has several folders, each folder that uses comP has
+its own `.comp/index.db`, and an agent started in one folder reads that
+folder's database. With `comp.indexWorkspaceFolders` on (the default), the
+extension lists the *other* folders in each folder's `.comp/config.json`:
+
+```json
+{
+  "workspace_folders": ["E:\\dev\\other-project"]
+}
+```
+
+The daemon treats `workspace_folders` exactly like `additional_paths`, so an
+agent started in any folder can search every folder.
+
+- The list is rewritten when the extension starts, when folders are added to
+  or removed from the workspace, and when the setting changes. Do not edit it
+  by hand; put your own entries in `additional_paths`, which the extension
+  never touches.
+- Only folders that already have a `.comp/` directory get the list. comP does
+  not create `.comp/` in a folder that is not using it.
+- A workspace folder that is a hidden folder of your home directory (for
+  example `~/.config`) is not added to the other folders' index while
+  `comp.blockHiddenHomeFolders` is on.
+- Each folder indexes all the folders, so indexing takes longer and every
+  `.comp/index.db` grows. Turn the setting off to empty the lists.
+- An agent that is already running (for example Claude Code in the other
+  folder) picks up a changed list the next time its MCP server starts.
 
 ---
 

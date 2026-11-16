@@ -1,15 +1,24 @@
 {
-  "commit": "07f69b2ec1b0263880597980ebf5fde479e2d6e4",
+  "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
   "files": {
+    "daemon/src/indexer/home_policy_tests.rs": "2da8f9a8b0ab8f15934de9cefb85fd16d5bb08e9f317f0a1b7af15c07f46f6b4",
+    "daemon/src/indexer/multi_root_tests.rs": "448d041734370feb7652bacbdd2ef7439912a57cd34218d0c8d4c164fa368e71",
+    "daemon/src/indexer/roots_tests.rs": "866d75e3f72733656a173bb6bc21e1ac1b6eea8744d47db26fc476eb3d757154",
+    "daemon/src/mcp/home_policy_tests.rs": "345572f80767fa4ffeeb1c25a7340d3e296ad393cc69aa5ea0bd6a744e2a4f1d",
+    "daemon/src/mcp/mark_stale_tests.rs": "e0b515d413793a400b2ce7f8980c27fb71bd7d1064c10113c7448535a1a62637",
+    "daemon/src/mcp/multi_root_tests.rs": "a91812fe6ef25fe698417d99ac5fd980e11179465ba4de7784dbe5e4598eda1b",
     "daemon/src/mcp/record_turn_tests.rs": "c1c8ecc2bed68d1d750271aaa9d42cd8dbc7e6415e9c3e17378c0a564a8d8a19",
     "daemon/src/mcp/rule_sharing_tests.rs": "4cc1e8e631b1acf5df2cbcde8d4a8cfad300044cffa37f270aaded8c3fa86bd6",
     "daemon/src/mcp/trace_tests.rs": "a74e0eb28b0122d2b630d3634123a67140188cfcb25a8c2ce011a04565c94af3",
     "daemon/src/rules/tests.rs": "6bde44788b30c1dfd7a0bf4bb0c61dcc8974884dba9da4cc0d16d02eaf9a7206",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts": "65132fdde0078562c83e8104d5f50f179a5315594d5b4954034d430a21114808",
     "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05",
-    "src/test/ruleSharing.test.ts": "9fcebac114562d39d954ee6ba396e151a772ce29e9c05e7536c18ea700ef8a66"
+    "src/test/daemonEnv.test.ts": "58b84b3346f129d66f36c217adb6495e2d29a4b1aa876a42269e483f8042b4fd",
+    "src/test/ruleSharing.test.ts": "9fcebac114562d39d954ee6ba396e151a772ce29e9c05e7536c18ea700ef8a66",
+    "src/test/workspaceFolders.test.ts": "1aa41a21bed6598527cb2809dc3b54ca1ef9b2d0f318d9a4e8941dcfee6f6a23",
+    "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e"
   },
-  "frozen_at": "2026-10-05T22:09:22Z",
+  "frozen_at": "2026-11-16T19:19:35Z",
   "history": [
     {
       "approved_by": null,
@@ -154,6 +163,126 @@
       },
       "note": "fix test bug: slice at a char boundary in integ_session_recall_shows_delegations_under_their_turn (no assertion weakened)",
       "request": "TCR-trace-2"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-15T19:00:13Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "複数ルート索引: ルート判定の表テストと index_all_roots のテストを追加（tasks/plan.md ステップ1・2）",
+      "request": "TCR-6"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-15T19:00:30Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "TCR-6 の訂正: 直前の再確定で落とした daemon/src/mcp/trace_tests.rs を対象に戻す（内容は未変更）",
+      "request": "TCR-6"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-15T19:02:21Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "複数ルート索引: 拡張機能の workspace_folders 同期テストを追加（tasks/plan.md ステップ4）",
+      "request": "TCR-7"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-15T19:10:25Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "複数ルート索引 ステップ3: verbatim 接頭辞・is_current_stored・プロパティテスト3本・古い表記の掃除・MCP ハンドラのテストを追加（ユーザー承認 2026-11-16: proptest 追加とパス検証の変更）",
+      "request": "TCR-8"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-15T19:14:25Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "implementer のテスト変更要求を承認: プロパティテスト located_paths_are_inside_their_root の owner_dir が、ドライブ直下のルート（A:/）で区切りを二重にしていた。テスト側の誤り。実装は契約どおり",
+      "request": "TCR-9"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-15T19:29:25Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "reviewer 指摘の反映: 追加ルートの会話履歴を索引しない、compress_file で検証そのものを固定（兄弟ディレクトリ・外したルート）、.. の解決、検証したファイルと索引するファイルの一致（unix）、removeFile のおとり入力",
+      "request": "TCR-10"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-16T11:44:11Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "ホーム直下の隠しフォルダを追加ルートとして拒否（ユーザー依頼 2026-11-16、既定 ON）: HomePolicy・load_with・MCP パス検証・buildDaemonEnv のテスト",
+      "request": "TCR-11"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-16T11:51:49Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "隠しフォルダ拒否の抜け道（ホーム全体を追加ルートにすると Library・AppData が索引に入る）の回帰テストを追加",
+      "request": "TCR-12"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-16T19:02:56Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "ファイル監視（ファイルごとの debounce・作成イベント・削除時の取り消し）と、mark_stale の絶対パス変換のテストを追加",
+      "request": "TCR-13"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-16T19:19:35Z",
+      "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "reviewer 指摘（バースト時のタイムアウト連鎖・ブランチ切り替え後の被依存エッジ欠落）への対応: 索引の待ち行列（1件ずつ・重複なし）、削除で待ち行列から外す、cancelPending、dispose 後に待ち行列から始めない、のテストを追加",
+      "request": "TCR-14"
     }
   ],
   "metrics": {
@@ -168,7 +297,16 @@
     "daemon/src/rules/tests.rs",
     "daemon/src/mcp/rule_sharing_tests.rs",
     "src/test/ruleSharing.test.ts",
-    "daemon/src/mcp/trace_tests.rs"
+    "daemon/src/mcp/trace_tests.rs",
+    "daemon/src/indexer/roots_tests.rs",
+    "daemon/src/indexer/multi_root_tests.rs",
+    "src/test/workspaceFolders.test.ts",
+    "daemon/src/mcp/multi_root_tests.rs",
+    "daemon/src/indexer/home_policy_tests.rs",
+    "daemon/src/mcp/home_policy_tests.rs",
+    "src/test/daemonEnv.test.ts",
+    "src/watch/tests/fileWatch.test.ts",
+    "daemon/src/mcp/mark_stale_tests.rs"
   ],
   "version": 1
 }

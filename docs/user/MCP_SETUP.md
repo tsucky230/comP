@@ -377,7 +377,9 @@ before the last setup run. The report lists the backup path for each file.
 
 ### Token compression not working
 
-- Update `comp.maxContextTokens` in VS Code settings (default: 8000)
+- Raise `comp.maxContextTokens` in VS Code settings (default: 8000). comP writes it to
+  `.comp/config.json` as `default_budget_tokens`, which every agent's daemon reads (see
+  [Configuration](./CONFIGURATION.md))
 - Run `run_pipeline` with an increased `max_tokens` parameter
 
 ---

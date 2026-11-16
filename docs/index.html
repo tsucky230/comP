@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>comP — Ultra-lightweight Local Code Context Indexer Extension</title>
-  <meta name="description" content="comP is the memory system for your AI coding assistant — an open-source, 100% local code analysis engine that replaces full-codebase re-reads with instant indexed lookups, cutting tokens and failed retries.">
+  <title>comP — Give your AI a map of your repository</title>
+  <meta name="description" content="comP is a VS Code extension that indexes your repository's files, functions and call relationships locally and hands that map to AI coding agents such as Claude Code and Codex. Ask comP at the start of a task, and the agent can open the right files, check the blast radius before changing code, and build on the decisions of earlier sessions. Open source; the index and records stay on your machine.">
 
-  
+
   <!-- Auto-redirect to Japanese if preferred or if browser language is Japanese -->
   <script>
     (function() {
@@ -34,9 +34,9 @@
         <span class="logo-accent">com</span>P
       </div>
       <ul class="nav-links">
-        <li><a href="#features">Features</a></li>
-        <li><a href="#impact">Impact</a></li>
-        <li><a href="#roadmap">Roadmap</a></li>
+        <li><a href="#features">What it does</a></li>
+        <li><a href="#impact">Numbers</a></li>
+        <li><a href="#magatama">MAGATAMA</a></li>
         <li><a href="#install">Installation</a></li>
         <li><a href="https://github.com/tsucky230/comP" class="nav-btn-github" target="_blank" rel="noopener noreferrer">GitHub</a></li>
         <li><button class="lang-toggle-btn" onclick="setLanguage('ja')">日本語</button></li>
@@ -48,14 +48,14 @@
   <header class="hero">
     <div class="container hero-container">
       <div class="hero-content">
-        <div class="badge animate-fade-in" data-version="0.11.11">v0.11.11 — Antigravity 2.0 Support</div>
-        <h1 class="animate-fade-in">Your AI re-reads the<br>whole project <span class="gradient-text">every single question.</span></h1>
-        <p class="hero-desc animate-fade-in">comP is the memory system for your AI coding assistant. It automatically builds a project map and index so your AI finds the relevant code instantly—without searching around. Open-source, 100% local.</p>
+        <div class="badge animate-fade-in" data-version="0.11.11">v0.11.11 — Antigravity 2.0 support</div>
+        <h1 class="animate-fade-in">Give your AI a<br><span class="gradient-text">map</span> of your repository.</h1>
+        <p class="hero-desc animate-fade-in">comP is a VS Code extension that indexes your repository's files, functions and call relationships on your own machine, and hands that index to AI coding agents such as Claude Code, Codex and Cursor. Ask comP at the start of a task, and the agent learns in one step where things live and what depends on what. It is open source, and the index and the work records stay on your machine.</p>
         <div class="hero-cta animate-fade-in">
-          <a href="#install" class="btn btn-primary">Get Started</a>
+          <a href="#install" class="btn btn-primary">Try it</a>
           <a href="https://github.com/tsucky230/comP" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">
             <svg class="icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-            GitHub
+            View on GitHub
           </a>
         </div>
       </div>
@@ -65,54 +65,68 @@
     </div>
   </header>
 
-  <!-- Features Section -->
-  <section id="features" class="features section">
+  <!-- Why Section -->
+  <section id="why" class="features section">
     <div class="container">
       <div class="section-header">
-        <h2>Core Features & Technology</h2>
-        <p>Runs 100% locally on your machine, cutting input tokens by 60–94% on code investigation and fix tasks.</p>
+        <h2>I built it to cut token costs</h2>
+      </div>
+      <div class="feature-detail">
+        <div class="detail-content">
+          <p>The original goal was simple: make the AI read fewer tokens. Every time I asked Claude Code for a small fix, it ran grep after grep and opened files that had nothing to do with the task before it got anywhere. Paying for that exploration, in money and in waiting, on every request felt like a waste.</p>
+          <p>So I built a way to index the repository once and, given a description of the task, return only the files and symbols (names of functions and classes) that matter. Token use did go down. The longer I used it, though, the more I noticed a bigger change: the quality of the AI's work had changed.</p>
+          <p>An agent with a map more often opens the right file first, checks the callers before it changes a function, and picks up from the decisions of the last session. Its view widens from the file in front of it to the whole repository. I think that change is the most valuable thing comP does.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section id="features" class="features section section-alt">
+    <div class="container">
+      <div class="section-header">
+        <h2>An AI with a map does better work</h2>
+        <p>comP runs as an MCP server (MCP is the common protocol AI agents use to call outside tools). Normally you just ask for the work, and the agent calls comP's tools itself.</p>
       </div>
       <div class="features-grid">
         <div class="feature-card">
-          <div class="feature-icon">🔍</div>
-          <h3>Intelligent BM25 Search</h3>
-          <p>Accurately tokenizes and searches through Markdown, code, Office documents (Word, Excel, PowerPoint), PDF, and Parquet (.parquet) files to deliver precise full-text keyword matching.</p>
+          <div class="feature-icon">🧭</div>
+          <h3>The right files on the first move</h3>
+          <p>When the agent describes the task in one sentence to <code>run_pipeline</code>, it gets files ranked by relevance. Files with uncommitted changes come first, and files one dependency step away come along. Fewer detours through the wrong file, a wrong assumption and a restart.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">⚡</div>
-          <h3>Ultra-fast Rust Daemon</h3>
-          <p>The lightweight Rust backend builds a SQLite-powered semantic code graph for thousands of files, ensuring near-instant response times for AI agents.</p>
+          <div class="feature-icon">🕸️</div>
+          <h3>The blast radius before the change</h3>
+          <p><code>get_impact_graph</code> follows the dependency graph and lists every function and file that depends on a symbol. Called before an edit, it tells the agent which callers and tests to check. I want it to stop the slow decay in quality that builds up change after change.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🛡️</div>
-          <h3>Robust Error Handling</h3>
-          <p>Keeps parsing and indexing even if some documents are corrupted. Ensures crash-free, reliable workspace scans.</p>
+          <div class="feature-icon">📓</div>
+          <h3>Yesterday's work and decisions, carried forward</h3>
+          <p>What the agent looked up with <code>run_pipeline</code> and <code>get_context</code> is recorded across sessions automatically. When the agent saves the request and outcome with <code>session_log</code>, the decision is kept too, and the next session carries on with <code>session_recall</code>. Questions in Japanese work as well.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">💼</div>
-          <h3>Rich Document & Data Support</h3>
-          <p>Automatically indexes sheet names in Excel (.xlsx), slide contents in PowerPoint (.pptx), Word documents (.docx), PDFs, and Parquet (.parquet) schema metadata to capture all non-code context.</p>
+          <div class="feature-icon">🔒</div>
+          <h3>Your data stays put</h3>
+          <p>The index and records live in the repository's <code>.comp/</code>. The daemon does not talk to any outside service, and the extension sends no telemetry. The one exception is <code>@comp</code> in VS Code chat, which sends your request and a compressed copy of attached files to the language model selected in VS Code.</p>
         </div>
       </div>
 
-      <!-- Feature Details (With Mockup) -->
       <div class="feature-detail">
         <div class="detail-image-wrapper">
           <img src="comp_ui_mockup.png" alt="comP VSCode UI Mockup" class="detail-image">
         </div>
         <div class="detail-content">
-          <h3>Deep Integration with VSCode</h3>
-          <p>Starts with a single click from the sidebar and watches workspace changes to keep indexes incrementally updated with 'stale' status tracking.</p>
-          <p>Writes itself into the Model Context Protocol (MCP) configuration of Claude Code, Codex, Cursor, Cline, Windsurf, Continue, GitHub Copilot, Antigravity, Aider and Gemini CLI — merged with the servers already there, nothing to paste.</p>
+          <h3>comP's own development leans on the map too</h3>
+          <p>When I asked for multi-root workspace support, the agent caught an existing bug from its first <code>run_pipeline</code> result, before writing any of the new feature. It read the returned <code>daemon/src/main.rs</code> and found that the <code>additional_paths</code> feature was wiping the main index. I think a map is what lets the agent see past the spot it was asked about.</p>
+          <p>The records survive a restart of the daemon (the background process that manages the index), and a switch from Claude Code to Codex loses nothing. In my experience, the memory features in Claude and ChatGPT are good at conversation summaries and preferences, while code details tend to drop out of those summaries. comP's records are an index of technical decisions in one repository. They remember different things, so I recommend using both.</p>
         </div>
       </div>
 
-      <!-- Feature Detail 2 (AST Compression & Chat Participant) -->
       <div class="feature-detail reversed">
         <div class="detail-content">
-          <h3>AST Code Compression & @comp Chat</h3>
-          <p>When you need to paste large API definitions or classes into a chat, compress the file with AST compression (comments removed, function bodies skeletonized) in one command to copy to your clipboard.</p>
-          <p>Furthermore, use <code>@comp</code> Chat Participant via VSCode Chat Participant API to automatically compress attached files for LLM prompts, dodging token limits and reducing costs by up to 80%.</p>
+          <h3>Start in VS Code; agents are wired up for you</h3>
+          <p>Press Start in the sidebar and a daemon written in Rust indexes the repository. Saved code and Markdown files are re-indexed on the spot, and a git branch switch rebuilds the whole index.</p>
+          <p><code>comP: Setup Agents</code> writes to the configuration files that Claude Code, Codex, Cursor, Cline, Windsurf, Continue, GitHub Copilot, Antigravity, Aider and Gemini CLI actually read, keeping your other MCP servers. There is nothing to paste by hand. In VS Code chat, <code>@comp</code> also compresses attached files before they reach the LLM.</p>
         </div>
         <div class="detail-image-wrapper">
           <img src="comp_banner.png" alt="comP AST Compression Detail" class="detail-image">
@@ -121,196 +135,141 @@
     </div>
   </section>
 
-  <!-- Impact Estimate Section -->
-  <section id="impact" class="features section section-alt">
+  <!-- Impact Section -->
+  <section id="impact" class="features section">
     <div class="container">
       <div class="section-header">
-        <h2>How Much Does It Actually Help? An Honest Estimate</h2>
-        <p>comP's impact depends heavily on your use case. Here's an honest breakdown, no exaggeration.</p>
+        <h2>The numbers</h2>
+        <p>How much comP helps depends heavily on the size of the repository and the kind of work. Here are the measurements I have, with their conditions.</p>
       </div>
       <div class="features-grid">
         <div class="feature-card">
-          <div class="feature-icon">🔎</div>
-          <h3>Investigating/Fixing Medium-to-Large Repos</h3>
-          <p><strong>60–94% reduction.</strong> "Read everything or grep blindly" is replaced by "pull only the relevant spots from the index."</p>
+          <div class="feature-icon">📏</div>
+          <h3>About 8,000 of about 440,000 tokens</h3>
+          <p>What <code>run_pipeline</code> returned for the multi-root task in comP's own repository (9 files). It is compressed to fit the default budget of 8,000 tokens, about 1.8% of the whole repository. How much an agent would actually read depends on the task, so treat any saving computed from this as an upper bound.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🕸️</div>
-          <h3>Impact Analysis</h3>
-          <p><strong>Large reduction.</strong> <code>get_impact_graph</code> mechanically enumerates downstream effects from the dependency graph—no more AI guesswork.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">🔁</div>
-          <h3>Cross-Session Continued Development</h3>
-          <p><strong>Large reduction.</strong> Re-explaining and re-investigating context collapses into one <code>session_recall</code> call.</p>
+          <div class="feature-icon">🗺️</div>
+          <h3>145,978 tokens, summarized in 289</h3>
+          <p>One "get an overview" task in MAGATAMA's repository, measured on the MAGATAMA side: the estimated cost of reading selected source against a comP summary. A single measurement; other projects will not see the same ratio.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📦</div>
-          <h3>Small Repos</h3>
-          <p><strong>~20–40%.</strong> Reading everything was already cheap, so there's less room to save.</p>
+          <h3>Small repositories gain little</h3>
+          <p>With a few dozen files, reading everything is cheap anyway, so there is less to gain (my expectation, not a measurement).</p>
         </div>
       </div>
 
       <div class="feature-detail">
         <div class="detail-content">
-          <h3>The Biggest Effect the Numbers Don't Show: Fewer Failed Retries</h3>
-          <p>Looking only at the token-reduction percentage understates the real impact. Traditionally: explore → read the wrong file → implement on a wrong assumption → test fails → re-explore → re-implement—each failed loop burns thousands of tokens.</p>
-          <p>With comP, <code>run_pipeline</code> surfaces the right related code up front, leaving less room for wrong assumptions—so retries become rare in the first place. comP doesn't just reduce tokens per call, it reduces <strong>the number of calls itself.</strong> Cheaper models get lost while exploring more easily, so the cheaper the model, the bigger comP's benefit.</p>
+          <h3>The effect a table misses: fewer do-overs</h3>
+          <p>An agent that gets lost while exploring reads the wrong file, builds on a wrong assumption, fails the tests and starts over, and each round trip costs thousands of tokens (a rough estimate). In my own use, those round trips dropped noticeably once comP was in place, and the drop was largest with cheaper models.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MAGATAMA Section -->
+  <section id="magatama" class="features section section-alt">
+    <div class="container">
+      <div class="section-header">
+        <h2>With MAGATAMA, you get the places to check before a change, with evidence</h2>
+        <p><a href="https://github.com/tsucky230/MAGATAMA" target="_blank" rel="noopener noreferrer">MAGATAMA</a> is a separate MCP server that reads comP's index and answers "if I change this file, what do I need to check?". comP draws the map; MAGATAMA uses it to inspect a change before you make it.</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🔎</div>
+          <h3>Which function to read first</h3>
+          <p>Ask comP's <code>run_pipeline</code> and <code>get_context</code>.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🧩</div>
+          <h3>What to check if this file changes</h3>
+          <p>MAGATAMA's <code>analyze_change_scope</code> returns the candidates a change may ripple out to, with the dependency path to each as evidence.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🕰️</div>
+          <h3>Why this file was changed last time</h3>
+          <p>Search with MAGATAMA's history lookup and comP's <code>session_recall</code>.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🛰️</div>
+          <h3>What has changed since the last session</h3>
+          <p>Read the records of MAGATAMA's patrol (which checks changes made while you were away and keeps them for the next session) and comP's <code>session_recall</code>.</p>
+        </div>
+      </div>
+      <div class="feature-detail">
+        <div class="detail-content">
+          <h3>When it does not know, it says "unknown"</h3>
+          <p>comP's <code>get_impact_graph</code> starts from one symbol and lists what depends on it. <code>analyze_change_scope</code> instead takes the files you plan to change, walks the dependencies backwards from every symbol in them, and attaches the path of impact to each candidate as evidence. When a file name is ambiguous, or the index lacks the dependencies to decide, <code>analyze_change_scope</code> answers "unknown (needs checking)" instead of guessing. I like that honesty. Treat the result as a starting point for review, not as proof of every runtime effect.</p>
+          <p><code>analyze_change_scope</code> is not in the published PyPI release yet, so for now it is used from a MAGATAMA checkout that includes the feature. Setup steps are in MAGATAMA's README.</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Roadmap Section -->
-  <section id="roadmap" class="roadmap section section-alt">
+  <section id="roadmap" class="roadmap section">
     <div class="container">
       <div class="section-header">
-        <h2>Roadmap</h2>
-        <p>comP continues to evolve to deliver a more comprehensive local AI workspace experience.</p>
+        <h2>Where it has been, and where it is going</h2>
+        <p>The full history is in the <a href="https://github.com/tsucky230/comP/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">CHANGELOG</a>.</p>
       </div>
       <div class="roadmap-timeline">
         <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.1</div>
+          <div class="roadmap-badge">v0.1–v0.8.5</div>
           <div class="roadmap-content">
-            <h4>Core Indexing & MCP</h4>
-            <p>30+ programming languages support, JSON/XML/Markdown parsing, background indexing, MCP server integration, and token usage statistics.</p>
+            <h4>The index and the MCP server</h4>
+            <p>Indexing with tree-sitter and an MCP server; indexing for Word, Excel, PowerPoint, PDF and Parquet; BM25 full-text search; automatic compression to a token budget; a rebuilt directory walk for large repositories.</p>
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
         <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.2</div>
+          <div class="roadmap-badge">v0.8.6–v0.9</div>
           <div class="roadmap-content">
-            <h4>Office Support & BM25</h4>
-            <p>Word (.docx), PowerPoint (.pptx), and Excel (.xlsx) automatic extraction and indexing. BM25 full-text search capability, and symbol signature persistence.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.3</div>
-          <div class="roadmap-content">
-            <h4>Extended Docs & Deeper Graph</h4>
-            <p>PDF (.pdf) indexing, advanced impact analysis (<code>max_depth</code>), TF-IDF wired to <code>run_pipeline</code>, multi-path indexing, and AST compression for <code>get_symbol</code>.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.4</div>
-          <div class="roadmap-content">
-            <h4>Content Mode & Git Diff Context</h4>
-            <p><code>run_pipeline</code> content mode returns compressed file content inline. New <code>get_git_diff_context</code> tool for PR review. Enhanced <code>get_project_overview</code> with language distribution.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.5</div>
-          <div class="roadmap-content">
-            <h4>Compressed File Copy, Chat Participant & Parquet Support</h4>
-            <p>Implement a command to copy active file with AST compression (comments removed/skeletonized). Enable <code>@comp</code> Chat Participant via VSCode Chat Participant API to automatically compress attached files for LLM queries. Add support for automatic indexing and BM25 search of Parquet (.parquet) files.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.6</div>
-          <div class="roadmap-content">
-            <h4>Dynamic Budget & Auto Compression Level</h4>
-            <p><code>run_pipeline</code> now reads <code>default_budget_tokens</code> from <code>.comp/config.json</code> and automatically selects compression level 0→1→2 to fit within the budget. Response includes <code>compression_level_applied</code> and <code>budget_adjusted</code> flags.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.7</div>
-          <div class="roadmap-content">
-            <h4>Compression Rules, Aider Support & Debug Export</h4>
-            <p>Per-extension compression rules in <code>.comp/config.json</code> (e.g. keep Markdown uncompressed, fully skeleton Rust files). Aider agent support via <code>.aider.conf.yml</code>. New <code>comP: Export Debug Log</code> command to inspect session memory. Token visualization state bug fixes.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.8</div>
-          <div class="roadmap-content">
-            <h4>Directory-Walk Overhaul & Exclusion Controls</h4>
-            <p>Switched the walker to the ripgrep <code>ignore</code> crate so excluded directories like <code>.venv</code> and <code>node_modules</code> are pruned subtree-wide — large Python repos no longer time out on Force Re-index. Adds the <code>.comp/ignore</code> file, <code>comp.exclude</code> setting, a 5&nbsp;MiB file-size skip, and a large-workspace warning. <code>workspace_root</code> is now centralised in daemon state.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.9</div>
-          <div class="roadmap-content">
-            <h4>Session Memory & Persistent History</h4>
-            <p>Chat history that survives session breaks and daemon restarts — impossible with stock LLM features. New <code>session_log</code> / <code>session_recall</code> MCP tools persist requests and outcomes to <code>.comp/history/</code>, a Stop hook records interactions automatically, and the history is BM25-indexed so <code>run_pipeline</code> surfaces past work naturally. v0.9.1 adds Markdown compression and C / C++ / Java AST compression.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.9.2</div>
-          <div class="roadmap-content">
-            <h4>Related Files, Real-Size Token Estimates & Reliability</h4>
-            <p><code>run_pipeline</code> now returns <code>related_files</code> — files one dependency hop from the pivots, ranked by edge count. Token estimates are based on real indexed file sizes instead of symbol-count heuristics. The daemon self-reports its version via <code>get_stats</code> to detect stale binaries, <code>Generate Context</code> / <code>Show Impact Graph</code> commands are fully implemented, and a bug that silently dropped hook-recorded history from <code>session_recall</code> is fixed.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.9.4</div>
-          <div class="roadmap-content">
-            <h4>Self-Healing MCP Config</h4>
-            <p>Upgrading the extension used to break MCP. VS Code installs extensions into a version-stamped directory and deletes the old one, so the absolute <code>comp-daemon</code> path written into <code>.vscode/mcp.json</code> and friends pointed at an executable that no longer existed — the sidebar kept working while MCP tools silently vanished. comP now inspects those files on every activation and re-points any command that no longer resolves, refreshing a stale <code>COMP_WORKSPACE_ROOT</code> in the same pass. Relative paths, <code>${...}</code> variables and healthy entries are left untouched. v0.9.3 fixed the conversation-history BM25 indexing that had never actually worked.</p>
+            <h4>Records that span sessions</h4>
+            <p><code>session_log</code> and <code>session_recall</code> keep requests and outcomes in <code>.comp/history/</code> so the next session can find them. Since v0.9.4, comP repairs MCP settings on every start so an extension update never leaves them pointing at a stale path.</p>
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
         <div class="roadmap-item completed">
           <div class="roadmap-badge">v0.10.0</div>
           <div class="roadmap-content">
-            <h4>Zero-Copy-Paste Agent Setup</h4>
-            <p>comP writes itself into every agent's real config file, merging with the MCP servers already there, instead of generating text into <code>.comp/config/</code> for the user to paste by hand. A completed setup needs nothing pasted anywhere — only a restart of the agent, since none of these tools re-read their config while running. Also fixes the generated <code>claude mcp add</code> command (it was missing <code>--scope user</code> and the <code>--</code> separator) and the Windows path where the CLI could never start <code>claude.cmd</code> at all.</p>
+            <h4>Agent setup without copy and paste</h4>
+            <p>Setup Agents writes straight into each agent's real configuration file, merged with your existing MCP servers.</p>
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
         <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.0</div>
+          <div class="roadmap-badge">v0.11.0–v0.11.6</div>
           <div class="roadmap-content">
-            <h4>Codex Support, English/Japanese UI, and Automatic Branch-Switch Reindexing</h4>
-            <p>Adds Codex (OpenAI) to <b>comP: Setup Agents</b>, writing a <code>[mcp_servers.comp]</code> table into both <code>~/.codex/config.toml</code> and the project's <code>.codex/config.toml</code> via a safe line-oriented TOML splice (no parser dependency added, matching the existing Aider integration). comP's own onboarding messages — the Setup Agents wizard, its output-panel report, and the generated constitution rules — now switch between English and Japanese based on VS Code's own display language instead of always showing Japanese. Also adds automatic branch-switch detection: comP polls the current git ref and triggers a full re-index the moment it changes, since a <code>git checkout</code> touches far more files at once than the per-save watcher is built for. Along the way, fixed a long-standing bug where every re-indexed file left its previous symbols behind as orphaned rows, growing <code>.comp/index.db</code> without bound.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.1</div>
-          <div class="roadmap-content">
-            <h4>Session Memory Shared Across Multiple LLMs</h4>
-            <p><code>.comp/session-memory.json</code> is split into per-agent files (<code>.comp/session-memory/&lt;agent&gt;.json</code>) so multiple <code>comp-daemon</code> processes — one per MCP client such as Claude Code or Codex — no longer race on a single shared file with an unlocked read-modify-write. Each <code>SessionCall</code> now records which agent wrote it, and <code>.comp/history/*.jsonl</code> appends move to a single exclusively-locked write (Windows' <code>LockFileEx</code> rejects writes from a shared-lock handle, so both appends and compaction now use an exclusive lock). This release also fixes <code>daemon/Cargo.toml</code> having been stuck at an old version number since v0.9.3, and corrects documentation that still described Codex support as a future item after it had already shipped in v0.11.0.</p>
-            <span class="status-tag">✅ Released</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.2–v0.11.6</div>
-          <div class="roadmap-content">
-            <h4>Self-Recovery, Exact Token Counts & Gemini CLI</h4>
-            <p>All three persistent stores (session memory, history and <code>.comp/index.db</code>) recover automatically from corruption. <code>run_pipeline</code> counts tokens exactly with tiktoken-rs instead of estimating. <b>comP: Setup Agents</b> gains Gemini CLI, and its config is repaired after upgrades like the others. Header-heavy Markdown files no longer crowd out relevant results (#7), and a failing tool now says why (for example <code>Missing 'task' parameter</code>) instead of a bare "Internal error".</p>
+            <h4>Codex support, and sturdier data</h4>
+            <p>Codex support, English/Japanese switching, re-indexing on branch switches, session records shared between agents, automatic recovery of a broken index or record, and exact token counts with tiktoken-rs.</p>
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
         <div class="roadmap-item completed">
           <div class="roadmap-badge">v0.11.7–v0.11.8</div>
           <div class="roadmap-content">
-            <h4>Working Across Several Agents (Beta)</h4>
-            <p>Two opt-in beta features, both off by default. Conversation recording saves each Claude Code turn to <code>.comp/history/</code> automatically. Rule sharing lets <code>run_pipeline</code> return the relevant sections of other agents' instruction files (<code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>GEMINI.md</code>, <code>.cursor/rules</code> …), and the new <code>check_rule_conflicts</code> tool lists sections that may contradict each other. Records can now link turns to the delegations they started, <code>session_recall</code> ranks its matches, and API-key-shaped secrets are masked before anything is written. See <a href="https://github.com/tsucky230/comP/blob/main/docs/user/BETA_FEATURES.md">Beta Features</a>.</p>
+            <h4>Beta: conversation recording and rule sharing</h4>
+            <p>Two features, off by default: automatic recording of Claude Code turns into <code>.comp/history/</code>, and returning the relevant sections of instruction files written for other agents. See <a href="https://github.com/tsucky230/comP/blob/main/docs/user/BETA_FEATURES.md">Beta features</a>.</p>
             <span class="status-tag">✅ Released (beta)</span>
           </div>
         </div>
         <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.9–v0.11.10</div>
+          <div class="roadmap-badge">v0.11.9–v0.11.11</div>
           <div class="roadmap-content">
-            <h4>Agent Setup That Keeps Working</h4>
-            <p>Codex's automatic review no longer denies comP's tools: every tool now declares MCP annotations (local, read-only), and re-running Setup Agents keeps the tool approvals Codex saved. After a VS Code extension upgrade, comP also refreshes old daemon paths in Claude Code's registrations, user scope included.</p>
+            <h4>Agent setting repairs and Antigravity 2.0</h4>
+            <p>Codex's automatic review no longer rejects comP's tools, and stale paths left in Claude Code's registrations are fixed after an update. v0.11.11 supports Antigravity 2.0's settings file (<code>~/.gemini/config/mcp_config.json</code>) and removes the zstd vulnerabilities from the daemon.</p>
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.11</div>
+        <div class="roadmap-item">
+          <div class="roadmap-badge">In development</div>
           <div class="roadmap-content">
-            <h4>Antigravity 2.0 Support</h4>
-            <p>Antigravity 2.0 reads one MCP config, <code>~/.gemini/config/mcp_config.json</code>, from the App, the IDE, the <code>agy</code> CLI and the VS Code extension alike — earlier comP releases wrote to a path it no longer reads, so comp never showed up. Setup Agents now writes there, also gives Antigravity its instructions in <code>AGENTS.md</code>, and notes that Gemini CLI only keeps working with a paid API key or a Code Assist license. The daemon drops parquet2's unused compression codecs, removing two zstd vulnerabilities, and the test suite runs on Node 26.</p>
-            <span class="status-tag">✅ Released</span>
+            <h4>Multi-root workspaces</h4>
+            <p>With several folders open in VS Code, an agent started in any folder will be able to search all of them. Alongside it, hidden folders directly under your home directory are refused by default, so a repository's settings file cannot read them.</p>
+            <span class="status-tag">🛠️ In development</span>
           </div>
         </div>
       </div>
@@ -318,39 +277,39 @@
   </section>
 
   <!-- Install Section -->
-  <section id="install" class="install section">
+  <section id="install" class="install section section-alt">
     <div class="container">
       <div class="section-header">
-        <h2>Quick Start</h2>
-        <p>Get up and running with comP in three easy steps.</p>
+        <h2>Getting started</h2>
+        <p>Install it in VS Code, build the index, connect your agents. Three steps. comP needs VS Code 1.91 or later, and the daemon ships for Windows, macOS and Linux.</p>
       </div>
       <div class="install-steps">
         <div class="step">
           <span class="step-num">1</span>
-          <h4>Install the Extension</h4>
-          <p>In VS Code, open <b>Extensions</b> (<code>Ctrl+Shift+X</code>), search for <b>"comP - Code Context Engine"</b> and click <b>Install</b>. Or download the release <code>.vsix</code> file and install it from the command line:</p>
+          <h4>Install the extension</h4>
+          <p>Search the VS Code Extensions view (<code>Ctrl+Shift+X</code>) for "comP - Code Context Engine" and install it. To install from a released <code>.vsix</code> file instead, run:</p>
           <pre><code>code --install-extension comP-0.11.11.vsix</code></pre>
         </div>
         <div class="step">
           <span class="step-num">2</span>
-          <h4>Start Daemon in Project</h4>
-          <p>Open your workspace folder and click "Start comP" from the sidebar to launch the local backend indexer and begin scanning.</p>
+          <h4>Build the index</h4>
+          <p>Open the repository you work on and press Start in the comP sidebar. The index is built in the background, and the status bar shows its progress. After the first run, only changed files are parsed again. The index and the work records go into the repository's <code>.comp/</code>, so add <code>.comp/*</code> and <code>!.comp/ignore</code> to <code>.gitignore</code> (committed as is, your work records and conversation text would reach the remote).</p>
         </div>
         <div class="step">
           <span class="step-num">3</span>
-          <h4>Link Your Coding Agent</h4>
-          <p>Open the Command Palette → <code>comP: Setup Agents</code> and pick your agents — the ones already on your machine are preselected. comP writes itself into the config files each agent actually reads, merging with the MCP servers already there, so nothing is copied by hand. Then restart the agent: the per-agent steps are printed to the "comP Setup" output panel, and the comP sidebar shows when an agent last connected.</p>
+          <h4>Connect your agents</h4>
+          <p>Run <code>comP: Setup Agents</code> from the Command Palette and pick your agents. Agents found on this PC are already selected. Restart them afterwards (none of them re-read MCP settings while running). comP writes to:</p>
           <ul style="margin-top:0.75rem;padding-left:1.2rem;line-height:1.8">
-            <li><strong>Claude Code</strong>: <code>.mcp.json</code>, plus an optional user-scope registration through <code>claude mcp add --scope user</code></li>
-            <li><strong>Codex</strong>: <code>~/.codex/config.toml</code> and <code>.codex/config.toml</code> (the project file needs a trusted project)</li>
+            <li><strong>Claude Code</strong>: <code>.mcp.json</code> (optionally also user scope via <code>claude mcp add --scope user</code>)</li>
+            <li><strong>Codex</strong>: <code>~/.codex/config.toml</code> and <code>.codex/config.toml</code> (the project file only takes effect for trusted projects)</li>
             <li><strong>GitHub Copilot</strong>: <code>.vscode/mcp.json</code></li>
             <li><strong>Cursor</strong>: <code>.cursor/mcp.json</code> and <code>~/.cursor/mcp.json</code></li>
-            <li><strong>Cline</strong>: its MCP settings in VS Code's global storage</li>
+            <li><strong>Cline</strong>: the MCP settings in VS Code global storage</li>
             <li><strong>Windsurf</strong>: <code>~/.codeium/windsurf/mcp_config.json</code></li>
             <li><strong>Continue.dev</strong>: <code>.continue/mcpServers/comp.yaml</code> (project and home)</li>
-            <li><strong>Antigravity</strong> (App, IDE, <code>agy</code> CLI and VS Code extension): <code>~/.gemini/config/mcp_config.json</code></li>
-            <li><strong>Aider</strong>: <code>.aider.conf.yml</code> in your workspace root</li>
-            <li><strong>Gemini CLI</strong>: <code>.gemini/settings.json</code> and <code>~/.gemini/settings.json</code> — only with a paid Gemini API key or a Code Assist Standard / Enterprise license, since personal accounts were cut off on 2026-06-18</li>
+            <li><strong>Antigravity</strong> (App, IDE, <code>agy</code> CLI, VS Code extension): <code>~/.gemini/config/mcp_config.json</code></li>
+            <li><strong>Aider</strong>: <code>.aider.conf.yml</code> at the workspace root</li>
+            <li><strong>Gemini CLI</strong>: <code>.gemini/settings.json</code> and <code>~/.gemini/settings.json</code> (only with a paid Gemini API key or a Code Assist Standard / Enterprise license; personal accounts lost access on 2026-06-18)</li>
           </ul>
         </div>
       </div>

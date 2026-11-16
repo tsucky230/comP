@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>comP — 超軽量ローカルコンテキストインデクサー拡張機能</title>
-  <meta name="description" content="comPはAIコーディングアシスタントの「記憶」になる、完全ローカル動作のオープンソースコード分析エンジンです。毎回の全読みを索引検索に置き換え、トークン消費と失敗リトライを削減します。">
-  
+  <title>comP — AI に、リポジトリの地図を持たせる</title>
+  <meta name="description" content="comP は、リポジトリのファイル・関数・呼び出し関係を手元で索引にして、Claude Code や Codex などの AI コーディングエージェントに渡す VS Code 拡張です。作業の最初に comP に聞けば、AI は正しいファイルを開き、変更前に波及先を確かめ、前回のセッションの判断を踏まえて続きを始められます。オープンソースで、索引と記録は手元に残ります。">
+
   <!-- Auto-redirect to English if preferred or if browser language is not Japanese -->
   <script>
     (function() {
@@ -33,9 +33,9 @@
         <span class="logo-accent">com</span>P
       </div>
       <ul class="nav-links">
-        <li><a href="#features">機能・特徴</a></li>
-        <li><a href="#impact">効果</a></li>
-        <li><a href="#roadmap">ロードマップ</a></li>
+        <li><a href="#features">できること</a></li>
+        <li><a href="#impact">数字</a></li>
+        <li><a href="#magatama">MAGATAMA</a></li>
         <li><a href="#install">導入方法</a></li>
         <li><a href="https://github.com/tsucky230/comP" class="nav-btn-github" target="_blank" rel="noopener noreferrer">GitHub</a></li>
         <li><button class="lang-toggle-btn" onclick="setLanguage('en')">English</button></li>
@@ -48,8 +48,8 @@
     <div class="container hero-container">
       <div class="hero-content">
         <div class="badge animate-fade-in" data-version="0.11.11">v0.11.11 — Antigravity 2.0 に対応</div>
-        <h1 class="animate-fade-in">AIは、質問のたびに<br>プロジェクト全体を<span class="gradient-text">読み直している。</span></h1>
-        <p class="hero-desc animate-fade-in">comP（コンプ）は、AIコーディングアシスタントの「記憶」になるシステムです。プロジェクトの構成図とインデックスを自動生成し、AIが探し回らずに関連コードへ一瞬でたどり着けるようにします。オープンソース・完全ローカル動作。</p>
+        <h1 class="animate-fade-in">AI に、リポジトリの<br><span class="gradient-text">地図</span>を持たせる。</h1>
+        <p class="hero-desc animate-fade-in">comP（コンプ）は、リポジトリのファイル・関数・呼び出し関係を手元で索引にして、Claude Code や Codex、Cursor などの AI コーディングエージェントに渡す VS Code 拡張です。作業の最初に comP に聞けば、AI はどこに何があり、何が何に依存しているかを一度でつかめます。オープンソースで、索引も作業の記録も手元のマシンに残ります。</p>
         <div class="hero-cta animate-fade-in">
           <a href="#install" class="btn btn-primary">使ってみる</a>
           <a href="https://github.com/tsucky230/comP" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">
@@ -64,54 +64,68 @@
     </div>
   </header>
 
-  <!-- Features Section -->
-  <section id="features" class="features section">
+  <!-- Why Section -->
+  <section id="why" class="features section">
     <div class="container">
       <div class="section-header">
-        <h2>主な機能とテクノロジー</h2>
-        <p>100%ローカルで動作し、コード調査・修正タスクでは入力トークンを60〜94%削減します。</p>
+        <h2>作ったきっかけは、トークン代でした</h2>
+      </div>
+      <div class="feature-detail">
+        <div class="detail-content">
+          <p>最初の目的は単純で、AI に読ませるトークンを減らすことでした。Claude Code に小さな修正を頼むたびに、AI は grep を何度も打ち、関係のないファイルまで開いて、ようやく本題にたどり着きます。その探索に毎回お金と待ち時間を払うのが、もったいなく感じていました。</p>
+          <p>そこで、リポジトリを一度だけ索引にしておき、作業の内容を伝えると関係のあるファイルとシンボル（関数やクラスの名前）だけを返す仕組みを作りました。トークンは確かに減りました。ただ、使い続けるうちに、それより大きな変化に気づきました。AI の仕事の質が変わったのです。</p>
+          <p>地図を持った AI は、最初から正しいファイルを開き、関数を変える前に呼び出し元を確かめ、前回のセッションで決めたことを踏まえて続きを始めることが増えました。目の前のファイルだけを見ていた視野が、リポジトリ全体に広がった感覚です。私は、この変化が comP のいちばんの価値だと考えています。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Section -->
+  <section id="features" class="features section section-alt">
+    <div class="container">
+      <div class="section-header">
+        <h2>地図を持った AI は仕事の質が変わる</h2>
+        <p>comP は MCP（AI エージェントが外部のツールを呼ぶための共通の仕組み）のサーバーとして動きます。ふだんは、あなたが作業を頼むと、AI が自分で comP のツールを呼びます。</p>
       </div>
       <div class="features-grid">
         <div class="feature-card">
-          <div class="feature-icon">🔍</div>
-          <h3>インテリジェントBM25検索</h3>
-          <p>コードやマークダウン、Office文書に加え、PDFやデータ分析用のParquet (.parquet) ファイルも正確にトークン化し、高精度な全文キーワード検索を可能にします。</p>
+          <div class="feature-icon">🧭</div>
+          <h3>最初の一手で関係するファイルへ</h3>
+          <p>AI がやりたい作業を一文で <code>run_pipeline</code> に渡すと、関係の深い順にファイルが返ります。まだコミットしていない変更があるファイルは先頭に、依存関係で一歩つながるファイルも一緒に。見当違いのファイルを読んで誤った前提で実装し、やり直す回り道が減ります。</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">⚡</div>
-          <h3>Rust製超高速デーモン</h3>
-          <p>裏で動作する軽量バックエンドはRust製。数千ファイル規模のリポジトリもSQLite上に高速にグラフデータベース化し、エージェントの問合せに即時に応答します。</p>
+          <div class="feature-icon">🕸️</div>
+          <h3>変える前に波及先が見える</h3>
+          <p><code>get_impact_graph</code> は、あるシンボルに依存している関数とファイルを、依存グラフをたどって列挙します。AI が変更の前に呼べば、確かめるべき呼び出し元とテストが分かった状態で手を入れられます。変更を重ねるたびに品質が落ちていくのを、ここで止めたいと考えています。</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🛡️</div>
-          <h3>堅牢なエラーハンドリング</h3>
-          <p>ドキュメントファイルの一部が破損していても、デーモンはエラーをスキップしてスキャンを継続します。クラッシュフリーで信頼性の高いインデックス作成を実現します。</p>
+          <div class="feature-icon">📓</div>
+          <h3>昨日までの作業と判断を次のセッションへ</h3>
+          <p>AI が <code>run_pipeline</code> と <code>get_context</code> で調べた内容は、セッションをまたいで自動で記録されます。作業の区切りに AI が <code>session_log</code> で依頼と結果を残せば判断まで残り、次のセッションは <code>session_recall</code> で続きから始められます。日本語の問いでも引けます。</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">💼</div>
-          <h3>多様なドキュメント・データ対応</h3>
-          <p>Office（Word, Excel, PowerPoint）やPDFファイル、Parquetファイルのスキーマ情報を自動抽出・インデックス化。コード以外のデータ・文脈も網羅してエージェントに提供します。</p>
+          <div class="feature-icon">🔒</div>
+          <h3>データは手元から出ない</h3>
+          <p>索引と記録はリポジトリの <code>.comp/</code> に置きます。デーモンは外部と通信せず、拡張機能もテレメトリを送りません。例外は VS Code のチャットの <code>@comp</code> で、依頼文と添付ファイルの圧縮内容が、VS Code で選んでいる言語モデルへ送られます。</p>
         </div>
       </div>
 
-      <!-- Feature Details (With Mockup) -->
       <div class="feature-detail">
         <div class="detail-image-wrapper">
           <img src="comp_ui_mockup.png" alt="comP VSCode UI Mockup" class="detail-image">
         </div>
         <div class="detail-content">
-          <h3>VS Codeに完全統合</h3>
-          <p>VS Codeサイドバーからボタン1つで簡単に開始でき、コードの変更を監視してリアルタイムにインデックスを差分更新（stale状態の自動付与）します。</p>
-          <p>Claude Code・Codex・Cursor・Cline・Windsurf・Continue・GitHub Copilot・Antigravity・Aider・Gemini CLI の MCP（Model Context Protocol）設定ファイルへ、既存のサーバー設定とマージして直接書き込みます。手で貼り付ける作業はありません。</p>
+          <h3>comP 自身の開発でも、地図に助けられています</h3>
+          <p>マルチルートのワークスペースへの対応を頼んだときは、AI が最初の <code>run_pipeline</code> の結果から、既存の不具合に実装の前に気づきました。返ってきた <code>daemon/src/main.rs</code> を読み、<code>additional_paths</code> 機能がメインの索引を消してしまうことを見つけたのです。頼まれた場所の外にまで目が届くのは、地図があるからだと思います。</p>
+          <p>デーモン（索引を管理する常駐プロセス）を再起動しても、Claude Code から Codex に替えても、同じ記録を読めます。私の使っている範囲では、Claude や ChatGPT のメモリー機能は会話の要約や好みを覚えるのが得意で、コードの細部は要約の途中で落ちがちでした。comP の記録は、そのリポジトリでの技術的な判断に絞った索引です。覚えるものが違うので、両方を使い分けるのがおすすめです。</p>
         </div>
       </div>
 
-      <!-- Feature Detail 2 (AST Compression & Chat Participant) -->
       <div class="feature-detail reversed">
         <div class="detail-content">
-          <h3>ASTコード圧縮 & @comp チャット連携</h3>
-          <p>長大なAPI定義やクラスファイルをチャットに流し込みたい時、コマンド1つでコードをAST圧縮（コメント・空行の除去、関数本体のスケルトン化）してクリップボードにコピーできます。</p>
-          <p>さらに、VS Code Chat Participant APIを利用した<code>@comp</code>連携により、添付ファイルを自動でAST圧縮しながらLLMにプロンプトとして送信可能。モデルの入力トークン制限を賢く回避し、消費コストを最大80%節約します。</p>
+          <h3>VS Code から始めて、エージェントは自動でつなぐ</h3>
+          <p>サイドバーの Start を押すと、Rust 製のデーモンがリポジトリを索引にします。保存したコードや Markdown はその場で索引し直し、git でブランチを切り替えたときは全体を作り直します。</p>
+          <p><code>comP: Setup Agents</code> は、Claude Code・Codex・Cursor・Cline・Windsurf・Continue・GitHub Copilot・Antigravity・Aider・Gemini CLI が実際に読む設定ファイルへ、既存の MCP サーバーの設定を残したまま書き込みます。手で貼り付ける作業はありません。VS Code のチャットでは <code>@comp</code> で、ファイルを圧縮してから LLM に渡すこともできます。</p>
         </div>
         <div class="detail-image-wrapper">
           <img src="comp_banner.png" alt="comP AST Compression Detail" class="detail-image">
@@ -120,196 +134,141 @@
     </div>
   </section>
 
-  <!-- Impact Estimate Section -->
-  <section id="impact" class="features section section-alt">
+  <!-- Impact Section -->
+  <section id="impact" class="features section">
     <div class="container">
       <div class="section-header">
-        <h2>効果の見積もり：どの用途で、どれだけ効くのか</h2>
-        <p>comP の効果は用途に強く依存します。誇張のない目安を示します。</p>
+        <h2>数字で見ると</h2>
+        <p>効果は、リポジトリの大きさと作業の種類で大きく変わります。測った値を、条件と一緒に載せます。</p>
       </div>
       <div class="features-grid">
         <div class="feature-card">
-          <div class="feature-icon">🔎</div>
-          <h3>中〜大規模リポジトリの調査・修正</h3>
-          <p><strong>60〜94%削減。</strong>「全読み or 手探りgrep」が「索引から関連箇所のみ抽出」に置き換わります。</p>
+          <div class="feature-icon">📏</div>
+          <h3>約44万トークンのうち、約8,000トークン</h3>
+          <p>comP 自身のリポジトリで、マルチルート対応の作業に <code>run_pipeline</code> が返した量です（ファイル9件）。既定の予算 8,000 トークンに合わせて圧縮した量で、全体の約1.8%にあたります。AI が実際にどれだけ読むかは作業によるので、ここから出る削減率は上限と考えてください。</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🕸️</div>
-          <h3>影響範囲の分析</h3>
-          <p><strong>大幅削減。</strong><code>get_impact_graph</code> が依存グラフから波及先を機械的に列挙し、AIの推測探索が丸ごと不要になります。</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-icon">🔁</div>
-          <h3>セッションをまたぐ継続開発</h3>
-          <p><strong>大幅削減。</strong>前提の再説明・再調査が <code>session_recall</code> の1呼び出しに圧縮されます。</p>
+          <div class="feature-icon">🗺️</div>
+          <h3>145,978トークンを、289トークンの要約に</h3>
+          <p>MAGATAMA のリポジトリで概要をつかむ作業1件を、MAGATAMA 側で測った値です。選んだソースを読む場合の推定と、comP の要約を比べています。一度きりの計測で、どのプロジェクトでも同じ割合になるわけではありません。</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">📦</div>
-          <h3>小規模リポジトリ</h3>
-          <p><strong>2〜4割程度。</strong>元々全部読んでも安いため、伸びしろは小さめです。</p>
+          <h3>小さなリポジトリでは、差は小さい</h3>
+          <p>数十ファイルほどなら、全部読んでも安く済み、伸びしろは少なめです。これは計測していない見込みです。</p>
         </div>
       </div>
 
       <div class="feature-detail">
         <div class="detail-content">
-          <h3>数字に表れない最大の効果：失敗リトライの消滅</h3>
-          <p>トークン削減率だけでは効果を過小評価してしまいます。従来は「探索 → 違うファイルを読む → 誤った前提で実装 → テスト失敗 → 再探索 → 再実装」という失敗ループが1回あたり数千トークンを消費していました。</p>
-          <p>comP導入後は <code>run_pipeline</code> が正しい関連コードを最初に提示するため、誤った前提が入り込む余地が減り、リトライ自体が起きにくくなります。つまり comP は「1回あたりのトークン」だけでなく、<strong>「回数」そのものを減らします。</strong>安価なモデルほど探索で迷子になりやすいため、モデルが安いほど comP の恩恵は大きくなります。</p>
+          <h3>表に出にくい効果：やり直しが減る</h3>
+          <p>探索で迷った AI は、違うファイルを読み、誤った前提で実装し、テストに落ちてやり直します。この往復は、1回で数千トークン（目安）を使います。私の使っている範囲では、comP を入れてからこの往復が目に見えて減り、安いモデルほどその差が大きく出ました。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MAGATAMA Section -->
+  <section id="magatama" class="features section section-alt">
+    <div class="container">
+      <div class="section-header">
+        <h2>MAGATAMA と組むと変更前に確かめる場所を根拠つきで出せる</h2>
+        <p><a href="https://github.com/tsucky230/MAGATAMA" target="_blank" rel="noopener noreferrer">MAGATAMA（勾玉）</a>は、comP の索引を読んで「このファイルを変えたら、どこを確認すればいいか」を答える、もう一つの MCP サーバーです。comP が地図を作り、MAGATAMA はその地図を変更前の点検に使います。</p>
+      </div>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🔎</div>
+          <h3>最初に読む関数はどれか</h3>
+          <p>comP の <code>run_pipeline</code> と <code>get_context</code> に聞きます。</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🧩</div>
+          <h3>このファイルを変えたら、どこを確認するか</h3>
+          <p>MAGATAMA の <code>analyze_change_scope</code> が、波及候補と、そこに至る依存関係を根拠として返します。</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🕰️</div>
+          <h3>前にこのファイルを触った理由は何か</h3>
+          <p>MAGATAMA の履歴照会と、comP の <code>session_recall</code> で探します。</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🛰️</div>
+          <h3>前回から何が変わったか</h3>
+          <p>MAGATAMA の patrol（留守の間の変更を確かめて次のセッションに残す機能）の記録と、comP の <code>session_recall</code> を読みます。</p>
+        </div>
+      </div>
+      <div class="feature-detail">
+        <div class="detail-content">
+          <h3>分からないときは「unknown」と答える</h3>
+          <p>comP の <code>get_impact_graph</code> が1つのシンボルから依存元を並べるのに対し、<code>analyze_change_scope</code> は変更するファイルを単位に受け取り、中のシンボルすべてから依存関係を逆にたどって、波及候補ごとに影響の経路を根拠として添えます。ファイル名があいまいなときや、索引に依存関係が足りないときは、<code>analyze_change_scope</code> は推測で埋めずに「unknown（要確認）」と返します。私はこの正直さを気に入っています。結果は確認の出発点で、実行時の影響をすべて証明するものではありません。</p>
+          <p><code>analyze_change_scope</code> はまだ PyPI の公開版に入っていないので、いまは、この機能を含む MAGATAMA のチェックアウトから使います。導入の手順は MAGATAMA の README にあります。</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Roadmap Section -->
-  <section id="roadmap" class="roadmap section section-alt">
+  <section id="roadmap" class="roadmap section">
     <div class="container">
       <div class="section-header">
-        <h2>ロードマップ (Roadmap)</h2>
-        <p>comPは継続的に進化し、より包括的なローカルAI体験を提供します。</p>
+        <h2>これまでと、これから</h2>
+        <p>変更の詳細は <a href="https://github.com/tsucky230/comP/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">CHANGELOG</a> にあります。</p>
       </div>
       <div class="roadmap-timeline">
         <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.1</div>
+          <div class="roadmap-badge">v0.1–v0.8.5</div>
           <div class="roadmap-content">
-            <h4>コア機能の確立</h4>
-            <p>30以上のプログラム言語対応、マークダウン/JSON/XMLのサポート、バックグラウンドインデックス、MCPサーバーの構築、トークン節約量統計機能。</p>
+            <h4>索引と MCP サーバー</h4>
+            <p>tree-sitter による索引と MCP サーバー、Word・Excel・PowerPoint・PDF・Parquet の索引、BM25 の全文検索、予算に合わせた自動圧縮、大きなリポジトリ向けの走査の刷新。</p>
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
         <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.2</div>
+          <div class="roadmap-badge">v0.8.6–v0.9</div>
           <div class="roadmap-content">
-            <h4>Officeドキュメント & BM25検索の統合</h4>
-            <p>Word (.docx), PowerPoint (.pptx), Excel (.xlsx) の自動抽出・インデックス化に対応。BM25によるリッチなテキスト検索、およびシンボルシグネチャの永続化。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.3</div>
-          <div class="roadmap-content">
-            <h4>文書サポート拡張 & 依存関係解析の高度化</h4>
-            <p>PDF (.pdf)自動インデックス、高度な影響範囲分析（<code>max_depth</code>）、TF-IDFを<code>run_pipeline</code>に接続、マルチパスインデックス、<code>get_symbol</code>AST圧縮。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.4</div>
-          <div class="roadmap-content">
-            <h4>コンテンツモード & Git差分コンテキスト</h4>
-            <p><code>run_pipeline</code>コンテンツモードでファイル内容を圧縮してインラインで返却。PRレビュー用<code>get_git_diff_context</code>ツール追加。言語分布対応<code>get_project_overview</code>拡張。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.5</div>
-          <div class="roadmap-content">
-            <h4>コード圧縮コピー & Chat Participant / Parquetサポート</h4>
-            <p>アクティブファイルをAST圧縮（コメント除去/スケルトン化）してコピーするコマンドの実装。VS Code Chat Participant APIによる<code>@comp</code>連携で、ファイルを自動圧縮しながらAIチャットに流せる機能を追加。また、Parquet (.parquet)ファイルの自動インデックス化およびBM25全文検索に対応。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.6</div>
-          <div class="roadmap-content">
-            <h4>動的バジェット＆自動圧縮レベル調整</h4>
-            <p><code>run_pipeline</code>が<code>.comp/config.json</code>の<code>default_budget_tokens</code>を読み込み、バジェット内に収まるよう圧縮レベル0→1→2を自動選択。レスポンスに<code>compression_level_applied</code> / <code>budget_adjusted</code>フラグを追加。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.7</div>
-          <div class="roadmap-content">
-            <h4>拡張子別圧縮ルール・Aider対応・デバッグログエクスポート</h4>
-            <p><code>.comp/config.json</code>に拡張子ごとの圧縮ルールを設定可能（例: Markdownは非圧縮、Rustファイルはスケルトン化）。AiderエージェントのMCP対応（<code>.aider.conf.yml</code>に自動書き込み）。新コマンド<code>comP: Export Debug Log</code>でセッションメモリを確認。トークン可視化の状態バグを修正。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.8</div>
-          <div class="roadmap-content">
-            <h4>ディレクトリ走査の刷新と除外コントロール</h4>
-            <p>走査を ripgrep の <code>ignore</code> クレートへ置き換え、<code>.venv</code> や <code>node_modules</code> をサブツリーごと枝刈り。大規模Pythonリポジトリでも Force Re-index がタイムアウトしません。<code>.comp/ignore</code> ファイル、<code>comp.exclude</code> 設定、5&nbsp;MiB 超ファイルのスキップ、大規模ワークスペース警告を追加。<code>workspace_root</code> を daemon state に一元化。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.9</div>
-          <div class="roadmap-content">
-            <h4>セッション記憶・永続対話履歴</h4>
-            <p>セッション切れ・デーモン再起動をまたいで残る対話履歴 — LLM標準機能では実現不可能な永続メモリです。新MCPツール <code>session_log</code> / <code>session_recall</code> が依頼と対応結果を <code>.comp/history/</code> に永続記録し、Stop hook が自動記録、履歴は BM25 インデックス化され <code>run_pipeline</code> の検索候補に自然に浮上します。v0.9.1 では Markdown 圧縮と C / C++ / Java の AST 圧縮に対応。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.9.2</div>
-          <div class="roadmap-content">
-            <h4>関連ファイル返却・実サイズトークン推定・信頼性向上</h4>
-            <p><code>run_pipeline</code> が <code>related_files</code>（ピボットファイルから依存エッジ1ホップで繋がるファイルをエッジ数順に返却）を実装。トークン推定をシンボル数ヒューリスティックから実ファイルサイズベースに刷新。<code>get_stats</code> でデーモンがバージョンを自己申告し旧バイナリ稼働を検知可能に。<code>Generate Context</code> / <code>Show Impact Graph</code> コマンドを本実装。フック記録が <code>session_recall</code> から漏れるバグも修正。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.9.4</div>
-          <div class="roadmap-content">
-            <h4>MCP設定の自己修復</h4>
-            <p>これまで拡張機能をバージョンアップすると MCP が使えなくなることがありました。VS Code は拡張をバージョン番号入りのディレクトリに展開して更新時に旧ディレクトリを削除するため、<code>.vscode/mcp.json</code> などに焼き込まれた <code>comp-daemon</code> の絶対パスが存在しない実行ファイルを指してしまう — サイドバーは動くのに MCP ツールだけ消える、という分かりにくい症状です。comP は起動のたびにこれらの設定を検査し、解決できなくなった <code>command</code> を現在のパスへ書き戻すようになりました。陳腐化した <code>COMP_WORKSPACE_ROOT</code> も同時に修復します。相対パス・<code>${...}</code> 変数・正常なエントリには手を触れません。v0.9.3 では、実際には機能していなかった対話履歴の BM25 インデックス化を修正しました。</p>
+            <h4>セッションをまたぐ記録</h4>
+            <p><code>session_log</code> と <code>session_recall</code> を追加し、依頼と結果を <code>.comp/history/</code> に残して、次のセッションから引けるようにしました。v0.9.4 からは、拡張機能を更新しても MCP の設定が古いパスを指したままにならないよう、起動のたびに直します。</p>
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
         <div class="roadmap-item completed">
           <div class="roadmap-badge">v0.10.0</div>
           <div class="roadmap-content">
-            <h4>コピペ不要のエージェントセットアップ</h4>
-            <p>comP が各エージェントの実際の設定ファイルへ直接書き込み、既存の MCP サーバーとマージするようになりました。従来は <code>.comp/config/</code> 配下に生成した文字列を手で正しい場所へ貼り付ける必要がありました。セットアップ完了後に必要なのはエージェントの再起動だけです（どのツールも実行中は設定を読み直さないため）。生成される <code>claude mcp add</code> コマンドの不備（<code>--scope user</code> と <code>--</code> セパレータの欠落）と、Windows で <code>claude.cmd</code> がまったく起動できなかった問題も修正しています。</p>
+            <h4>コピペ不要のエージェント設定</h4>
+            <p>Setup Agents が、各エージェントの実際の設定ファイルへ、既存の MCP サーバーとマージして書き込むようになりました。</p>
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
         <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.0</div>
+          <div class="roadmap-badge">v0.11.0–v0.11.6</div>
           <div class="roadmap-content">
-            <h4>Codex 対応・日英UI切り替え・ブランチ切り替え時の自動再インデックス</h4>
-            <p><b>comP: Setup Agents</b> の対象に Codex（OpenAI）を追加。<code>~/.codex/config.toml</code> とプロジェクトの <code>.codex/config.toml</code> の両方に、安全な行指向の TOML 差し替え処理で <code>[mcp_servers.comp]</code> テーブルを書き込みます（既存の Aider 対応と同様、パーサーへの依存は追加していません）。comP 自身が出すメッセージ（Setup Agents ウィザード、出力パネルのレポート、生成される利用ルール）も、常に日本語だったのを VS Code の表示言語に応じて日英を切り替えるようにしました。さらにブランチ切り替えの自動検知にも対応: comP は現在の git ブランチをポーリングし、切り替わりを検知したら自動でフル再インデックスします（<code>git checkout</code> は保存イベント単位の監視では追いきれない量のファイルを一度に変えるため）。あわせて、再インデックスのたびに古いシンボルが孤児として残り続け <code>.comp/index.db</code> が際限なく肥大化する既存バグも修正しました。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.1</div>
-          <div class="roadmap-content">
-            <h4>セッションメモリの複数LLM共有対応</h4>
-            <p><code>.comp/session-memory.json</code>（単一ファイル）をエージェント別ファイル <code>.comp/session-memory/&lt;agent&gt;.json</code> に分割し、複数の <code>comp-daemon</code> プロセス（Claude Code や Codex など、MCPクライアントごとに1つ起動）が同じファイルへロックなしで read-modify-write することによるロストアップデートを構造的に解消しました。<code>SessionCall</code> にはどのエージェントが書いたかを示す <code>agent</code> フィールドを追加し、<code>.comp/history/*.jsonl</code> への追記は排他ロック付きの単一書き込みに統一しています（Windows の <code>LockFileEx</code> は共有ロック保持ハンドルからの書き込みを拒否するため）。あわせて、v0.9.3 以降更新されず古いバージョン番号のままだった <code>daemon/Cargo.toml</code>、および v0.11.0 でリリース済みになった後も「将来対応」と記載されたままだった Codex 関連のドキュメントも修正しました。</p>
-            <span class="status-tag">✅ リリース済み</span>
-          </div>
-        </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.2–v0.11.6</div>
-          <div class="roadmap-content">
-            <h4>自動復旧・正確なトークン数・Gemini CLI 対応</h4>
-            <p>3つの永続データ（セッションメモリ、履歴、<code>.comp/index.db</code>）が壊れても自動で復旧するようになりました。<code>run_pipeline</code> のトークン数は、推定ではなく tiktoken-rs で正確に数えます。<b>comP: Setup Agents</b> が Gemini CLI に対応し、その設定もほかのエージェントと同じくアップデート後に自動で修復されます。見出しの多い Markdown が無関係な検索結果の上位を占める偏り（#7）を直し、ツールが失敗したときは「Internal error」だけでなく原因（例: <code>Missing 'task' parameter</code>）を返すようにしました。</p>
+            <h4>Codex 対応と、壊れにくさ</h4>
+            <p>Codex 対応、日英の切り替え、ブランチ切り替え時の自動再索引、セッションの記録の複数エージェント共有、壊れた索引と記録の自動復旧、tiktoken-rs による正確なトークン数。</p>
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
         <div class="roadmap-item completed">
           <div class="roadmap-badge">v0.11.7–v0.11.8</div>
           <div class="roadmap-content">
-            <h4>複数エージェントでの併用（β版）</h4>
-            <p>既定OFFのβ版機能を2つ追加しました。会話の自動記録は、Claude Code の往復を <code>.comp/history/</code> へ自動で残します。ルール共有は、ほかのエージェント向けの指示ファイル（<code>CLAUDE.md</code>・<code>AGENTS.md</code>・<code>GEMINI.md</code>・<code>.cursor/rules</code> など）から作業に関係する節を <code>run_pipeline</code> が返すようにし、新しいツール <code>check_rule_conflicts</code> が矛盾していそうな節の組を一覧にします。あわせて、往復と委譲のつながりを記録に残せるようにし、<code>session_recall</code> の検索結果を順位付けし、API キーの形をした秘密を書き込む前に伏せ字にします。詳しくは <a href="https://github.com/tsucky230/comP/blob/main/docs/user/BETA_FEATURES_ja.md">β版の機能</a> を参照してください。</p>
+            <h4>β版：会話の記録とルール共有</h4>
+            <p>Claude Code との往復を <code>.comp/history/</code> へ自動で残す機能と、ほかのエージェント向けの指示ファイルから関係する節を返す機能を、既定 OFF で追加しました。詳しくは <a href="https://github.com/tsucky230/comP/blob/main/docs/user/BETA_FEATURES_ja.md">β版の機能</a> を見てください。</p>
             <span class="status-tag">✅ リリース済み（β版）</span>
           </div>
         </div>
         <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.9–v0.11.10</div>
+          <div class="roadmap-badge">v0.11.9–v0.11.11</div>
           <div class="roadmap-content">
-            <h4>エージェント設定が壊れにくく</h4>
-            <p>Codex の自動審査が comP のツールを拒否しなくなりました。すべてのツールが MCP の注釈（ローカル・読み取り専用）を宣言し、Setup Agents をやり直しても Codex が保存したツールの承認を消しません。また、VS Code 拡張のアップデート後に、Claude Code の登録に残った古いデーモンのパスを、ユーザースコープも含めて更新します。</p>
+            <h4>エージェント設定の修復と Antigravity 2.0</h4>
+            <p>Codex の自動審査が comP のツールを拒否しなくなり、更新後に Claude Code の登録に残った古いパスも直すようになりました。v0.11.11 では Antigravity 2.0 の設定ファイル（<code>~/.gemini/config/mcp_config.json</code>）に対応し、デーモンから zstd の脆弱性を取り除きました。</p>
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
-        <div class="roadmap-item completed">
-          <div class="roadmap-badge">v0.11.11</div>
+        <div class="roadmap-item">
+          <div class="roadmap-badge">開発中</div>
           <div class="roadmap-content">
-            <h4>Antigravity 2.0 に対応</h4>
-            <p>Antigravity 2.0 は、App・IDE・<code>agy</code> CLI・VS Code 拡張のどれも、MCP 設定を <code>~/.gemini/config/mcp_config.json</code> から読みます。これまでの comP は読まれなくなったパスに書いていたため、comp が表示されませんでした。Setup Agents はこのファイルに書くようになり、Antigravity 用の指示を <code>AGENTS.md</code> にも書き、Gemini CLI は有料の API キーか Code Assist のライセンスがある場合だけ使えることを案内します。あわせて、デーモンから parquet2 の使っていない圧縮ライブラリを外して zstd の脆弱性2件をなくし、Node 26 でもテストが動くようにしました。</p>
-            <span class="status-tag">✅ リリース済み</span>
+            <h4>マルチルートのワークスペース</h4>
+            <p>VS Code で複数のフォルダを開いているとき、どのフォルダで起動したエージェントからも全フォルダを検索できるようにします。あわせて、リポジトリの設定ファイルからホーム直下の隠しフォルダを読まれないよう、既定で拒否します。</p>
+            <span class="status-tag">🛠️ 開発中</span>
           </div>
         </div>
       </div>
@@ -317,28 +276,28 @@
   </section>
 
   <!-- Install Section -->
-  <section id="install" class="install section">
+  <section id="install" class="install section section-alt">
     <div class="container">
       <div class="section-header">
-        <h2>クイックスタート (Quick Start)</h2>
-        <p>数ステップであなたのVS Code環境にAIコンテキストインデクサーを導入できます。</p>
+        <h2>使い始める</h2>
+        <p>VS Code に入れて、索引を作り、エージェントにつなぐ。3つの手順です。VS Code 1.91 以降で、デーモンは Windows・macOS・Linux 用を同梱しています。</p>
       </div>
       <div class="install-steps">
         <div class="step">
           <span class="step-num">1</span>
-          <h4>拡張機能のインストール</h4>
-          <p>VS Code の<b>拡張機能</b>（<code>Ctrl+Shift+X</code>）で <b>「comP - Code Context Engine」</b> を検索し、<b>インストール</b>を押します。リリースされた <code>.vsix</code> ファイルをダウンロードして、次のコマンドでインストールすることもできます：</p>
+          <h4>拡張機能を入れる</h4>
+          <p>VS Code の拡張機能ビュー（<code>Ctrl+Shift+X</code>）で「comP - Code Context Engine」を検索して、インストールします。リリースの <code>.vsix</code> から入れる場合は、次のコマンドを使います。</p>
           <pre><code>code --install-extension comP-0.11.11.vsix</code></pre>
         </div>
         <div class="step">
           <span class="step-num">2</span>
-          <h4>プロジェクトでデーモンを起動</h4>
-          <p>プロジェクトフォルダーを開き、VS Codeサイドバーの「Start comP」ボタンを押すことで、バックエンドのインデクサーが起動し、自動的にインデックスが開始されます。</p>
+          <h4>索引を作る</h4>
+          <p>作業するリポジトリを開き、サイドバーの comP から Start を押します。索引はバックグラウンドで作られ、進み具合はステータスバーに出ます。2回目からは、変更のあったファイルだけを解析し直します。索引と作業の記録はリポジトリの <code>.comp/</code> に入るので、<code>.gitignore</code> に <code>.comp/*</code> と <code>!.comp/ignore</code> の2行を足してください（そのままコミットすると、作業の記録や会話の本文がリモートに上がります）。</p>
         </div>
         <div class="step">
           <span class="step-num">3</span>
-          <h4>エージェントを紐付ける</h4>
-          <p>コマンドパレット → <code>comP: Setup Agents</code> を実行し、エージェントを選びます。この PC で見つかったエージェントは最初から選ばれています。comP は各エージェントが実際に読む設定ファイルへ、既存の MCP サーバー設定とマージして書き込むので、手で貼り付ける作業はありません。そのあとエージェントを再起動してください。エージェントごとの手順は出力パネル「comP Setup」に表示され、エージェントが最後に接続した時刻はサイドバーで確認できます。書き込み先：</p>
+          <h4>エージェントにつなぐ</h4>
+          <p>コマンドパレットで <code>comP: Setup Agents</code> を実行し、使うエージェントを選びます。この PC で見つかったエージェントは最初から選ばれています。書き込んだら、エージェントを再起動してください（どのツールも、起動している間は MCP の設定を読み直しません）。書き込み先は次のとおりです。</p>
           <ul style="margin-top:0.75rem;padding-left:1.2rem;line-height:1.8">
             <li><strong>Claude Code</strong>: <code>.mcp.json</code>（任意で <code>claude mcp add --scope user</code> によるユーザースコープ登録も）</li>
             <li><strong>Codex</strong>: <code>~/.codex/config.toml</code> と <code>.codex/config.toml</code>（プロジェクト側は「信頼済みプロジェクト」でのみ有効）</li>

@@ -14,15 +14,167 @@ pub mod walker;
 pub mod parser;
 pub mod doc_parser;
 pub mod dependency;
+pub mod roots;
 
 pub use walker::{FileWalker, FileEntry, WalkerConfig};
 pub use parser::CodeParser;
 pub use doc_parser::DocumentParser;
 pub use dependency::DependencyAnalyzer;
 
+/// Totals of one [`index_all_roots`] pass, summed over every root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IndexSummary {
+    /// Files found by the walks (changed or not).
+    pub total_files: usize,
+    /// Files parsed because they were new or changed.
+    pub indexed_files: usize,
+    pub symbols: usize,
+}
+
+/// Bring the index in line with the main root and every additional root.
+///
+/// Roots come from [`roots::Roots::load`]. In order:
+/// 1. index the main root, then each additional root; a file is re-parsed only
+///    when its hash differs from the one in `db`;
+/// 2. within each root, drop the entries of files that no longer exist — a
+///    root never touches another root's entries;
+/// 3. drop entries whose stored path is not current
+///    ([`roots::Roots::is_current_stored`]): a root that was removed from the
+///    config, or one whose spelling changed.
+///
+/// Stored paths follow the rule in [`roots`]: relative for the main root,
+/// absolute for additional roots.
+///
+/// A failure in the main root is returned as `Err`. A failure in an additional
+/// root is logged and skipped, and that root's existing entries are kept.
+pub async fn index_all_roots(main_root: &str, db: &crate::graph::GraphDB) -> Result<IndexSummary> {
+    index_all_roots_with(main_root, db, &roots::HomePolicy::from_env()).await
+}
+
+/// [`index_all_roots`] with an explicit [`roots::HomePolicy`]: roots come from
+/// [`roots::Roots::load_with`], and a file found while walking an additional
+/// root is left out of the index when `policy` blocks its absolute path — an
+/// entry an earlier pass stored for it is removed.
+///
+/// WHY on top of dropping blocked roots: an additional root as wide as the
+/// home directory is allowed, and its walk skips dot folders but not
+/// `Library` or `AppData`. The main root is never filtered.
+pub async fn index_all_roots_with(
+    main_root: &str,
+    db: &crate::graph::GraphDB,
+    policy: &roots::HomePolicy,
+) -> Result<IndexSummary> {
+    let roots = roots::Roots::load_with(main_root, policy);
+    let previous = db.get_all_file_hashes().unwrap_or_default();
+    let mut summary = IndexSummary::default();
+    let mut deferred: Vec<(String, Vec<dependency::Dependency>)> = Vec::new();
+
+    let mut main_indexer = Indexer::new(main_root);
+    let (total, indexed, symbols, deps) = main_indexer.index_pass(Some(&previous), db, true).await?;
+    summary.total_files += total;
+    summary.indexed_files += indexed;
+    summary.symbols += symbols;
+    deferred.extend(deps);
+
+    for extra_root in roots.extras() {
+        log::info!("Indexing additional root: {}", extra_root);
+        let mut indexer = Indexer::new_additional(extra_root).with_home_policy(policy.clone());
+        match indexer.index_pass(Some(&previous), db, true).await {
+            Ok((total, indexed, symbols, deps)) => {
+                summary.total_files += total;
+                summary.indexed_files += indexed;
+                summary.symbols += symbols;
+                deferred.extend(deps);
+            }
+            Err(e) => log::warn!("Failed to index additional root {}: {}", extra_root, e),
+        }
+    }
+
+    for stored in previous.keys() {
+        if !roots.is_current_stored(stored) {
+            if let Err(e) = db.delete_file(stored) {
+                log::warn!("Failed to remove entry of a root no longer configured: {} - {}", stored, e);
+            }
+        }
+    }
+
+    // WHY: edges are resolved only now so a call from one root into another
+    // finds its callee regardless of the order the roots were parsed in.
+    if !deferred.is_empty() {
+        let global_index = db.get_global_symbol_index()?;
+        for (path, deps) in &deferred {
+            if let Err(e) = Indexer::resolve_edges_for_file(db, path, deps, &global_index) {
+                log::warn!("Failed to resolve edges for {}: {}", path, e);
+            }
+        }
+    }
+
+    Ok(summary)
+}
+
+/// Index one file given by absolute path, in whichever root owns it.
+///
+/// The path may be in any spelling [`roots::normalize_abs`] accepts, including
+/// the `\\?\` form `std::fs::canonicalize` returns on Windows. The entry is
+/// written under the same stored path a full pass uses, so a file is never
+/// listed twice.
+///
+/// - `Ok(Some(stored_path))` — indexed.
+/// - `Ok(None)` — inside a root but excluded by that root's walker rules
+///   (hidden or skipped directories); nothing is written.
+/// - `Err` — the path is outside every root, or the file cannot be read.
+///
+/// Containment here is lexical; callers that take paths from untrusted input
+/// canonicalize and check them first.
+pub async fn index_one_file(
+    main_root: &str,
+    abs_path: &str,
+    db: &crate::graph::GraphDB,
+) -> Result<Option<String>> {
+    let roots = roots::Roots::load(main_root);
+    let located = roots
+        .locate(abs_path)
+        .ok_or_else(|| anyhow::anyhow!("'{}' is outside every root", abs_path))?;
+    let (mut indexer, relative) = match located.owner {
+        roots::Owner::Main => (Indexer::new(main_root), located.stored_path.clone()),
+        roots::Owner::Extra(i) => {
+            let extra = &roots.extras()[i];
+            let prefix = format!("{}/", extra.trim_end_matches('/'));
+            let rel = located.stored_path.strip_prefix(&prefix).unwrap_or(&located.stored_path).to_string();
+            (Indexer::new_additional(extra), rel)
+        }
+    };
+    let done = indexer
+        .index_resolved(Path::new(abs_path), &relative, located.stored_path.clone(), db)
+        .await?;
+    Ok(done.then_some(located.stored_path))
+}
+
+/// Drop one file's entry, given the absolute path it had on disk (the file is
+/// normally already gone, so nothing is read or canonicalized).
+///
+/// Returns the stored path and the number of rows removed, or `None` when the
+/// path is outside every root (nothing in the index can match it).
+pub fn remove_one_file(
+    main_root: &str,
+    abs_path: &str,
+    db: &crate::graph::GraphDB,
+) -> Result<Option<(String, usize)>> {
+    let roots = roots::Roots::load(main_root);
+    let Some(located) = roots.locate(abs_path) else {
+        return Ok(None);
+    };
+    let removed = db.delete_file(&located.stored_path)?;
+    Ok(Some((located.stored_path, removed)))
+}
+
 /// Main indexer orchestrator
 pub struct Indexer {
     workspace_root: String,
+    /// Normalized root of an additional root; its files are stored as `<prefix>/<relative>`.
+    stored_prefix: Option<String>,
+    /// Files this policy blocks are left out of an additional root's pass.
+    home_policy: Option<roots::HomePolicy>,
     walker: FileWalker,
     parser: CodeParser,
 }
@@ -30,9 +182,24 @@ pub struct Indexer {
 impl Indexer {
     /// Create a new indexer for the given workspace
     pub fn new(workspace_root: &str) -> Self {
+        Self::with_prefix(workspace_root, None)
+    }
+
+    /// Indexer for an additional root (`normalized_root` from [`roots::Roots::extras`]).
+    pub fn new_additional(normalized_root: &str) -> Self {
+        Self::with_prefix(normalized_root, Some(normalized_root.trim_end_matches('/').to_string()))
+    }
+
+    fn with_home_policy(mut self, policy: roots::HomePolicy) -> Self {
+        self.home_policy = Some(policy);
+        self
+    }
+
+    fn with_prefix(workspace_root: &str, stored_prefix: Option<String>) -> Self {
         let comp_ignore = std::path::Path::new(workspace_root).join(".comp/ignore");
         let mut config = WalkerConfig {
             custom_ignore_file: Some(comp_ignore),
+            include_history: stored_prefix.is_none(),
             ..WalkerConfig::default()
         };
 
@@ -46,28 +213,11 @@ impl Indexer {
 
         Indexer {
             workspace_root: workspace_root.to_string(),
+            stored_prefix,
+            home_policy: None,
             walker,
             parser,
         }
-    }
-
-    /// Read additional workspace paths from `.comp/config.json`.
-    ///
-    /// WHY: Monorepos or multi-root workspaces need all sub-paths indexed into
-    /// a single graph DB so cross-path dependencies can be resolved.
-    pub fn read_additional_paths(workspace_root: &str) -> Vec<String> {
-        let path = std::path::Path::new(workspace_root).join(".comp/config.json");
-        let content = std::fs::read_to_string(path).unwrap_or_default();
-        let json: serde_json::Value = serde_json::from_str(&content).unwrap_or(serde_json::Value::Null);
-        json["additional_paths"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     /// Load user-defined exclude patterns from `.comp/config.json`.
@@ -119,13 +269,67 @@ impl Indexer {
     ///
     /// # Returns
     /// - (total_files, indexed_files, symbols_extracted)
+    ///
+    /// WHY test-only: the daemon indexes through [`index_all_roots`], which runs
+    /// one pass per root; this single-root form stays for the tests that use it.
+    #[cfg(test)]
     pub async fn index_workspace(
         &mut self,
         previous_hashes: Option<&HashMap<String, String>>,
         db: &crate::graph::GraphDB,
     ) -> Result<(usize, usize, usize)> {
+        let (total, changed, symbols, _) = self.index_pass(previous_hashes, db, false).await?;
+        Ok((total, changed, symbols))
+    }
+
+    /// One root's pass. With `defer_edges` the unresolved dependencies are
+    /// returned instead of being turned into edges.
+    async fn index_pass(
+        &mut self,
+        previous_hashes: Option<&HashMap<String, String>>,
+        db: &crate::graph::GraphDB,
+        defer_edges: bool,
+    ) -> Result<(usize, usize, usize, Vec<(String, Vec<dependency::Dependency>)>)> {
+        // WHY: the DB holds every root's entries; the walker must only see this
+        // root's, or it reports the others' files as deleted.
+        let own_hashes: Option<HashMap<String, String>> = previous_hashes.map(|all| match &self.stored_prefix {
+            Some(prefix) => {
+                let dir = format!("{}/", prefix);
+                all.iter()
+                    .filter_map(|(p, h)| p.strip_prefix(&dir).map(|rel| (rel.to_string(), h.clone())))
+                    .collect()
+            }
+            None => all
+                .iter()
+                .filter(|(p, _)| !roots::looks_absolute(p))
+                .map(|(p, h)| (p.clone(), h.clone()))
+                .collect(),
+        });
+
         // 1. Walk filesystem
-        let walk_result = self.walker.walk(previous_hashes)?;
+        let mut walk_result = self.walker.walk(own_hashes.as_ref())?;
+        if let Some(prefix) = &self.stored_prefix {
+            for f in walk_result.files.iter_mut().chain(walk_result.changed_files.iter_mut()) {
+                f.path = format!("{}/{}", prefix, f.path);
+            }
+            for p in walk_result.deleted_files.iter_mut() {
+                *p = format!("{}/{}", prefix, p);
+            }
+        }
+        if let Some(policy) = &self.home_policy {
+            let blocked: Vec<String> =
+                walk_result.files.iter().filter(|f| policy.blocks(&f.path)).map(|f| f.path.clone()).collect();
+            if !blocked.is_empty() {
+                log::warn!("Skipping {} file(s) in hidden folders of the home directory", blocked.len());
+            }
+            for path in blocked {
+                if previous_hashes.is_some_and(|h| h.contains_key(&path)) {
+                    walk_result.deleted_files.push(path);
+                }
+            }
+            walk_result.files.retain(|f| !policy.blocks(&f.path));
+            walk_result.changed_files.retain(|f| !policy.blocks(&f.path));
+        }
         let total_files = walk_result.files.len();
         let changed_count = walk_result.changed_files.len();
 
@@ -177,7 +381,7 @@ impl Indexer {
         }
 
         // 2b. Pass 2 — resolve dependencies into edges via the global symbol index.
-        if !deps_by_file.is_empty() {
+        if !defer_edges && !deps_by_file.is_empty() {
             let global_index = db.get_global_symbol_index()?;
             for (path, deps) in &deps_by_file {
                 if let Err(e) = Self::resolve_edges_for_file(db, path, deps, &global_index) {
@@ -205,7 +409,7 @@ impl Indexer {
                             "Node limit reached ({} > {}). Indexing halted. Add entries to .comp/ignore to reduce scope.",
                             node_count, max_nodes
                         );
-                        return Ok((total_files, changed_count, symbols_count));
+                        return Ok((total_files, changed_count, symbols_count, if defer_edges { deps_by_file } else { Vec::new() }));
                     }
                     _ => {
                         log::warn!(
@@ -217,7 +421,7 @@ impl Indexer {
             }
         }
 
-        Ok((total_files, changed_count, symbols_count))
+        Ok((total_files, changed_count, symbols_count, if defer_edges { deps_by_file } else { Vec::new() }))
     }
 
     /// Parse a single file and extract symbols, storing them in GraphDB
@@ -243,8 +447,16 @@ impl Indexer {
         use std::fs;
 
         // 1. Read file content based on type
-        let full_path = Path::new(&self.workspace_root).join(&file_entry.path);
-        
+        let on_disk = match &self.stored_prefix {
+            Some(prefix) => file_entry
+                .path
+                .strip_prefix(prefix.as_str())
+                .map(|r| r.trim_start_matches('/'))
+                .unwrap_or(&file_entry.path),
+            None => &file_entry.path,
+        };
+        let full_path = Path::new(&self.workspace_root).join(on_disk);
+
         let is_binary = matches!(
             file_entry.language.as_str(),
             "parquet" | "docx" | "pptx" | "xlsx" | "pdf"
@@ -365,8 +577,6 @@ impl Indexer {
     /// WHY: Called upon file changes. Previous implementation was a TODO that did not save to DB.
     /// We reuse parse_and_extract to parse, extract symbols, resolve dependencies, and save to DB in one go.
     pub async fn index_file(&mut self, path: &Path, db: &crate::graph::GraphDB) -> Result<()> {
-        use sha2::{Sha256, Digest};
-
         // Convert to workspace-relative path (using absolute paths breaks DB uniqueness constraint)
         // WHY: Windows path normalizer returns backslashes (\), but the database must use forward slashes (/) consistently.
         //      The TypeScript extension sends forward slashes, so mismatch breaks path lookups.
@@ -378,11 +588,27 @@ impl Indexer {
         // WHY: FileSystemWatcher fires for any matching extension, including paths inside
         //      excluded directories (.venv, node_modules, __pycache__, etc.).
         //      Guard here so we never index library code from excluded subtrees.
-        if self.walker.should_skip_relative_path(&relative_path) {
-            return Ok(());
+        self.index_resolved(path, &relative_path, relative_path.clone(), db).await?;
+        Ok(())
+    }
+
+    /// Shared tail of the single-file entry points. `relative` is the path
+    /// below this indexer's root (checked against the walker's skip rules);
+    /// `stored` is the value written to `files.path`. `Ok(false)` = skipped.
+    async fn index_resolved(
+        &mut self,
+        path: &Path,
+        relative: &str,
+        stored: String,
+        db: &crate::graph::GraphDB,
+    ) -> Result<bool> {
+        use sha2::{Sha256, Digest};
+
+        if self.walker.should_skip_relative_path(relative) {
+            return Ok(false);
         }
 
-        let language = self.walker_detect_language(&relative_path);
+        let language = self.walker_detect_language(relative);
 
         // Calculate file hash (required for FileEntry)
         // Read as bytes to handle binary files (e.g., Parquet) gracefully
@@ -392,7 +618,7 @@ impl Indexer {
         let hash = format!("{:x}", hasher.finalize());
 
         let file_entry = FileEntry {
-            path: relative_path,
+            path: stored,
             hash,
             language,
             modified_time: 0,
@@ -406,7 +632,7 @@ impl Indexer {
             Self::resolve_edges_for_file(db, &file_entry.path, &deps, &global_index)?;
         }
 
-        Ok(())
+        Ok(true)
     }
 
     // Helper: same language detection as walker
@@ -711,3 +937,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "multi_root_tests.rs"]
+mod multi_root_tests;

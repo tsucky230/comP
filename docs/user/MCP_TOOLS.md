@@ -41,10 +41,15 @@ Parameters:
 - `max_tokens` (number, optional, default 8000) — result budget
 - `include_tests` (boolean, optional) — include test files in results
 - `include_content` (boolean, optional) — if true, each pivot_file entry includes a `content` field with the file contents
-- `compression_level` (0/1/2, optional, default 0) — content compression applied when `include_content` is true:
+- `compression_level` (0/1/2, optional) — leave it out and comP picks the lowest level that fits the budget; set it to fix the level:
   - `0` — full source (no change)
   - `1` — compact: comments and blank lines removed (~20-35% smaller)
   - `2` — skeleton: function/class bodies replaced with `{ ... }` (~50-70% smaller)
+
+Files of the main root with uncommitted changes (`git diff HEAD`: staged or unstaged edits to tracked
+files) come first and carry `git_diff: true`. Changes already committed on the branch and new files
+not yet added to git are not part of this. A workspace in a subfolder of the repository only sees
+the changes inside that subfolder.
 
 Response fields (v0.6+):
 
@@ -64,7 +69,7 @@ Response fields (v0.9.2+):
 
 Response fields (unreleased):
 
-- `index_recovered_from_corruption_at` (number, epoch ms) — present while `.comp/index.db` is in the catch-up window after an automatic rebuild from a corrupted file (see `get_stats` below for the full explanation). Absent under normal operation, and again once the catch-up re-index finishes.
+- `index_recovered_from_corruption_at` (number, epoch ms) — present while `.comp/index.db` is in the catch-up window after an automatic rebuild from a corrupted file (see [Index statistics](#index-statistics-vs-code-extension-only) below for the full explanation). Absent under normal operation, and again once the catch-up re-index finishes.
 
 Response fields (rule sharing, beta — only when `comp.ruleSharing.enabled` is on; see [Beta Features](./BETA_FEATURES.md#rule-sharing)):
 
@@ -93,21 +98,35 @@ Search symbols by query string. Returns ranked matches with file paths and line 
 { "query": "DaemonManager", "limit": 10 }
 ```
 
+Parameters:
+
+- `query` (string, required) — symbol name or part of one
+- `limit` (number, optional, default 10) — maximum number of results
+- `kind_filter` (string, optional) — keep only one kind: `function`, `class`, `type` or `variable`
+
+Each result has `id`, `file`, `symbol`, `kind` and `line`. `id` is the symbol's ID in comP's index,
+which `get_impact_graph` takes.
+
 ---
 
 ### `get_impact_graph`
 
-Show all files affected by changes to a symbol (blast radius analysis).
+Show all files affected by changes to a symbol (blast radius analysis), following callers
+transitively.
 
 ```json
-{ "symbol": "request", "file": "src/daemon/DaemonManager.ts", "max_depth": 3 }
+{ "symbol_id": 123, "symbol_name": "request", "max_depth": 3 }
 ```
 
 Parameters:
 
-- `symbol` (string, required) — symbol name to analyze
-- `file` (string, optional) — narrow to a specific file when the symbol appears in multiple files
+- `symbol_id` (integer, required) — the `id` of a `get_context` result: call `get_context` with the
+  symbol's name first
+- `symbol_name` (string, optional) — used only as the label in the response
 - `max_depth` (number, optional, default 0) — BFS hop limit; 0 means unlimited transitive traversal
+
+An ID that matches no symbol gives an empty result (`impact_count` 0), the same as a symbol nothing
+depends on, so take the ID from `get_context` rather than guessing it.
 
 ---
 
@@ -123,44 +142,80 @@ List all indexed files with symbol counts and detected language.
 
 ### `get_symbol`
 
-Return full source of a specific symbol with optional compression.
+Return the source of a symbol, the names it uses, and the names that use it (Markdown).
 
 ```json
-{ "symbol": "authenticate", "file": "src/auth.rs", "compression_level": 1 }
+{ "name": "authenticate", "file_path": "src/auth.rs", "compression_level": 1 }
 ```
 
 Parameters:
 
-- `symbol` (string, required) — exact symbol name
-- `file` (string, optional) — narrow to a specific file
+- `name` (string, required) — exact symbol name
+- `file_path` (string, optional) — narrow to one file, relative to the workspace root
 - `compression_level` (number, optional, default 0):
   - `0` — full source (no change)
   - `1` — compact: comments and blank lines removed
   - `2` — skeleton: function/class bodies replaced with `{ ... }`
 
+For each match the response shows the file and line, the source, a `→` line with the symbols it
+depends on and a `←` line with the symbols that depend on it (each line only when non-empty).
+
 ---
 
-### `get_stats`
+### `get_dependencies`
 
-Return total file, node, and edge counts (index health check).
+List one symbol's direct dependencies in one direction (Markdown).
+
+```json
+{ "name": "validate_within_workspace", "direction": "in" }
+```
+
+Parameters:
+
+- `name` (string, required) — symbol name
+- `direction` (string, required) — `out` for the symbols it depends on, `in` for the symbols that
+  depend on it; anything else is an error
+
+Each entry names the other symbol, its kind, the edge kind and its file. Only one hop is followed.
+
+---
+
+### `get_file_summary`
+
+List the symbols defined in one file, without their bodies (Markdown table).
+
+```json
+{ "file_path": "src/extension.ts" }
+```
+
+Parameters:
+
+- `file_path` (string, required) — relative to the workspace root; a file of an additional root is
+  given by its absolute path, written the way `run_pipeline` lists it (forward slashes)
+
+The table has the line, name, kind, whether it is exported, its scope and its signature.
+
+---
+
+### `get_project_overview`
+
+Summarize the whole index (Markdown): file, symbol and edge counts, the language distribution, the
+10 files with the most symbols, every indexed file with its language and symbol count, and the
+exported symbols grouped by file.
 
 ```json
 {}
 ```
 
-Response fields (v0.9.2+):
-
-- `daemon_version` (string) — version of the running daemon binary. Compare against the installed release to detect a stale daemon that kept running across an upgrade (on Windows the running exe stays locked, so rebuilds do not take effect until the daemon restarts).
-
-Response fields (unreleased):
-
-- `index_recovered_from_corruption_at` (number, epoch ms) — present while `.comp/index.db` is in the catch-up window after being found unreadable at daemon startup and automatically rebuilt from scratch (the corrupted file is moved aside to `index.db.corrupt-<epoch_ms>`, never deleted). A rebuilt index starts at zero files/nodes/edges, which otherwise looks identical to "this workspace has nothing indexed" — check this field before assuming an empty or partial result means files were deleted. The field disappears once the next full re-index pass finishes (automatically on startup, or via `comP: Force Re-index`) — not simply once file counts become non-zero, since a re-index in progress can have written only some of the workspace's files at the moment of a given call. Absent entirely for a daemon that has never had to recover.
+The file list is complete, so in a large repository the response is long.
 
 ---
 
 ### `get_git_diff_context`
 
 Get context for files changed in a git diff. Runs `git diff --name-only <base_ref>` and maps each changed file to its indexed symbols.
+Paths are relative to the workspace root, so they match the index also when the workspace is a
+subfolder of the repository; changes outside the workspace are not listed.
 
 ```json
 { "base_ref": "main" }
@@ -171,6 +226,30 @@ Parameters:
 - `base_ref` (string, optional, default `HEAD~1`) — git ref to diff against. Use `main` or `master` for branch comparisons.
 
 Returns a Markdown table of changed files with language, symbol count, and whether each file is indexed.
+
+---
+
+### `compress_file`
+
+Return one file's text with comments removed or reduced to signatures, to read it with fewer tokens.
+
+```json
+{ "path": "E:/dev/myproject/src/auth.rs", "compression_level": 2 }
+```
+
+Parameters:
+
+- `path` (string, required) — absolute path of a file in the workspace root or an additional root.
+  A path outside every root is an error, and so is an additional root's file in a hidden folder of
+  the home directory (see [Configuration](./CONFIGURATION.md#hidden-folders-of-the-home-directory)).
+- `compression_level` (number, optional, default 1) — `0` unchanged, `1` comments and blank lines
+  removed, `2` signatures only
+
+Response:
+
+```json
+{ "compressed_text": "...", "original_chars": 5120, "compressed_chars": 1430, "compression_rate": "72%" }
+```
 
 ---
 
@@ -247,7 +326,7 @@ Example response:
 Searches and returns past exchanges across sessions. Covers **every session**,
 including ones from before the daemon last restarted.
 
-Merges `.comp/session-memory.json` (auto-recorded by run_pipeline / get_context)
+Merges `.comp/session-memory/` (one file per agent, auto-recorded by run_pipeline / get_context)
 with `.comp/history/*.jsonl` (explicit session_log entries, plus Stop-hook
 auto-records), and returns them newest first.
 
@@ -280,7 +359,7 @@ Multi-agent trace: a conversation turn recorded by `record-turn` also shows **Co
 the end of the turn, 8 characters) and **Delegations** (the delegations that turn ran, as
 `agent (test_exit N)`); a delegation recorded through `append-history` with `kind: "delegation"`
 shows **Delegated by** with the request of its turn. The parent is `parent_turn_id` when given,
-otherwise the turn of the same `session_id` that ended next after the delegation.
+otherwise the turn of the same session ID that ended next after the delegation.
 
 With rule sharing (beta), a run_pipeline entry that handed out rules also shows a **Rules** line
 listing each rule as `file#heading (hash8)` — for example `AGENTS.md#Testing (47727fe4)` — where
@@ -313,3 +392,16 @@ The most common cause is a wrong or missing argument name. Check it first:
 | `get_dependencies` | `name`, `direction` (`in` or `out`) |
 | `get_symbol` | `name` |
 | `get_file_summary` | `file_path` |
+| `session_log` | `request` |
+| `compress_file` | `path` (absolute) |
+
+## Index statistics (VS Code extension only)
+
+The extension's sidebar and status bar read index statistics with the JSON-RPC method `getStats`.
+It is not an MCP tool and does not appear in `tools/list`, so agents cannot call it. Its response:
+
+- `total_files`, `total_nodes`, `total_edges` — index size
+- `tokens_sent`, `tokens_saved`, `queries_count`, `efficiency`, `avg_tokens_per_query` — token statistics shown in the sidebar
+- `daemon_version` (string, v0.9.2+) — version of the running daemon binary. Compare against the installed release to detect a stale daemon that kept running across an upgrade (on Windows the running exe stays locked, so rebuilds do not take effect until the daemon restarts).
+- `last_activity_at` (number, epoch ms) — the newest recorded call or history entry; absent when nothing has been recorded
+- `index_recovered_from_corruption_at` (number, epoch ms) — present while `.comp/index.db` is in the catch-up window after being found unreadable at daemon startup and automatically rebuilt from scratch (the corrupted file is moved aside to `index.db.corrupt-<epoch_ms>`, never deleted). A rebuilt index starts at zero files/nodes/edges, which otherwise looks identical to "this workspace has nothing indexed" — check this field before assuming an empty or partial result means files were deleted. The field disappears once the next full re-index pass finishes (automatically on startup, or via `comP: Force Re-index`) — not simply once file counts become non-zero, since a re-index in progress can have written only some of the workspace's files at the moment of a given call. Absent entirely for a daemon that has never had to recover. `run_pipeline` returns the same field.

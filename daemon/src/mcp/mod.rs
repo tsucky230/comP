@@ -15,6 +15,21 @@ pub mod trace;
 #[cfg(test)]
 #[path = "rule_sharing_tests.rs"]
 mod rule_sharing_tests;
+#[cfg(test)]
+#[path = "multi_root_tests.rs"]
+mod multi_root_tests;
+#[cfg(test)]
+#[path = "home_policy_tests.rs"]
+mod home_policy_tests;
+#[cfg(test)]
+#[path = "mark_stale_tests.rs"]
+mod mark_stale_tests;
+#[cfg(test)]
+#[path = "symbol_id_tests.rs"]
+mod symbol_id_tests;
+#[cfg(test)]
+#[path = "git_diff_paths_tests.rs"]
+mod git_diff_paths_tests;
 
 use anyhow::{Result, anyhow};
 use log::info;
@@ -1315,23 +1330,82 @@ pub struct MCPServer {
     state: Arc<crate::AppState>,
 }
 
-/// Canonicalize `path_str` and verify it resides under `workspace_root`.
+/// Canonicalize `path_str` and verify it resides under the main root or a
+/// currently configured additional root.
 /// Prevents path-traversal attacks from MCP callers.
+///
+/// WHY: the config is re-read on every call so a root removed from it is
+/// refused immediately; containment is checked after canonicalization so a
+/// symlink cannot lead out of the roots.
 fn validate_within_workspace(
     path_str: &str,
     workspace_root: &str,
+    policy: &crate::indexer::roots::HomePolicy,
 ) -> Result<std::path::PathBuf> {
-    let path = std::path::Path::new(path_str);
-    let canonical = path
+    resolve_within_roots(path_str, workspace_root, policy).map(|r| r.canonical)
+}
+
+/// A path that passed the containment check.
+struct ResolvedPath {
+    /// Symlinks and `..` resolved; this is the file that was checked.
+    canonical: std::path::PathBuf,
+    /// The same file spelled under the configured root that contains it:
+    /// `<root as configured>/<remainder of the canonical path>`.
+    in_root: String,
+}
+
+/// Canonicalize `path_str` and find the configured root that contains it.
+///
+/// WHY `in_root` is rebuilt from the canonical path instead of taken from the
+/// caller: the stored path must describe the file that was checked. A caller's
+/// spelling can pass the check and still mean another file once `..` is
+/// collapsed lexically after a symlink. Rebuilding also keeps the root in its
+/// configured spelling where the workspace itself is reached through a symlink
+/// (macOS `/var` → `/private/var`).
+///
+/// Additional roots come from [`Roots::load_with`] with `policy`. A file that
+/// is reached through an additional root is refused when `policy` blocks its
+/// canonical path, with an error containing `hidden folder` — this catches an
+/// additional root as wide as the home directory itself (`~` → `~/.ssh/id_rsa`).
+/// The main root is never judged by `policy`.
+///
+/// [`Roots::load_with`]: crate::indexer::roots::Roots::load_with
+fn resolve_within_roots(
+    path_str: &str,
+    workspace_root: &str,
+    policy: &crate::indexer::roots::HomePolicy,
+) -> Result<ResolvedPath> {
+    let canonical = std::path::Path::new(path_str)
         .canonicalize()
         .map_err(|e| anyhow!("Cannot resolve path '{}': {}", path_str, e))?;
-    let canonical_root = std::path::Path::new(workspace_root)
+    let canonical_main = std::path::Path::new(workspace_root)
         .canonicalize()
         .map_err(|e| anyhow!("Cannot resolve workspace root '{}': {}", workspace_root, e))?;
-    if !canonical.starts_with(&canonical_root) {
-        return Err(anyhow!("Access denied: '{}' is outside the workspace", path_str));
+    let spelled = |root: &str, rel: &std::path::Path| {
+        std::path::Path::new(root).join(rel).to_string_lossy().to_string()
+    };
+
+    if let Ok(rel) = canonical.strip_prefix(&canonical_main) {
+        let main = std::path::absolute(workspace_root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| workspace_root.to_string());
+        let in_root = spelled(&main, rel);
+        return Ok(ResolvedPath { canonical, in_root });
     }
-    Ok(canonical)
+    let roots = crate::indexer::roots::Roots::load_with(workspace_root, policy);
+    for extra in roots.extras() {
+        let Ok(canonical_extra) = std::path::Path::new(extra).canonicalize() else {
+            continue;
+        };
+        if let Ok(rel) = canonical.strip_prefix(&canonical_extra) {
+            if policy.blocks(&canonical.to_string_lossy()) {
+                return Err(anyhow!("Access denied: '{}' is in a hidden folder of the home directory", path_str));
+            }
+            let in_root = spelled(extra, rel);
+            return Ok(ResolvedPath { canonical, in_root });
+        }
+    }
+    Err(anyhow!("Access denied: '{}' is outside the workspace", path_str))
 }
 
 /// Reject git refs that start with `-` or contain control characters to prevent
@@ -1350,18 +1424,31 @@ fn validate_git_ref(base_ref: &str) -> Result<()> {
 /// Silently returns an empty set on any error: git not installed, not a repo,
 /// no commits yet (HEAD undefined), detached HEAD with no parent, etc.
 fn get_git_diff_files(workspace_root: &str) -> std::collections::HashSet<String> {
-    let output = std::process::Command::new("git")
-        .args(["diff", "HEAD", "--name-only"])
+    git_diff_names(workspace_root, "HEAD").map(|v| v.into_iter().collect()).unwrap_or_default()
+}
+
+/// Files `git diff <rev>` reports, as paths relative to `workspace_root` — the
+/// form main-root files are stored in. Changes outside the workspace are left
+/// out.
+///
+/// WHY `--relative`: git prints paths from the repository's top folder, so in a
+/// workspace that is a subfolder of the repository no path would match.
+/// WHY `-z`: without it git quotes and escapes non-ASCII names
+/// (`"docs/\346\227\245.md"`).
+fn git_diff_names(workspace_root: &str, rev: &str) -> std::result::Result<Vec<String>, String> {
+    let out = std::process::Command::new("git")
+        .args(["diff", "--name-only", "-z", "--relative", rev, "--"])
         .current_dir(workspace_root)
-        .output();
-    match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect(),
-        _ => std::collections::HashSet::new(),
+        .output()
+        .map_err(|e| format!("Failed to run git diff: {}", e))?;
+    if !out.status.success() {
+        return Err(format!("git diff failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 /// Whether `e` is the specific "DB mutex poisoned" error every `GraphDB`
@@ -2332,18 +2419,20 @@ impl MCPServer {
         let kind_filter = params["kind_filter"].as_str();
 
         // Query GraphDB directly via LIKE (since SearchEngine TF-IDF is not yet built)
-        let hits = self.state.graph_db.search_symbols_by_name(query, limit * 2)?;
+        let hits = self.state.graph_db.search_symbols_with_ids(query, limit * 2)?;
 
         let results: Vec<Value> = hits
             .into_iter()
-            .filter(|(_, _, kind, _)| kind_filter.is_none_or(|f| f == kind))
+            .filter(|hit| kind_filter.is_none_or(|f| f == hit.kind))
             .take(limit)
-            .map(|(file, name, kind, line)| {
+            .map(|hit| {
                 json!({
-                    "file": file,
-                    "symbol": name,
-                    "kind": kind,
-                    "line": line,
+                    // The symbol_id get_impact_graph takes.
+                    "id": hit.id,
+                    "file": hit.path,
+                    "symbol": hit.name,
+                    "kind": hit.kind,
+                    "line": hit.line,
                     "score": 1.0  // Score is fixed for LIKE queries. To be replaced after TF-IDF implementation.
                 })
             })
@@ -2567,12 +2656,10 @@ impl MCPServer {
         let workspace_root = self.state.workspace_root.clone();
 
         info!("handle_force_reindex: rebuilding index for {}", workspace_root);
-        let mut indexer = crate::indexer::Indexer::new(&workspace_root);
-        let (total, indexed, symbols) = indexer
-            .index_workspace(None, &self.state.graph_db)
-            .await?;
+        let summary = crate::indexer::index_all_roots(&workspace_root, &self.state.graph_db).await?;
+        let (total, indexed, symbols) = (summary.total_files, summary.indexed_files, summary.symbols);
 
-        // A full index_workspace pass just completed — see
+        // A full index_all_roots pass just completed — see
         // graph/mod.rs::clear_recovery_marker's doc for why this is the contract
         // for when index_recovered_from_corruption_at should stop appearing.
         // No-op if the marker was never set.
@@ -2619,12 +2706,9 @@ impl MCPServer {
 
         let workspace_root = self.state.workspace_root.clone();
 
-        let safe_path = validate_within_workspace(path_str, &workspace_root)?;
+        let resolved = resolve_within_roots(path_str, &workspace_root, &self.state.home_policy)?;
 
-        let mut indexer = crate::indexer::Indexer::new(&workspace_root);
-        indexer
-            .index_file(&safe_path, &self.state.graph_db)
-            .await?;
+        crate::indexer::index_one_file(&workspace_root, &resolved.in_root, &self.state.graph_db).await?;
 
         Ok(json!({ "status": "ok", "path": path_str }))
     }
@@ -2639,18 +2723,14 @@ impl MCPServer {
 
         let workspace_root = self.state.workspace_root.clone();
 
-        // Convert to workspace-relative path if absolute, and normalize \ to / (DB uses / unified)
-        let relative_path = std::path::Path::new(path_str)
-            .strip_prefix(&workspace_root)
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_else(|_| path_str.replace('\\', "/"));
-
-        let removed = self.state.graph_db.delete_file(&relative_path)?;
-        info!("handle_remove_file: deleted {} ({} rows)", relative_path, removed);
+        let (stored_path, removed) =
+            crate::indexer::remove_one_file(&workspace_root, path_str, &self.state.graph_db)?
+                .unwrap_or_else(|| (path_str.replace('\\', "/"), 0));
+        info!("handle_remove_file: deleted {} ({} rows)", stored_path, removed);
 
         Ok(json!({
             "status": "ok",
-            "path": relative_path,
+            "path": stored_path,
             "removed": removed
         }))
     }
@@ -2716,8 +2796,8 @@ impl MCPServer {
     /// Tool: mark_stale
     ///
     /// Mark every recorded call across every agent's session-memory file as
-    /// `stale` if it mentions `path` (relative to the workspace root, either
-    /// slash style). Called by the VSCode extension's file-system watcher
+    /// `stale` if it mentions `path` (absolute, or relative to the workspace
+    /// root; either slash style). Called by the VSCode extension's file-system watcher
     /// whenever a source file changes or is deleted — see `extension.ts`'s
     /// `setupFileWatchers`, which used to do this by instantiating
     /// `SessionMemoryManager` and writing `.comp/session-memory.json`
@@ -2726,10 +2806,21 @@ impl MCPServer {
     /// is deliberately absent from `tools/list` — only the VSCode extension's
     /// own JSON-RPC client calls this method, never an AI agent.
     pub async fn handle_mark_stale(&self, params: Value) -> Result<Value> {
-        let relative_path = params["path"]
+        let path = params["path"]
             .as_str()
-            .ok_or_else(|| anyhow!("Missing 'path' parameter"))?
-            .replace('\\', "/");
+            .ok_or_else(|| anyhow!("Missing 'path' parameter"))?;
+        // WHY absolute paths are converted: the file watcher sends the path VS Code
+        // reports, and session memory records the stored form (relative for the
+        // main root, absolute for an additional root). A file in no root was never
+        // recorded, so there is nothing to mark.
+        let relative_path = if crate::indexer::roots::looks_absolute(path) {
+            match crate::indexer::roots::Roots::load(&self.state.workspace_root).locate(path) {
+                Some(located) => located.stored_path,
+                None => return Ok(json!({ "marked": 0 })),
+            }
+        } else {
+            path.replace('\\', "/")
+        };
 
         let memory_dir = std::path::Path::new(&self.state.workspace_root)
             .join(".comp")
@@ -2810,7 +2901,7 @@ impl MCPServer {
             "tools": [
                 {
                     "name": "run_pipeline",
-                    "description": "ALWAYS call this tool FIRST at the start of every task — before reading files, running grep/find/Bash searches, or exploring the codebase manually. Covers coding tasks (bug fix, feature, refactor) and documentation tasks (writing/editing Markdown). Do NOT use Read, Bash, or get_context to locate relevant files — this tool replaces all of that. Returns pivot files and related symbols ranked by relevance. Files modified in the current branch (git diff HEAD) are ranked first and marked with `git_diff: true` in the response. IMPORTANT: The 'task' parameter MUST be in English. Translate queries from other languages (e.g. Japanese) to English before calling.",
+                    "description": "ALWAYS call this tool FIRST at the start of every task — before reading files, running grep/find/Bash searches, or exploring the codebase manually. Covers coding tasks (bug fix, feature, refactor) and documentation tasks (writing/editing Markdown). Do NOT use Read, Bash, or get_context to locate relevant files — this tool replaces all of that. Returns pivot files and related symbols ranked by relevance. Tracked files with uncommitted changes (`git diff HEAD`: staged or unstaged edits) are ranked first and marked with `git_diff: true` in the response; changes already committed on the branch and new untracked files are not included. IMPORTANT: The 'task' parameter MUST be in English. Translate queries from other languages (e.g. Japanese) to English before calling.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -2841,7 +2932,7 @@ impl MCPServer {
                 },
                 {
                     "name": "get_context",
-                    "description": "Search for specific symbols (functions, classes, types) by name or keyword. Use when you know the exact name to look up. Do NOT use for starting a new task — use run_pipeline instead. IMPORTANT: The 'query' parameter MUST be in English or match exact symbol names.",
+                    "description": "Search for specific symbols (functions, classes, types) by name or keyword. Use when you know the exact name to look up. Each result carries the symbol's `id`, which get_impact_graph takes. Do NOT use for starting a new task — use run_pipeline instead. IMPORTANT: The 'query' parameter MUST be in English or match exact symbol names.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -2863,13 +2954,13 @@ impl MCPServer {
                 },
                 {
                     "name": "get_impact_graph",
-                    "description": "Show which files and symbols are affected when a specific symbol changes. Call before modifying a function or class to understand the blast radius. Requires a numeric symbol_id from a prior run_pipeline or get_context result.",
+                    "description": "Show which files and symbols are affected when a specific symbol changes. Call before modifying a function or class to understand the blast radius. Requires a numeric symbol_id: call get_context with the symbol's name first and take the `id` of the matching result.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "symbol_id": {
                                 "type": "integer",
-                                "description": "Numeric ID of the symbol to analyze (obtained from run_pipeline or get_context)"
+                                "description": "Numeric ID of the symbol to analyze: the `id` of a get_context result"
                             },
                             "symbol_name": {
                                 "type": "string",
@@ -3631,23 +3722,7 @@ impl MCPServer {
         validate_git_ref(base_ref)?;
         let workspace_root = self.state.workspace_root.clone();
 
-        let output = std::process::Command::new("git")
-            .args(["diff", "--name-only", base_ref])
-            .current_dir(&workspace_root)
-            .output()
-            .map_err(|e| anyhow!("Failed to run git diff: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("git diff failed: {}", stderr.trim()));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let changed_files: Vec<String> = stdout
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .collect();
+        let changed_files = git_diff_names(&workspace_root, base_ref).map_err(|e| anyhow!(e))?;
 
         let files_list = self.state.graph_db.list_files()?;
         let symbol_counts = self.state.graph_db.count_symbols_per_file()?;
@@ -3722,7 +3797,7 @@ impl MCPServer {
 
         let workspace_root = self.state.workspace_root.clone();
 
-        let safe_path = validate_within_workspace(path_str, &workspace_root)?;
+        let safe_path = validate_within_workspace(path_str, &workspace_root, &self.state.home_policy)?;
 
         let content = std::fs::read_to_string(&safe_path)?;
         let path = safe_path.as_path();

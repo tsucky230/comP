@@ -69,6 +69,10 @@ export class DependencyCodeLensProvider implements vscode.CodeLensProvider {
     if (!this.isSupportedLanguage(document.languageId)) {
       return [];
     }
+    // Read on every call so that turning the setting off takes effect on the next refresh.
+    if (!vscode.workspace.getConfiguration("comp").get<boolean>("enableCodeLens", true)) {
+      return [];
+    }
 
     const codeLenses: vscode.CodeLens[] = [];
 

@@ -2,454 +2,294 @@
   <img src="resources/comp-icon.png" width="128" height="128" alt="comP Logo">
 </p>
 
-# comP — AIコーディングアシスタントの「記憶」になるシステム
+# comP — AI に、リポジトリの地図を持たせる
 
-**オープンソースで完全ローカル動作するコード分析エンジン。Claude Code・Codex・Cursor・Cline・Antigravity対応。**
+comP は、Claude Code や Codex、Cursor などの AI コーディングエージェントのための VS Code 拡張です。リポジトリのファイル・関数・呼び出し関係を手元で索引にして、エージェントに渡します。作業の最初に comP に聞けば、AI はどこに何があり、何が何に依存しているかを一度でつかめます。オープンソース（MIT）で、索引も作業の記録も、手元のマシンに残ります。
 
-🌐 **[公式ウェブサイト](https://tsucky230.github.io/comP/)**
+🌐 [公式サイト](https://tsucky230.github.io/comP/) ／ [English](README.md)
 
----
-
-## なぜ comP が必要なのか
-
-Claude Code・Cursor 等の AI コーディングアシスタントには**重大な制限がある**：
-
-**質問のたびに、AI はプロジェクト全体を読み直す。**
-
-1. 「この関数の動作を確認して」と質問する
-2. AI は理解のために **プロジェクト全体のファイルを読む**
-3. DB接続、設定、型定義、依存関係…すべてを読んでようやく答える
-
-この「毎回全読み」が3つの問題を生む：
-
-| 問題 | 影響 |
-| --- | --- |
-| **トークン消費が膨大** | $0.10/質問。質問10回で$1 |
-| **応答が遅い** | 5,000トークン読んでから回答。初回15秒 |
-| **セッション終了で文脈消失** | 過去の決定が消え、翌日同じ説明を繰り返す |
-
-そしてもうひとつ、見落とされがちな**第4の問題**がある：
-
-| 問題 | 影響 |
-| --- | --- |
-| **探索中の迷子→失敗リトライ** | AIがgrepで探し回り、間違ったファイルを読み、誤った前提で実装し、やり直す。この**失敗ループ1回で数千〜数万トークンが消える** |
+全体像は「作ったきっかけ」から「MAGATAMA」の節までで分かります。導入は「インストールと設定」から始めてください。それより後ろの節は、必要なときに引けば足ります。
 
 ---
 
-## comP はその問題を解決する
+## 作ったきっかけはトークン代でした
 
-**プロジェクトの「構成図 + インデックス」を自動生成**し、AIが「このファイルはこういう用途」を**探し回らずに一瞬で把握**できるようにします。
+最初の目的は単純で、AI に読ませるトークンを減らすことでした。Claude Code に小さな修正を頼むたびに、AI は grep を何度も打ち、関係のないファイルまで開いて、ようやく本題にたどり着きます。その探索に毎回お金と待ち時間を払うのが、もったいなく感じていました。
 
-```
-comP導入後：
-  質問 → comP が関連ファイルだけを抽出 → AI が最短ルートで回答
-  翌日 → session_recall で前回の決定を復元 → 説明のやり直し不要
+そこで、リポジトリを一度だけ索引にしておき、作業の内容を伝えると関係のあるファイルとシンボル（関数やクラスの名前）だけを返す仕組みを作りました。トークンは確かに減りました。ただ、使い続けるうちに、それより大きな変化に気づきました。AI の仕事の質が変わったのです。
+
+地図を持った AI は、最初から正しいファイルを開き、関数を変える前に呼び出し元を確かめ、前回のセッションで決めたことを踏まえて続きを始めることが増えました。目の前のファイルだけを見ていた視野が、リポジトリ全体に広がった感覚です。私は、この変化が comP のいちばんの価値だと考えています。これから AI に任せる仕事を増やしたい人に、ぜひ自分のリポジトリで試してほしいと思っています。
+
+---
+
+## 地図を持った AI は仕事の質が変わる
+
+comP は MCP（AI エージェントが外部のツールを呼ぶための共通の仕組み）のサーバーとして動き、`run_pipeline` などのツールを AI に渡します。ふだんは、あなたが作業を頼むと AI が自分でこれらのツールを呼びます。
+
+### 最初の一手で関係するファイルにたどり着く
+
+やりたい作業を AI が一文で `run_pipeline` に渡すと、comP は索引を検索し、関係の深い順にファイルを返します。まだコミットしていない変更があるファイル（`git diff HEAD` の対象）は先頭に置き、依存関係で一歩つながるファイルも添えます。AI の読み始めがここになるので、見当違いのファイルを開き、誤った前提で実装して、やり直す、という回り道が起きにくくなります。頼む側は、いつもどおりに頼むだけです。日本語で頼んでも、AI がツールに渡すときに英語に直します。
+
+```text
+認証ミドルウェアの JWT 有効期限のバグを直して。まず comP の run_pipeline で関係するコードを探してから始めて。
 ```
 
+マルチルートのワークスペースへの対応を頼んだときは、AI が最初の `run_pipeline` の結果から、既存の不具合に実装の前に気づきました。返ってきた `daemon/src/main.rs` を読み、`additional_paths` 機能がメインの索引を消してしまうことを見つけたのです。頼まれた場所の外にまで目が届くのは、地図があるからだと思います。
+
+### 変える前に波及先が見える
+
+AI に任せた変更で私がいちばん怖いのは、関数を一つ直したつもりで、別のモジュールの呼び出し元を壊してしまうことです。`get_impact_graph` は、指定したシンボルに依存している関数とファイルを、依存グラフをたどって列挙します。名前から依存元を引きたいときは `get_dependencies` も使えます。次は、comP 自身のパス検証の関数に対して実際に返ってきた結果です（一部）。
+
+```text
+get_dependencies({ "name": "validate_within_workspace", "direction": "in" })
+- Depended on by `handle_compress_file` (function) via `function_call` in `daemon/src/mcp/mod.rs`
+```
+
+この検証を変えるなら、`compress_file` のふるまいとテストも確かめる必要がある、と手を入れる前に分かります。変更の前に AI がこれを呼べば、確かめるべき呼び出し元とテストを押さえたうえで編集できます。変更を重ねるたびに少しずつ品質が落ちていく、AI 開発でよくある劣化を、ここで食い止めたいと考えています。
+
+### 昨日までの作業と判断を次のセッションが引き継ぐ
+
+AI とのセッションは、閉じれば終わりです。翌日「なぜリトライを3回に制限したんだっけ」と聞いても、新しいセッションは何も知りません。
+
+comP は、AI が `run_pipeline` と `get_context` で調べた内容（問い・見つかったファイル・シンボル）を、セッションをまたいで自動で記録します。判断まで残るのは、作業の区切りで AI が `session_log` に依頼と結果を書き残したときです。次のセッションで `session_recall` を呼べば、前回の続きから始められます。次は、comP 自身の開発で実際に返ってきた記録の抜粋です（書式と長い行を省いています）。
+
+```text
+session_recall({ "query": "stale Claude Code comp MCP paths" })
+- 2026-10-19 13:23  Query: "Implement automatic repair of stale Claude Code comp MCP paths on VS Code startup, ..."
+  - Outcome: Updated src/mcp/AgentSetup.ts to refresh versioned old comP extension binary paths
+    even if old files exist, ... Did not alter live user-scope Claude configuration or remove
+    duplicate registration.
+  - Files: src/mcp/AgentSetup.ts, src/mcp/tests/AgentSetup.test.ts, docs/user/MCP_SETUP.md, CHANGELOG.md
+```
+
+comP の裏で動くデーモン（索引を管理する常駐プロセス）を再起動しても、Claude Code から Codex にエージェントを替えても、同じ記録を読めます。日本語の問いでも引けます。私の使っている範囲では、Claude や ChatGPT のメモリー機能は会話の要約や好みを覚えるのが得意で、コードの細部は要約の途中で落ちがちでした。comP の記録は、そのリポジトリでの技術的な判断に絞った索引です。覚えるものが違うので、両方を使い分けるのがおすすめです。
+
 ---
 
-## 効果の見積もり：どの用途で、どれだけ効くのか
+## 数字で見ると
 
-comP の効果は**用途に強く依存します**。正直な目安を示します。
+効果は、リポジトリの大きさと作業の種類で大きく変わります。測った値を、条件と一緒に載せます。
 
-| 用途 | 入力トークン削減の目安 | なぜそうなるか |
+| 場面 | 値 | 読み方 |
 | --- | --- | --- |
-| **中〜大規模リポジトリのコード調査・修正** | **60〜94%** | 「全読み or 手探りgrep」が「索引から関連箇所のみ抽出」に置き換わる。冒頭の94%削減はこの領域の数値 |
-| **影響範囲の分析（この関数を変えたら？）** | **大** | `get_impact_graph` が依存グラフから波及先を機械的に列挙。AIの推測探索が丸ごと不要に |
-| **セッションをまたぐ継続開発** | **大** | 前提の再説明・再調査が `session_recall` の1呼び出しに圧縮 |
-| **小規模リポジトリ（数十ファイル）** | 2〜4割程度 | 元々全部読んでも安いため、伸びしろが小さい |
-| **コードと無関係な作業（執筆・企画等）** | ほぼゼロ | 索引する対象がない |
+| comP 自身のリポジトリ（索引上で約44万トークン分）で、上で書いたマルチルート対応の作業に `run_pipeline` が返した量 | 約8,000トークン（ファイル9件） | 既定の予算 8,000 トークンに合わせて圧縮した量で、リポジトリ全体の約1.8%にあたります。AI が実際にどれだけ読むかは作業によるので、ここから出る削減率は上限と考えてください |
+| 後述の MAGATAMA のリポジトリで、概要をつかむ作業1件（MAGATAMA 側の計測） | 選んだソースの推定 145,978トークンに対し、comP の要約は 289トークン | 一度きりの計測です。どのプロジェクトでも同じ割合になるわけではありません |
+| 数十ファイルほどの小さなリポジトリ | 差は小さい【未計測の見込み】 | 全部読んでも安く済むので、伸びしろが少なめです |
 
-### 数字に表れない最大の効果：失敗リトライの消滅
-
-トークン削減率だけを見ると効果を過小評価します。実際のコスト構造はこうです：
-
-```
-従来の失敗パターン（特に安価なモデルで頻発）：
-  探索 → 違うファイルを読む → 誤った前提で実装 → テスト失敗
-  → 再探索 → 再実装 → ...（1ループ数千トークン × N回）
-
-comP導入後：
-  run_pipeline が正しい関連コードを最初に提示
-  → 誤った前提が入り込む余地が減る → リトライ自体が起きにくい
-```
-
-つまり comP は「1回あたりのトークン」を減らすだけでなく、**「回数」そのものを減らします**。安価なモデルほど探索で迷子になりやすいため、**モデルが安いほど comP の恩恵は大きくなります**。「高性能モデルでないと無理だったタスク」が安価なモデルの守備範囲に入る——これが実質的な最大の効果です。
+探索で迷った AI のやり直しが減ることは、表の数字に出にくい効果です。迷った AI は、違うファイルを読み、誤った前提で実装し、テストに落ちてやり直します。この往復は、1回で数千トークン【目安】を使います。私の使っている範囲では、comP を入れてからこの往復が目に見えて減り、安いモデルほどその差が大きく出ました。
 
 ---
 
-## インストール・セットアップ（3ステップ）
+## MAGATAMA と組むと変更前に確かめる場所を根拠つきで出せる
 
-### 1. VS Code にインストール
+[MAGATAMA（勾玉）](https://github.com/tsucky230/MAGATAMA) は、comP の索引を読んで「このファイルを変えたら、どこを確認すればいいか」を答える、もう一つの MCP サーバーです。comP が地図を作り、MAGATAMA はその地図を変更前の点検に使います。
 
-1. VS Code を開く
-2. **拡張機能** (`Ctrl+Shift+X`) で **"comP - Code Context Engine"** を検索
-3. **インストール** をクリック
+comP の `get_impact_graph` が、1つのシンボルから依存元をたどって並べるのに対し、MAGATAMA の `analyze_change_scope` は、変更するファイルを単位に受け取ります。そのファイルの中のシンボルすべてから依存関係を逆にたどり、波及候補ごとに、どの経路で影響が及ぶかを根拠として添えます。索引に手がかりが足りないところは、推測で埋めずに「unknown（要確認）」と書きます。
 
-### 2. フォルダを開く
+| 知りたいこと | 使う入口 |
+| --- | --- |
+| 最初に読む関数はどれか | comP の `run_pipeline` / `get_context` |
+| このファイルを変えたら、どこを確認するか | MAGATAMA の `analyze_change_scope` |
+| 前にこのファイルを触った理由は何か | MAGATAMA の履歴照会と、comP の `session_recall` |
+| 前回から何が変わったか | MAGATAMA の patrol（留守の間の変更を確かめて次のセッションに残す機能）と、comP の `session_recall` |
 
-VS Code で作業するプロジェクトを開いてください（Git リポジトリ等）。
+`analyze_change_scope` に変更するファイルを渡すと、次の3つが返ります。そのファイルに含まれるシンボル、呼び出し元などの波及候補、そして各候補が挙がった根拠となる依存関係です。ファイル名があいまいなときや、依存関係が索引にないときは「unknown」になります。私はこの正直さを気に入っています。結果は確認の出発点で、実行時の影響をすべて証明するものではありません。
 
-### 3. comP を起動
-
-- アクティビティバー（左端）の **comP アイコン** をクリック
-- サイドバーの **「▶ Start」** ボタンをクリック
-- インデックス処理がバックグラウンドで開始
-- **ステータスバー**（VS Code下部）で進捗確認
-
-```text
-◈ comP: 12,534 symbols | ✓ Ready
-```
+`analyze_change_scope` はまだ PyPI の公開版に入っていないので、いまは、この機能を含む MAGATAMA のチェックアウトから使います。導入の手順は MAGATAMA の README にあります。
 
 ---
 
-## AI エージェント別の接続（最初の1回だけ）
+## インストールと設定（3ステップ）
+
+VS Code 1.91 以降で動きます。デーモンは Windows・macOS・Linux 用を同梱しています。git のリポジトリで使うと、未コミットの変更を優先する機能や、ブランチ切り替えの検知も働きます。
+
+### 1. VS Code にインストールする
+
+拡張機能ビュー（`Ctrl+Shift+X`）で「comP - Code Context Engine」を検索して、インストールします。
+
+### 2. フォルダを開いて索引を作る
+
+作業するリポジトリを開き、アクティビティバー（左端）の comP アイコンから **Start** を押します。索引はバックグラウンドで作られ、進み具合はステータスバーに出ます。2回目からは、変更のあったファイルだけを解析し直します。
 
 ```text
-Ctrl+Shift+P → "comP: Setup Agents"
+◈ comP: 12534 symbols | ✓ Ready
 ```
 
-一覧からエージェントを選ぶだけです（インストール済みのものは選択済み）。
-comP が各ツールの実際の設定ファイルへ直接書き込み、既存の MCP サーバー設定は
-そのまま残します。コピペは不要です。
+索引と作業の記録はリポジトリの `.comp/` に入ります。そのまま git に含めると、作業の記録や会話の本文までリモートに上がってしまうので、`.gitignore` に次の2行を足してください。チームで除外の設定（`.comp/ignore`）を共有したいときのために、2行目でこのファイルだけを残しています。
+
+```gitignore
+.comp/*
+!.comp/ignore
+```
+
+### 3. AI エージェントにつなぐ
+
+コマンドパレット（`Ctrl+Shift+P`）で `comP: Setup Agents` を実行し、使うエージェントを選びます。この PC で見つかったエージェントは、最初から選ばれています。comP は各エージェントが実際に読む設定ファイルへ書き込み、既存の MCP サーバーの設定はそのまま残します。
 
 | エージェント | 書き込み先 |
 | --- | --- |
-| **Claude Code** | `.mcp.json`（任意で `claude mcp add --scope user` も実行）。会話の記録（β版）がONなら、各往復を `.comp/history/` に記録する Stop フック（`.claude/settings.local.json`）も |
-| **Codex** | `~/.codex/config.toml` と `.codex/config.toml` |
-| **GitHub Copilot** | `.vscode/mcp.json` |
-| **Cursor** | `.cursor/mcp.json` と `~/.cursor/mcp.json` |
-| **Cline** | VS Code globalStorage 配下の MCP 設定 |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
-| **Continue.dev** | `.continue/mcpServers/comp.yaml`（プロジェクトとホーム） |
-| **Antigravity**（App・IDE・`agy` CLI・VS Code 拡張） | `~/.gemini/config/mcp_config.json` |
-| **Aider** | `.aider.conf.yml` |
-| **Gemini CLI** | `.gemini/settings.json` と `~/.gemini/settings.json`（有料の Gemini API キーか Code Assist Standard / Enterprise のライセンスがある場合のみ。個人アカウントは 2026-06-18 に提供終了） |
+| Claude Code | `.mcp.json`（任意で `claude mcp add --scope user` も実行）。会話の記録（β版）が ON なら、Stop フック（`.claude/settings.local.json`）も |
+| Codex | `~/.codex/config.toml` と `.codex/config.toml` |
+| GitHub Copilot | `.vscode/mcp.json` |
+| Cursor | `.cursor/mcp.json` と `~/.cursor/mcp.json` |
+| Cline | VS Code の globalStorage にある MCP 設定 |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Continue.dev | `.continue/mcpServers/comp.yaml`（プロジェクトとホーム） |
+| Antigravity（App・IDE・`agy` CLI・VS Code 拡張） | `~/.gemini/config/mcp_config.json` |
+| Aider | `.aider.conf.yml` |
+| Gemini CLI | `.gemini/settings.json` と `~/.gemini/settings.json`（有料の Gemini API キーか、Code Assist Standard / Enterprise のライセンスがある場合のみ。個人アカウントは 2026-06-18 に提供終了） |
 
-**そのあとエージェントを再起動してください。** どのツールも起動中に MCP 設定を
-読み直さないためです。VS Code 系エディタなら、コマンドパレット →
-**Developer: Reload Window** で十分です。エージェントごとの手順は設定後に
-出力パネル「comP Setup」へ表示されます。
-
-詳細: [docs/user/MCP_SETUP.md](docs/user/MCP_SETUP.md)
-
-### Claude Codeで「Conflicting scopes」と表示されたら
-
-`comp`がプロジェクト用と全プロジェクト共通の両方に登録され、実行ファイルの
-パスが異なるという警告です。拡張機能の更新で古くなったパスは、v0.11.10以降の
-comPをインストールするとVS Code起動時に更新されます。ただし、comPの開発用
-バイナリなど、**両方のパスが有効でも異なる場合は警告が残ります**。
-
-警告が出たプロジェクトのディレクトリで`claude mcp list`と
-`claude mcp get comp`を実行し、残す登録を決めてください。開発用を残すなら
-`claude mcp remove comp --scope user`（他のプロジェクトでも共通登録を失う）、
-全プロジェクト共通を残すなら`claude mcp remove comp --scope project`
-（このプロジェクトの`.mcp.json`から`comp`が消える）です。**どちらか一方だけ**
-実行してClaude Codeを再起動します。詳しい判断材料は
-[MCP設定ガイド](docs/user/MCP_SETUP.md#resolve-a-claude-code-scope-conflict)を参照してください。
+書き込んだら、エージェントを再起動してください。どのエージェントも、起動している間は MCP の設定を読み直しません。VS Code 系のエディタなら、コマンドパレットの **Developer: Reload Window** で足ります。エージェントごとの手順は出力パネルの「comP Setup」に表示され、詳しくは [MCP 設定ガイド（英語）](docs/user/MCP_SETUP.md) にあります。
 
 ---
 
-## 実際の使い方
+## AI に comP を使ってもらうコツ
 
-### Claude Code（最も簡単）
-
-```markdown
-@comP run_pipeline
-authenticate() 関数を変更した場合、影響を受ける関数を全て分析してください
-```
-
-### VS Code のネイティブチャット（@comp）
+comP を入れても、AI は自分の判断で grep やファイルの直読みに戻ることがあります。私の使っている範囲では、指示ファイル（Claude Code なら `CLAUDE.md`、Codex なら `AGENTS.md`、Copilot なら `.github/copilot-instructions.md`）にルールを書いておくと、ほとんど収まりました。`comP: Setup Agents` も最小限のルールを書き込みますが、次のプロンプトを AI に渡せば、プロジェクトに合わせて書き直してくれます。
 
 ```markdown
-@comp #file:src/main.rs を使って、この関数の動作を説明して
-```
-
-添付ファイルは自動圧縮（コメント削除・スケルトン化）されてから LLM に渡されます。
-
----
-
-## CLAUDE.md を「comP前提」に育てるプロンプト集
-
-comP を入れても、**AI側の行動ルールを更新しなければ効果は半減します**。AIは指示が曖昧だと「直接ファイルを読む方が簡単」と判断するからです。以下のプロンプトを Claude に投げれば、CLAUDE.md（Copilotなら `.github/copilot-instructions.md`）を comP 前提に書き換えられます。
-
-### プロンプト例①：初期導入（comPルールの追記）
-
-```markdown
-CLAUDE.md を更新してください。以下のルールを MUST/NEVER として追記：
+CLAUDE.md を更新してください。次を MUST / NEVER のルールとして追記し、理由を1行ずつ添えてください。
+既存のルールと矛盾する箇所があれば指摘してください。
 
 MUST:
-- コードの調査・検索は grep/find/Bash でなく、最初に comP の run_pipeline を呼ぶ
-- 既存コードを変更する前に get_impact_graph で波及先を確認する
-- セッション開始時に session_recall で過去の関連決定を復元する
+- コードの調査は grep や find より先に、comP の run_pipeline を呼ぶ
+- 既存のコードを変える前に、get_impact_graph で波及先を確かめる
+- セッションの始めに、session_recall で過去の関連する判断を確かめる
+- 作業の区切りで、session_log に依頼と結果を残す
 
 NEVER:
-- comP を経由しないコードベースの全読み
-- run_pipeline の結果にないファイルの推測に基づく実装
-
-理由も1行ずつ添えて、既存ルールと矛盾があれば指摘してください。
+- run_pipeline の結果にないファイルを、推測で前提にする
 ```
 
-### プロンプト例②：直読みが再発したとき（違反の学習）
-
-```markdown
-今のタスクであなたは run_pipeline を使わず src/ を直接読みました。
-なぜそうしたのか原因を1行で述べ、再発を防ぐルールを
-CLAUDE.md の NEVER 節に1行追加する形で提案してください。
-```
-
-> 💡 CLAUDE.md は「失敗のたびに1行育てる」もの。違反→原因→ルール追加、のループを回すと数回で直読みは消えます。
-
-### プロンプト例③：ワークフロー全体の comP 最適化
-
-```markdown
-私の開発フローは 設計→実装→レビュー の3段階です。
-各段階で comP のどのツール（run_pipeline / get_context /
-get_impact_graph / session_recall）をどう使うべきか、
-CLAUDE.md に「段階別 comP 利用手順」として追記する原稿を書いてください。
-トークンを最小にすることを最優先とします。
-```
-
-### プロンプト例④：セッション終了時の引き継ぎ習慣化
-
-```markdown
-CLAUDE.md に以下を追記してください：
-「セッション終了前に、今回の決定事項・未解決の課題を3行以内で要約せよ。
-次セッションで session_recall により検索されることを前提に、
-検索キーワードになりうる固有名詞（関数名・ファイル名）を必ず含めること」
-```
+それでも直読みが起きたら、「なぜ run_pipeline を使わなかったのか、原因を1行で述べ、防ぐルールを1行提案して」と聞いてみてください。違反のたびにルールを1行ずつ育てると、私の場合は数回で落ち着きました。
 
 ---
 
-## セッション記憶：Claude 標準メモリーとの「層の違い」
+## 設定
 
-「Claude にもメモリー機能があるのに、comP のセッション記憶は要るのか？」——答えは**層が違うので両方要る**、です。
-
-| | Claude 標準メモリー | comP session_recall |
-| --- | --- | --- |
-| **記憶の粒度** | 会話の要約・人物・好み | コード・シンボル・技術的決定の索引 |
-| **保存場所** | クラウド（Anthropic側） | **100%ローカル**（`.comp/`） |
-| **得意なこと** | 「あなたはQA重視」「差分のみ出力を好む」 | 「JWT有効期限は先週30分に決めた」「その理由はリフレッシュ処理の仕様」 |
-| **苦手なこと** | コードの詳細（要約時に潰れる） | ユーザーの人柄・コード外の文脈 |
-| **横断範囲** | 会話全般 | 同一プロジェクトの全セッション |
-
-### とても効果がある場面（実例）
-
-#### 場面1：翌週の「あれ、なんでこうしたんだっけ」
-
-```
-@comP session_recall
-先週リトライ回数を3回に制限した理由を確認して
-```
-
-Claude標準メモリーは会話を要約で保持するため「リトライ制限の話をした」までは残っても「なぜ3回か」の技術的根拠は潰れがち。comP は BM25 索引で当該会話そのものを引き当てます。
-
-#### 場面2：安価なモデルへの「引き継ぎ」
-
-設計は上位モデル、実装は安価なモデル、という階層運用時。安価なモデルは長い経緯説明で迷子になりますが、`session_recall` なら**必要な決定事項だけをピンポイントで注入**でき、引き継ぎコストが激減します。
-
-#### 場面3：機密コードでメモリー機能を切っている環境
-
-企業ポリシーでクラウド側メモリーを無効化していても、comP は完全ローカルなので**コンプライアンスを守ったままセッション記憶を持てます**。
-
-### 使い分けの原則（CLAUDE.md に書くべき1行）
-
-```markdown
-技術的決定の正は comP（リポジトリ側）、人物・好みの正は Claude メモリーとする。
-```
-
-両方に同じ決定が記録されると片方だけ更新されて矛盾するリスクがあるため、**責任分界を固定**するのがコツです。
-
-### 仕組み
-
-1. **自動記録**: チャット終了時に全対話を BM25 インデックス化
-2. **永続化**: `~/.claude/projects/comP/memory/session/` に保存
-3. **検索**: キーワード検索で関連会話を即座に復元
-
----
-
-## ファイル・ディレクトリの除外設定
-
-プロジェクトルートに `.comp/ignore` を作成（`.gitignore` と同じ書き方）：
+索引から外したいものは、プロジェクトのルートに `.comp/ignore` を作り、`.gitignore` と同じ書き方で並べます。`.` で始まるファイルとフォルダ、`.gitignore` に一致するパス、5 MiB を超えるファイル、`node_modules`・`venv`・`__pycache__`・`coverage`・`vendor`・`out` は、何もしなくても外れます。VS Code の設定 `comp.exclude` に並べたフォルダ名も、名前が一致すれば外れます（反映は Force Re-index の後です）。
 
 ```gitignore
-node_modules/
-vendor/
 dist/
 build/
-target/
-__pycache__/
 *.min.js
 ```
 
-自動除外：`.` 始まりの隠しディレクトリ、`.gitignore` 一致パス、`node_modules`、`venv`、`__pycache__`、`coverage`、`vendor`、`out`
+ほかのフォルダも同じ索引に入れたいときは、`.comp/config.json` の `additional_paths` に並べます。次の版からは、VS Code のワークスペースに複数のフォルダを開いている場合、comP が `.comp/` のある各フォルダの `.comp/config.json` に、ほかのフォルダのパスを `workspace_folders` として書き込みます。そのため、どのフォルダで起動したエージェントからも、全フォルダを検索できます（`comp.indexWorkspaceFolders`、既定 ON）。各フォルダがそれぞれ全体を索引するので、索引にかかる時間は増えます。
 
-VS Code 設定からの除外も可能：
+同じく次の版から、ホーム直下の隠しフォルダ（`.` で始まるフォルダ、`AppData`、`Library`。ただし `AppData\Local\Temp` は除く）は、リポジトリの設定ファイルに書かれていても索引しません（`comp.blockHiddenHomeFolders`、既定 ON）。この VS Code の設定が効くのは拡張機能が起動するデーモンで、エージェントが起動するデーモンで解除するには環境変数を使います。
 
-```json
-{ "comp.exclude": ["env", "data", "logs"] }
-```
+`run_pipeline` が返す量や圧縮の度合いも、`.comp/config.json` で変えられます。
 
----
-
-## 会話の記録（β版）
-
-既定はOFFです。VS Code の設定で `comp.conversationRecording.enabled` をONにしてから **comP: Setup Agents** で
-Claude Code を選ぶと、各往復が `.comp/history/` に記録され、あとで `session_recall` から読めます。設定をOFFに
-戻すと記録はすぐ止まり、フックは **comP: 会話記録フックを外す** で外せます。記録はワークスペースの中だけに
-残ります。`.comp/` は git に含めないでください。今のところ Claude Code だけが対象です。使い方と困ったときは
-[ベータ機能](docs/user/BETA_FEATURES_ja.md#会話の記録)、計画は [企画書](docs/dev/CONVERSATION_RECORDING_ja.md)。
-
-**ルール共有（β版・v0.11.8 以降）** — `comp.ruleSharing.enabled` をONにすると、`run_pipeline` が、git 管理下にある
-*他のエージェント向け*の指示ファイル（`CLAUDE.md`、`AGENTS.md` など）から作業に関係するルールも渡し、どのルールを
-渡したかを記録します。`check_rule_conflicts` は矛盾していそうなルールを一覧にします。詳細は
-[ベータ機能 → ルール共有](docs/user/BETA_FEATURES_ja.md#ルール共有)。
-
----
-
-## トークン予算・圧縮レベルの制御
-
-`.comp/config.json` でカスタマイズ：
-
-```json
-{
-  "max_nodes": 100000,
-  "on_limit_exceeded": "warn",
-  "default_budget_tokens": 8000,
-  "compression_rules": { "*.md": 0, "*.rs": 2, "*.ts": 1 }
-}
-```
-
-| オプション | 説明 |
+| キー | 意味 |
 | --- | --- |
-| `max_nodes` | インデックスノード数の上限 |
-| `on_limit_exceeded` | `"warn"` = 通知して継続 / `"stop"` = 停止 |
-| `default_budget_tokens` | `run_pipeline` のトークン予算（自動圧縮レベル選択） |
-| `compression_rules` | 拡張子別の圧縮レベル（0=フル / 1=コンパクト / 2=スケルトン） |
+| `default_budget_tokens` | `run_pipeline` が返すトークン量の目安（既定 8000）。収まるように圧縮レベルを自動で選ぶ |
+| `compression_rules` | ファイル名のパターン（`*.md` など）ごとの圧縮レベル（0 はそのまま、1 はコメントを除く、2 はシグネチャだけ） |
+| `max_nodes` / `on_limit_exceeded` | 索引するシンボル数の上限（既定 200000）と、超えたときの動き（既定 `warn`。`stop` で止める） |
 
-> **DB サイズ目安**: 小規模（~1kファイル）1-5 MB、中規模（~10k）20-80 MB、大規模（100k+）200 MB〜1 GB。メタデータのみ保存。
+設定の一覧は [設定ガイド（英語）](docs/user/CONFIGURATION.md) にあります。
 
 ---
 
-## どうやって動いているのか（技術詳細）
+## β版の機能
 
-1. **インデックサー（Rust デーモン）**: tree-sitter で30+言語を構文解析し SQLite に保存
-2. **検索エンジン**: BM25全文検索 + グラフトラバーサル + セマンティックスコアリング
-3. **MCP サーバー**: `run_pipeline`, `get_context`, `get_impact_graph`, `session_recall` を提供
-4. **VS Code 拡張**: デーモン管理・UI・コマンド処理
-5. **ブランチ切り替え検知**: `git checkout`/`git switch` は保存イベント単位の監視では追いきれない量のファイルを一度に変えるため、comP は現在のブランチを別途ポーリングし、切り替わりを検知したら自動で再インデックスします（詳細は[トラブルシューティング](#ブランチを切り替えると自動で再インデックスされる)）
+β版の機能は、会話の記録とルール共有の2つです。どちらも既定は OFF です。
+
+会話の記録は、Claude Code との往復を1回ずつ `.comp/history/` に自動で残し、`session_recall` から読めるようにします。VS Code の設定で `comp.conversationRecording.enabled` を ON にしてから `comP: Setup Agents` で Claude Code を選ぶと、記録用の Stop フックが入ります。いまのところ Claude Code だけが対象です。
+
+ルール共有は、作業に関係する指示ファイルの節を、`run_pipeline` の結果に添えて返す機能です。節は、`CLAUDE.md` や `AGENTS.md` など、ほかのエージェント向けの指示ファイルから取り出します。`check_rule_conflicts` は、矛盾していそうな節の組を一覧にします。読むのは git で管理しているファイルだけです。
+
+使い方は [β版の機能](docs/user/BETA_FEATURES_ja.md) を見てください。
+
+---
+
+## 仕組み
+
+VS Code 拡張が Rust 製のデーモン（`comp-daemon`）を起動し、デーモンがリポジトリを読んで SQLite の索引（`.comp/index.db`）を作ります。AI エージェントはそれぞれ comp-daemon を MCP サーバーとして起動し、同じ索引を共有します。
 
 ```text
-コードファイル（30+言語）
-   ↓ [tree-sitter 構文解析]
-SQLite グラフ DB（.comp/index.db）
-   ↓ [BM25 + グラフ探索]
-MCP サーバー
-   ↓
-AI エージェント（Claude Code・Cursor・Cline等）
-   ↓ [コンテキスト圧縮]
-LLM API（トークン削減 = コスト削減）
+リポジトリのファイル
+  ↓ tree-sitter で関数・クラスを取り出し、呼び出し関係を抽出
+.comp/index.db（SQLite のグラフ）
+  ↓ BM25・TF-IDF・依存グラフで検索し、予算に合わせて圧縮
+MCP サーバー（comp-daemon）
+  ↓
+Claude Code / Codex / Cursor / Copilot ほか
 ```
 
-**対応言語（30+）**: C, C++, C#, Go, Java, JavaScript, TypeScript, Python, Rust, Ruby, Bash, Kotlin, Swift, PHP, Dart, Elixir, Haskell, Lua, R, Zig, SQL, HTML, CSS, YAML, Scala 等。
+関数・クラスと呼び出し関係を取り出せる言語は、Rust・TypeScript・JavaScript・Python・Go の5つです。HTML からは要素名だけを取り出します。全文検索の対象になる文書は、Markdown・Word・PowerPoint・Excel・PDF と、セッションの記録（JSONL）です。JSON は最上位のキー、XML は要素名、Parquet はスキーマの列名を、名前として索引します。ほかの言語のファイルからは、いまはシンボルを取り出しません。
+
+保存したコードと Markdown などは、そのファイルだけを索引し直します。新しく作ったファイルは、次の起動か Force Re-index で索引に入ります。git でブランチを切り替えると変わるファイルが多すぎるので、comP はブランチの変化を検知して全体を索引し直します（`comp.autoIndex` で止められます）。
+
+`session_recall` は、問いをそのまま含む記録を先に出し、残りを BM25 で並べます。英数字は単語単位、日本語は1〜2文字の組で照合し、新しい記録ほど上に来ます。MCP のツールは13個あり、一覧は [MCP ツール（英語）](docs/user/MCP_TOOLS.md) にあります。
 
 ---
 
-## セキュリティ・プライバシー
+## データは手元から出ない
 
-- **🔐 完全ローカル実行**: コードとセッション履歴は一切クラウドに送信されません
-- **🛡️ 自動除外**: `.comp/` は `.gitignore` に自動登録
-- **📋 監査可能**: 外部 API 不要、テレメトリなし
-- **🏢 エンタープライズ対応**: 機密コードでもオンプレミスで完全隔離
+索引・作業の記録・会話の記録は、すべてリポジトリの `.comp/` に保存します。comP のデーモンは外部と通信せず、拡張機能もテレメトリを送りません。エージェントに渡るのは、エージェントが comP のツールで求めた分だけです。その先でエージェントが LLM に何を送るかは、各エージェントの設定によります。
 
----
-
-## トラブルシューティング
-
-### 「comP がインデックスしない」
-
-1. ステータスバーで進捗確認
-2. 止まっていたら **Ctrl+Shift+P** → **"comP: Force Re-index"**
-3. `.comp/` が存在し `.gitignore` に登録されているか確認
-
-### 「comP をバージョンアップしたら MCP が使えなくなった」
-
-VS Code は拡張機能をバージョン番号入りのディレクトリに展開し、更新時に旧ディレクトリを削除します。
-設定ファイルには `comp-daemon` の絶対パスが記録されるため、v0.9.4 より前はバージョンを上げるたびに
-存在しない実行ファイルを指したまま残っていました（サイドバーは動くのに MCP ツールだけ消える、という症状）。
-
-**v0.9.4 からは起動のたびに自動修復します。** 修復通知が出たらエージェントを再起動してください。
-それ以前のバージョンでは **"comP: Setup Agents"** を一度実行し直せば直ります。
-
-### 「MCP 接続に失敗した」
-
-1. **"comP: Setup Agents"** を再実行
-2. 設定ファイルの生成を確認
-3. 出力パネル（表示 → 出力 → "comP"）でログ確認
-
-### 「AI が comP を使わず直接ファイルを読む」
-
-→ 本 README の「**CLAUDE.md を comP 前提に育てるプロンプト集**」を参照。プロンプト例①のルール追記でほぼ解決します。
-
-### 「インデックスが遅い」
-
-- 大規模リポジトリ（>100k ファイル）は初回のみ時間がかかります。以降は差分処理（高速）
-- comP デーモンは通常 500MB 未満の RAM で動作します
-
-### ブランチを切り替えると自動で再インデックスされる
-
-comP は数秒おきに現在の git ブランチをポーリングします（`git` プロセスは起動せず、
-ファイルを読むだけです）。切り替わりを検知すると、**"comP: Force Re-index"** と
-同じフル再インデックスを、確認ダイアログ無しで自動的に走らせます。この挙動は
-`comp.autoIndex` でまとめて無効化できます（オフにするとブランチ切り替え時の
-自動再インデックスも止まります）。detached HEAD や git worktree での挙動を含む
-詳細は [MCP_SETUP.md](docs/user/MCP_SETUP.md#branch-switches) を参照してください。
+例外が1つあります。VS Code のチャットで `@comp` を使うと、依頼文と、添付したファイルを圧縮した内容が、VS Code で選んでいる言語モデルへ送られます。
 
 ---
 
-## エージェント互換性
+## 困ったとき
+
+### 索引が進まない → Force Re-index を実行する
+
+ステータスバーで進み具合を確かめ、止まっていたらコマンドパレットから `comP: Force Re-index` を実行します。10万ファイルを超える大きなリポジトリでは、最初の1回に時間がかかります。2回目からは、変わったファイルだけを解析し直します。
+
+### 更新したら MCP のツールが消えた → 起動時に自動で直る
+
+VS Code は拡張機能をバージョンごとのフォルダに置き、更新すると古いフォルダを消します。comP は v0.9.4 から、エージェントの設定に残った古いデーモンのパスを、起動のたびに今のパスへ書き直します。修復の通知が出たら、エージェントを再起動してください。
+
+### Claude Code に「Conflicting scopes」と出る → 残す登録を1つにする
+
+`comp` がプロジェクト用（`.mcp.json`）と全プロジェクト共通（ユーザースコープ）の両方に、別のパスで登録されているという警告です。拡張機能の更新で古くなったパスは、v0.11.10 からは VS Code の起動時に直ります。開発用のバイナリを使っている場合など、2つのパスがどちらも有効で、しかも互いに違うときは、警告が残ります。
+
+プロジェクトのフォルダで `claude mcp list` と `claude mcp get comp` を実行し、残す方を決めてください。プロジェクト用を残すなら `claude mcp remove comp --scope user` を実行します（ほかのプロジェクトからも comp の共通登録が消えます）。共通を残すなら `claude mcp remove comp --scope project` を実行します（このプロジェクトの `.mcp.json` から comp が消えます）。どちらか一方だけを実行して、Claude Code を再起動してください。判断の材料は [MCP 設定ガイド（英語）](docs/user/MCP_SETUP.md#resolve-a-claude-code-scope-conflict) にまとめました。
+
+### AI が comP を使わずにファイルを読む → 指示ファイルにルールを足す
+
+「AI に comP を使ってもらうコツ」のプロンプトを試してください。
+
+### MCP につながらない → Setup Agents をやり直す
+
+`comP: Setup Agents` をもう一度実行し、出力パネルで「comP Setup」を選んでログを確かめてください。ここに書いた方法で解決しないときは、[Issue](https://github.com/tsucky230/comP/issues/new) で教えてください。
+
+---
+
+## 対応エージェント
 
 | エージェント | 状況 |
 | --- | --- |
-| Claude Code / GitHub Copilot | ✅ 対応・確認済み |
-| Codex（CLI・VS Code 拡張の両方） | ✅ 対応 |
-| Cursor / Cline / Windsurf / Antigravity / Aider / Continue.dev | ✅ 対応 |
-| Gemini CLI | ✅ 対応（有料の Gemini API キーか Code Assist Standard / Enterprise のライセンスがある場合のみ） |
+| Claude Code / GitHub Copilot | 対応・動作確認済み |
+| Codex（CLI・VS Code 拡張） | 対応 |
+| Cursor / Cline / Windsurf / Antigravity / Aider / Continue.dev | 対応 |
+| Gemini CLI | 対応（使える条件は、上の Setup Agents の表を見てください） |
 
-MCP 2024-11-05 準拠クライアントは原則対応。問題があれば [Issue を作成](https://github.com/tsucky230/comP/issues/new) してください。
-
----
-
-## ロードマップ
-
-| バージョン | 機能 | 状況 |
-| --- | --- | --- |
-| v0.1〜v0.8 | コアインデックス・MCP・Office/PDF対応・圧縮・大規模最適化 | ✅ リリース済み |
-| **v0.9** | **セッション履歴・永続メモリ・session_log / session_recall** | ✅ リリース済み |
-| **v0.9.4** | **MCP設定の自己修復 — アップグレードしても daemon パスを見失わない** | ✅ リリース済み |
-| **v0.10.0** | **コピペ不要のエージェント設定 — 各ツールの実設定ファイルへ直接書き込む** | ✅ リリース済み |
-| **v0.11.0** | **Codex 対応・日英UI切り替え・ブランチ切り替え時の自動再インデックス** | ✅ リリース済み |
-| **v0.11.1** | **セッションメモリの複数LLM共有対応、リリースバージョン整合性の修正** | ✅ リリース済み |
-| **v0.11.2** | **3つの永続ストア（session-memory・history・index.db）全てで破損自動リカバリ** | ✅ リリース済み |
-| **v0.11.3** | **tiktoken-rsによるrun_pipelineの正確なトークン計測、Gemini CLI設定の自動修復** | ✅ リリース済み |
-| **v0.11.4** | **CIでのVS Code Marketplace / Open VSX publishがGallery APIタイムアウト時に検知不能なまま失敗していた不具合を修正** | ✅ リリース済み |
-| **v0.11.5** | **見出しの多いMarkdownファイルが無関係な検索結果で上位を独占するrun_pipelineのランキング不具合を修正（#7）** | ✅ リリース済み |
-| **v0.11.6** | **ツール呼び出しの失敗が、原因の分からない「Internal error」ではなく詳細付きで表示されるよう修正** | ✅ リリース済み |
-| **v0.11.7** | **会話の記録（β版・既定OFF）— Claude Code の往復を自動で記録。[ベータ機能](docs/user/BETA_FEATURES_ja.md) を参照** | ✅ リリース済み（β版） |
-| **v0.11.8** | **ルール共有（β版・既定OFF）、複数エージェントの追跡（往復と委譲のつながり）、session_recall の順位付き検索、記録の伏せ字** | ✅ リリース済み（β版） |
-| **v0.11.9** | **Codex の自動審査で comP が拒否されなくなった（全ツールに MCP の注釈を付与）。Setup Agents が Codex に保存された「常に許可」を消さない** | ✅ リリース済み |
-| **v0.11.10** | **VS Code拡張の更新後、Claude Codeのユーザー設定を含む古いMCPデーモンのパスを更新** | ✅ リリース済み |
-| **v0.11.11** | **Antigravity 2.0 に対応（App・IDE・`agy` CLI・VS Code 拡張で共通の `~/.gemini/config/mcp_config.json`）、デーモンから zstd の脆弱性を除去、Node 26 でテストが動くように** | ✅ リリース済み |
-| v1.0 | API 安定化・コミュニティ統合 | ⚪ 計画中 |
+MCP 2024-11-05 に準拠したクライアントなら、たいてい動きます。動かなければ [Issue](https://github.com/tsucky230/comP/issues/new) で教えてください。
 
 ---
 
-## ライセンス・貢献・支援
+## これまでとこれから
 
-- **MITライセンス** — [LICENSE](LICENSE)
-- 貢献歓迎 — [CONTRIBUTING.md](CONTRIBUTING.md)
-- ☕ **[GitHub スポンサー](https://github.com/sponsors/tsucky230)** ／ 💖 **Star をつける**
+| バージョン | 主な変更 |
+| --- | --- |
+| v0.1〜v0.8.5 | 索引と MCP サーバー、Office・PDF の索引、圧縮、大きなリポジトリ向けの最適化 |
+| v0.8.6〜v0.9 | セッションをまたぐ記録（`session_log` / `session_recall`） |
+| v0.10.0 | Setup Agents が、各エージェントの設定ファイルへ直接書き込むように |
+| v0.11.0〜v0.11.6 | Codex 対応、日英の切り替え、ブランチ切り替え時の自動再索引、壊れた索引の自動復旧、正確なトークン数 |
+| v0.11.7〜v0.11.8 | β版: 会話の記録、ルール共有 |
+| v0.11.9〜v0.11.10 | エージェントの設定が壊れにくく（Codex の自動審査、更新後のパスの修復） |
+| v0.11.11 | Antigravity 2.0 に対応、デーモンから zstd の脆弱性を除去 |
+| 開発中 | マルチルートのワークスペース、ホーム直下の隠しフォルダの保護 |
+| v1.0 | API の安定化 |
 
-## 質問・バグ報告
+変更の詳細は [CHANGELOG](CHANGELOG.md) にあります。
 
-- 📖 [docs/](docs/) ／ 🐛 [Issue](https://github.com/tsucky230/comP/issues/new) ／ 💬 [Discussions](https://github.com/tsucky230/comP/discussions/new)
+---
+
+## ライセンスと貢献
+
+MIT ライセンスです（[LICENSE](LICENSE)）。不具合の報告や改善の案は、[Issue](https://github.com/tsucky230/comP/issues/new) か [Discussions](https://github.com/tsucky230/comP/discussions/new) へお寄せください。コードの貢献については、[CONTRIBUTING.md](CONTRIBUTING.md) を見てください。気に入ったら Star や [GitHub Sponsors](https://github.com/sponsors/tsucky230) で応援してもらえると、続ける励みになります。

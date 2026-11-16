@@ -24,9 +24,9 @@ Only use Read when you need exact raw content to edit a specific line.
 ## Other MCP tools (use only when run_pipeline is insufficient)
 
 - `get_context` — search symbols by query string, returns ranked results
-- `get_impact_graph` — show files affected by a symbol change (blast radius)
+- `get_impact_graph` — show files affected by a symbol change (blast radius); takes the `id` of a `get_context` result
 - `list_indexed_files` — list all indexed files with symbol counts and language
-- `get_stats` — show total file/node/edge counts (health check)
+- `get_project_overview` — total file/symbol/edge counts and language breakdown (health check)
 
 ## Workflow
 
@@ -64,3 +64,13 @@ run_pipeline indexes the entire codebase and returns exactly the relevant files 
 
 **補足**: フック機構もプロンプトごとに直近の履歴を自動的に注入します（`<system-reminder>`）が、
 過去の作業を手動で確認したり特定のタスクを検索したりする場合は、明示的に `session_recall` を呼ぶと便利です。
+
+---
+
+## comP Session Logging (作業の記録)
+
+タスクを1つ終えたら、`session_log` を呼んで記録してください。
+`request` にユーザーの依頼、`outcome` に行ったことと結果を短く書きます（関係したファイルがあれば `files` にも）。
+記録は `.comp/history/` に残り、次のセッションで `session_recall` から読めます。
+
+Claude Code で、`.claude/settings.local.json` に `record-turn` の Stop フックがある場合は、各往復が自動で記録されるので `session_log` を呼ばないでください（二重に記録されます）。

@@ -17,10 +17,13 @@ import { DependencyCodeLensProvider } from "./ui/CodeLens";
 import { currentRecordingSettings, registerCommands } from "./ui/commands";
 import { syncConversationRecording } from "./config/conversationRecording";
 import { syncRuleSharing } from "./config/ruleSharing";
+import { syncWorkspaceFolders } from "./config/workspaceFolders";
 import { registerChatParticipant } from "./mcp/chatParticipant";
 import { AgentSetupManager } from "./mcp/AgentSetup";
 import { isJapaneseLocale, t } from "./i18n";
 import { startBranchWatch } from "./git/branchWatcher";
+import { IndexingWatch, watchForIndexing } from "./watch/fileWatch";
+import { syncBudget } from "./config/budget";
 
 /** Global context */
 let daemonManager: DaemonManager | null = null;
@@ -68,7 +71,7 @@ function hasCompDirectory(): boolean {
   return fs.existsSync(compPath);
 }
 
-let watcherDisposable: vscode.Disposable | null = null;
+let watcherDisposable: IndexingWatch | null = null;
 let codeLensDisposable: vscode.Disposable | null = null;
 let branchWatcherDisposable: vscode.Disposable | null = null;
 
@@ -265,6 +268,91 @@ function watchRuleSharing(context: vscode.ExtensionContext): void {
   );
 }
 
+// WHY: a daemon started by hand creates `.comp/` only then, so the budget that
+// could not be written at activation has to be written after the start.
+let syncBudgetAfterStart: (() => void) | null = null;
+
+/**
+ * Keep `.comp/config.json`'s `default_budget_tokens` in step with an explicitly
+ * set `comp.maxContextTokens`, and redraw CodeLens when `comp.enableCodeLens`
+ * changes (the provider reads that setting on every call).
+ */
+function watchBudgetAndCodeLens(context: vscode.ExtensionContext): void {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  const STATE_KEY = "comp.syncedBudgetTokens";
+  const sync = (): void => {
+    if (!folder) return;
+    try {
+      const inspected = vscode.workspace.getConfiguration("comp", folder.uri).inspect<number>("maxContextTokens");
+      const explicit = inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
+      const result = syncBudget(folder.uri.fsPath, explicit, context.workspaceState.get<number>(STATE_KEY));
+      void context.workspaceState.update(STATE_KEY, result.synced);
+      if (result.status === "invalid") {
+        vscode.window.showWarningMessage(
+          t(
+            `comP: .comp/config.json is not valid JSON (${result.reason}), so comp.maxContextTokens cannot be applied. Fix the file to apply the setting.`,
+            `comP: .comp/config.json が正しい JSON ではないため（${result.reason}）、comp.maxContextTokens を反映できません。ファイルを直すと設定が反映されます。`
+          )
+        );
+      }
+    } catch (error) {
+      console.warn(`[comP] failed to sync comp.maxContextTokens: ${error}`);
+    }
+  };
+  sync();
+  syncBudgetAfterStart = sync;
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("comp.maxContextTokens")) sync();
+      if (event.affectsConfiguration("comp.enableCodeLens")) codeLensProvider?.refresh();
+    })
+  );
+}
+
+// WHY: a daemon started by hand creates `.comp/` only then, so the list that
+// could not be written at activation has to be written after the start.
+let syncWorkspaceFoldersAfterStart: (() => void) | null = null;
+
+/**
+ * Keep every workspace folder's `.comp/config.json` `workspace_folders` in step
+ * with the open folders and `comp.indexWorkspaceFolders`.
+ */
+function watchWorkspaceFolders(context: vscode.ExtensionContext): void {
+  const sync = (reindex: boolean): void => {
+    try {
+      const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+      const enabled = vscode.workspace.getConfiguration("comp").get<boolean>("indexWorkspaceFolders", true);
+      const results = syncWorkspaceFolders(folders, enabled);
+      for (const result of results) {
+        if (result.status === "invalid") {
+          vscode.window.showWarningMessage(
+            t(
+              `comP: ${result.path} is not valid JSON (${result.reason}), so the other workspace folders cannot be added to the index. Fix the file to apply the setting.`,
+              `comP: ${result.path} が正しい JSON ではないため（${result.reason}）、ほかのワークスペースフォルダを索引に含められません。ファイルを直すと設定が反映されます。`
+            )
+          );
+        }
+      }
+      // WHY: the daemon reads the list when it indexes, so a changed list needs a re-index.
+      if (reindex && daemonManager?.isRunning() && results.some((r) => r.status === "written")) {
+        daemonManager.request("forceReindex").catch((error) => {
+          console.warn(`[comP] failed to reindex after workspace folders changed: ${error}`);
+        });
+      }
+    } catch (error) {
+      console.warn(`[comP] failed to sync workspace folders: ${error}`);
+    }
+  };
+  sync(false);
+  syncWorkspaceFoldersAfterStart = () => sync(true);
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => sync(true)),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("comp.indexWorkspaceFolders")) sync(true);
+    })
+  );
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log("[comP] Extension activating...");
 
@@ -294,6 +382,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     registerChatParticipant(context, () => daemonManager);
     watchConversationRecording(context);
     watchRuleSharing(context);
+    watchWorkspaceFolders(context);
+    watchBudgetAndCodeLens(context);
 
     // 3. Inject lifecycle callbacks into SidebarPanel.
     // WHY: Prevent duplicate DaemonManager creation within SidebarPanel.
@@ -349,6 +439,8 @@ async function startDaemonStack(context: vscode.ExtensionContext): Promise<void>
   }
 
   sidebarPanel?.setDaemonManager(daemonManager);
+  syncWorkspaceFoldersAfterStart?.();
+  syncBudgetAfterStart?.();
 
   // Update status bar immediately with token stats (SidebarPanel also polls every 5s,
   // but showing efficiency right away avoids a blank display on startup)
@@ -390,9 +482,9 @@ async function startDaemonStack(context: vscode.ExtensionContext): Promise<void>
  *
  * WHY a full re-index rather than the incremental per-file path: a branch
  * switch can change hundreds of files at once, and the FileSystemWatcher path
- * (setupFileWatchers) isn't built for that — its single shared debounce timer
- * only ends up indexing the last file in a burst. A full index_workspace() pass
- * (what `forceReindex` already runs) re-resolves every file's edges in the same
+ * (setupFileWatchers) isn't built for that — it sends one indexFile request per
+ * file, each re-resolving only that file's edges. A full re-index pass
+ * (index_all_roots, what `forceReindex` runs) re-resolves every file's edges in the same
  * pass, so a stale dependency edge into a changed file never has a chance to
  * appear — see the "syncIndex" idea rejected in the design notes: an
  * incremental re-resolve only recomputes edges *from* files in the changed
@@ -421,6 +513,10 @@ function setupBranchWatch(dm: DaemonManager): vscode.Disposable | null {
   }
 
   return startBranchWatch(workspaceRoot, async () => {
+    // WHY drop the file watcher's pending work first: those files would be
+    // re-indexed one by one after the full pass, and each such update deletes
+    // the edges pointing into its file — undoing what the full pass rebuilt.
+    watcherDisposable?.cancelPending();
     statusBar?.show("Indexing...");
     try {
       await dm.request("forceReindex");
@@ -489,7 +585,7 @@ function setupFileWatchers(
   context: vscode.ExtensionContext,
   daemonManager: DaemonManager,
   codeLensProvider: DependencyCodeLensProvider
-): vscode.Disposable | null {
+): IndexingWatch | null {
   const config = vscode.workspace.getConfiguration("comp");
   const autoIndex = config.get<boolean>("autoIndex", true);
 
@@ -497,9 +593,6 @@ function setupFileWatchers(
     console.log("[comP] Auto-indexing disabled");
     return null;
   }
-
-  // Debounce timer for rapid file changes
-  let debounceTimer: NodeJS.Timeout | null = null;
 
   // WHY: Mirror the daemon-side exclusion list so we skip the IPC round-trip
   //      entirely for paths inside excluded directories (e.g. pip-installed .venv).
@@ -516,59 +609,38 @@ function setupFileWatchers(
   const sourcePattern = "**/*.{ts,tsx,js,jsx,py,go,rs,java,cs,rb,php,sql,json,yaml,xml,md}";
   const watcher = vscode.workspace.createFileSystemWatcher(sourcePattern, false, false, false);
 
-  watcher.onDidChange(async (uri) => {
-    if (isExcludedPath(uri)) { return; }
-
-    // Debounce rapid changes (wait 500ms after last change)
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-    }
-
-    debounceTimer = setTimeout(async () => {
-      debounceTimer = null;
-      try {
+  // WHY markStale gets the absolute path: in a multi-root workspace, a path
+  // relative to the second folder would name a different file (or none) in the
+  // daemon's session memory; the daemon converts it to the stored form.
+  const afterIndexChange = async (uri: vscode.Uri): Promise<void> => {
+    codeLensProvider.invalidateFile(uri.fsPath);
+    codeLensProvider.refresh();
+    await daemonManager.markStale(uri.fsPath);
+  };
+  const scheduling = watchForIndexing(
+    watcher,
+    {
+      index: async (uri) => {
         await daemonManager.indexFile(uri.fsPath);
-        // Invalidate CodeLens cache for this file
-        codeLensProvider.invalidateFile(uri.fsPath);
-        codeLensProvider.refresh();
+        await afterIndexChange(uri);
+      },
+      remove: async (uri) => {
+        await daemonManager.removeFile(uri.fsPath);
+        await afterIndexChange(uri);
+      },
+      onError: (error, uri) => console.error(`[comP] Error updating the index for ${uri.fsPath}:`, error),
+    },
+    { isExcluded: isExcludedPath }
+  );
 
-        // Mark session memory entries as stale if they depend on this file
-        const relativePath = vscode.workspace.asRelativePath(uri, false);
-        await daemonManager.markStale(relativePath);
-      } catch (error) {
-        console.error("[comP] Error indexing file:", error);
-      }
-    }, 500);
-  });
-
-  watcher.onDidDelete(async (uri) => {
-    if (isExcludedPath(uri)) { return; }
-    try {
-      // Notify daemon that file was deleted
-      await daemonManager.removeFile(uri.fsPath);
-      // Invalidate CodeLens cache for deleted file
-      codeLensProvider.invalidateFile(uri.fsPath);
-      codeLensProvider.refresh();
-
-      // Mark session memory entries as stale if they depend on this file
-      const relativePath = vscode.workspace.asRelativePath(uri, false);
-      await daemonManager.markStale(relativePath);
-    } catch (error) {
-      console.error("[comP] Error removing file from index:", error);
-    }
-  });
-
-  // WHY: Return a composite disposable to ensure pending debounce timers are cleared when watcher is disposed.
-  const disposable: vscode.Disposable = {
+  const handle: IndexingWatch = {
+    cancelPending: () => scheduling.cancelPending(),
     dispose: () => {
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
-      }
+      scheduling.dispose();
       watcher.dispose();
     },
   };
-  context.subscriptions.push(disposable);
+  context.subscriptions.push(handle);
   console.log("[comP] Auto-indexing enabled");
-  return disposable;
+  return handle;
 }

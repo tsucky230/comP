@@ -8,6 +8,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Added
+
+- **マルチルートのワークスペースで、どのフォルダからも全フォルダを検索できるようにした**（設定 `comp.indexWorkspaceFolders`、既定 ON）: 拡張機能が、`.comp/` のある各フォルダの `.comp/config.json` に、ほかのフォルダを `workspace_folders` として書く。デーモンはこれを `additional_paths` と同じに扱い、1つの索引に入れる。`.comp/` のないフォルダには何も作らない。各フォルダがそれぞれ全フォルダを索引するので、索引の量と時間は増える。フォルダの追加・削除と設定の変更で一覧を書き直し、再索引する（`src/config/workspaceFolders.ts`、`daemon/src/indexer/roots.rs`）
+- 追加ルート（`additional_paths` / `workspace_folders`）のファイルは、絶対パス（`/` 区切り）で保存・表示する。ワークスペースルートのファイルは今までどおり相対パスなので、既存の索引はそのまま使える。ルートをまたぐ呼び出しも依存エッジになる
+- 追加ルートのファイルも、保存時の即時更新（`indexFile` / `removeFile`）と `compress_file` の対象にした。設定したルートの外のパスは今までどおり拒否する
+
+### Security
+
+- **ホーム直下の隠しフォルダを、既定で追加ルートにしないようにした**（設定 `comp.blockHiddenHomeFolders`、既定 ON）: `.comp/config.json` はリポジトリに含まれるため、clone したリポジトリが `"additional_paths": ["../../.ssh"]` のように書くと、`compress_file` などでホームの秘密を読めてしまう。ホーム直下の `.` で始まるフォルダ・`AppData`・`Library` とその中は、追加ルートとしても、ホーム全体のような広い追加ルートの中のファイルとしても、索引・読み出しの対象にしない（`AppData\Local\Temp` は除く）。シンボリックリンクは行き先で判定する。ワークスペースのルート自体は対象外。解除できるのは環境変数 `COMP_ALLOW_HIDDEN_HOME_ROOTS=1` だけで、VS Code の設定（マシン単位）を OFF にすると拡張機能が起動するデーモンにこれを渡す（`daemon/src/indexer/roots.rs` の `HomePolicy`、`src/config/daemonEnv.ts`）
+
+### Fixed
+
+- **`additional_paths` を設定すると、ワークスペースルートの索引が消えていた問題を修正**（`daemon/src/indexer/mod.rs`）: 追加ルートを走査するときに索引全体のハッシュを渡していたため、ほかのルートのファイルがすべて「削除済み」と判定されていた。起動のたびにメインと追加ルートが互いの項目を消し合い、最後に走査したルートしか残らなかった。削除の判定をルート単位にし、ルートごとの同名ファイル（`README.md` など）が衝突しないよう保存パスを分けた。設定から外したルートの項目は、次の起動か再索引で消える
+- **Force Re-index が追加ルートを索引していなかった問題を修正**: 起動時と同じ処理（`index_all_roots`）を通すようにした
+- **Windows で、保存時の即時更新がファイルを別名で二重に登録していた問題を修正**（`daemon/src/mcp/mod.rs`）: パス検証が返す `\\?\E:\...` 形式のパスをワークスペースからの相対パスに直せず、`//?/E:/...` という名前の項目が増えていた（次の起動で消えるが、それまで検索結果に重複して出る）。保存パスの決定を1か所にまとめ、どの表記のパスでも同じ項目になるようにした
+- **ファイル監視が、新しく作ったファイルと、続けて保存した複数のファイルを取りこぼしていた問題を修正**（`src/watch/fileWatch.ts`）: 作成イベントを処理しておらず、新しいファイルは次の全体再索引まで索引に入らなかった。また待ち時間（500ms）のタイマーが全ファイルで1つだったため、0.5秒以内に保存した複数のファイルのうち最後の1つしか索引されなかった。タイマーをファイルごとにし、作成も変更と同じに扱い、削除が来たらそのファイルの保留中の索引を取り消すようにした。索引の要求は1件ずつ順に送る（一度に数百件送ると、デーモンが順に処理する間に後ろの要求が3秒のタイムアウトにかかるため）。ブランチの切り替えを検知したときは、保留中と待ち行列の分を取り消してから全体を再索引する（全体の再索引のあとに1件ずつの更新が走ると、そのファイルへの依存エッジが消えるため）
+- **マルチルートで、2つ目のフォルダのファイルを保存したときのセッション記憶の stale 印付けを修正**: 拡張機能がそのフォルダ基準の相対パスを送っていたため、印が付かないか、メインルートの同名ファイルの記録に付いていた。絶対パスを送り、デーモン（`mark_stale`）が保存形式に変換するようにした
+- `run_pipeline` のツール説明を実装に合わせた: 先頭に置くのは「現在のブランチで変更したファイル」ではなく、未コミットの変更がある追跡中のファイル（`git diff HEAD`）。ブランチでコミット済みの変更と、git 未追加の新規ファイルは含まない
+- **設定 `comp.maxContextTokens` と `comp.enableCodeLens` が効いていなかった問題を修正**: どちらも package.json に宣言されているだけで、どのコードも読んでいなかった。`comp.enableCodeLens` をオフにすると CodeLens が消える（変更はすぐ反映）。`comp.maxContextTokens` は、明示的に設定したときだけ `.comp/config.json` の `default_budget_tokens` に書き込み、全エージェントのデーモンの `run_pipeline` の既定の予算になる。設定を消すと comP が書いた値だけを取り除き、手で書いた値は残す。`.comp/` のないフォルダには何も作らない（`src/config/budget.ts`）
+- **`get_impact_graph` が実質使えなかった問題を修正**: 必要な `symbol_id` を返すツールがなかった（ツール説明は「run_pipeline か get_context の結果から得る」としていたが、どちらも ID を返していなかった）。推測した ID を渡すと「影響なし」と返るので、誤った判断を招いていた。`get_context` の各結果に `id` を加え、ツール説明を合わせた
+- **未コミットの変更を先頭に並べる機能（`run_pipeline`）と `get_git_diff_context` が、条件によってファイルを照合できなかった問題を修正**: ワークスペースが git リポジトリのサブフォルダのときはリポジトリの最上位からのパスが、非ASCIIのファイル名は引用符付きでエスケープされたパスが返り、索引のパスと一致しなかった。`git diff --relative -z` で取るようにした。これにより `get_git_diff_context` は、ワークスペースの外の変更を一覧に出さなくなった
+
+### Docs
+
+- **README（英日）と GitHub Pages を全面的に書き直した**: トークン削減の道具としての説明から、「AI にリポジトリの地図を持たせると、最初から正しいファイルを開き、変更前に波及先を確かめ、前回のセッションの判断を踏まえて続きを始める」という使い方の説明に改めた。MAGATAMA と組んだときの分担（変更前の確認は `analyze_change_scope`）を、MAGATAMA の README と連携仕様に基づいて追記した。数値は測定条件つきの実測だけを載せ、出典の分からない削減率（60〜94%、1回 $0.10 など）は削除した
+- 実装と合っていなかった記述を直した: 「30以上の言語を構文解析」→ シンボルを取り出すのは Rust・TypeScript・JavaScript・Python・Go・HTML の6言語、「`.comp/` を `.gitignore` に自動登録」→ 自動では書き換えない、「セッション記憶は `~/.claude/projects/...` に保存」→ リポジトリの `.comp/` に保存
+- `docs/user/MCP_TOOLS.md` を実装に合わせた: MCP ツールではない統計の呼び出しをツールとして載せていたのを、拡張機能専用の `getStats` の節に移した。説明のなかった `get_dependencies`・`get_file_summary`・`get_project_overview`・`compress_file` を追加し、`get_impact_graph`（`symbol_id`）と `get_symbol`（`name`・`file_path`）の引数名を直した。`AGENTS.md` と `docs/ARCHITECTURE_ja.md` の同じ誤りも直した
+- `docs/user/CONFIGURATION.md` の設定表の誤った名前 `comp.maxTokens` を `comp.maxContextTokens` に直した
+
 ## [0.11.11] - 2026-11-05
 
 ### Fixed

@@ -20,3 +20,13 @@ but explicit `session_recall` is useful to manually review past work or search s
 At the start of every coding or documentation task, ALWAYS call `run_pipeline` FIRST.
 Do NOT read files, run grep/find/Bash searches, or explore the codebase manually before calling run_pipeline.
 run_pipeline indexes the entire codebase and returns exactly the relevant files — use it every time.
+
+---
+
+## comP Session Logging (作業の記録)
+
+タスクを1つ終えたら、`session_log` を呼んで記録してください。
+`request` にユーザーの依頼、`outcome` に行ったことと結果を短く書きます（関係したファイルがあれば `files` にも）。
+記録は `.comp/history/` に残り、次のセッションで `session_recall` から読めます。
+
+Claude Code で、`.claude/settings.local.json` に `record-turn` の Stop フックがある場合は、各往復が自動で記録されるので `session_log` を呼ばないでください（二重に記録されます）。
