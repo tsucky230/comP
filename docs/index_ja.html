@@ -47,7 +47,7 @@
   <header class="hero">
     <div class="container hero-container">
       <div class="hero-content">
-        <div class="badge animate-fade-in" data-version="0.11.11">v0.11.11 — Antigravity 2.0 に対応</div>
+        <div class="badge animate-fade-in" data-version="0.12.0">v0.12.0 — マルチルートのワークスペースに対応</div>
         <h1 class="animate-fade-in">AI に、リポジトリの<br><span class="gradient-text">地図</span>を持たせる。</h1>
         <p class="hero-desc animate-fade-in">comP（コンプ）は、リポジトリのファイル・関数・呼び出し関係を手元で索引にして、Claude Code や Codex、Cursor などの AI コーディングエージェントに渡す VS Code 拡張です。作業の最初に comP に聞けば、AI はどこに何があり、何が何に依存しているかを一度でつかめます。オープンソースで、索引も作業の記録も手元のマシンに残ります。</p>
         <div class="hero-cta animate-fade-in">
@@ -263,12 +263,12 @@
             <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
-        <div class="roadmap-item">
-          <div class="roadmap-badge">開発中</div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.12.0</div>
           <div class="roadmap-content">
             <h4>マルチルートのワークスペース</h4>
-            <p>VS Code で複数のフォルダを開いているとき、どのフォルダで起動したエージェントからも全フォルダを検索できるようにします。あわせて、リポジトリの設定ファイルからホーム直下の隠しフォルダを読まれないよう、既定で拒否します。</p>
-            <span class="status-tag">🛠️ 開発中</span>
+            <p>VS Code で複数のフォルダを開いているとき、どのフォルダで起動したエージェントからも全フォルダを検索できます。リポジトリの設定ファイルからホーム直下の隠しフォルダを読まれないよう、既定で拒否します。フォルダの削除・移動・リネームも索引に反映され、再索引のあとも依存エッジと検索結果が正しく保たれます。</p>
+            <span class="status-tag">✅ リリース済み</span>
           </div>
         </div>
       </div>
@@ -287,7 +287,7 @@
           <span class="step-num">1</span>
           <h4>拡張機能を入れる</h4>
           <p>VS Code の拡張機能ビュー（<code>Ctrl+Shift+X</code>）で「comP - Code Context Engine」を検索して、インストールします。リリースの <code>.vsix</code> から入れる場合は、次のコマンドを使います。</p>
-          <pre><code>code --install-extension comP-0.11.11.vsix</code></pre>
+          <pre><code>code --install-extension comP-0.12.0.vsix</code></pre>
         </div>
         <div class="step">
           <span class="step-num">2</span>

@@ -48,7 +48,7 @@
   <header class="hero">
     <div class="container hero-container">
       <div class="hero-content">
-        <div class="badge animate-fade-in" data-version="0.11.11">v0.11.11 — Antigravity 2.0 support</div>
+        <div class="badge animate-fade-in" data-version="0.12.0">v0.12.0 — Multi-root workspaces</div>
         <h1 class="animate-fade-in">Give your AI a<br><span class="gradient-text">map</span> of your repository.</h1>
         <p class="hero-desc animate-fade-in">comP is a VS Code extension that indexes your repository's files, functions and call relationships on your own machine, and hands that index to AI coding agents such as Claude Code, Codex and Cursor. Ask comP at the start of a task, and the agent learns in one step where things live and what depends on what. It is open source, and the index and the work records stay on your machine.</p>
         <div class="hero-cta animate-fade-in">
@@ -264,12 +264,12 @@
             <span class="status-tag">✅ Released</span>
           </div>
         </div>
-        <div class="roadmap-item">
-          <div class="roadmap-badge">In development</div>
+        <div class="roadmap-item completed">
+          <div class="roadmap-badge">v0.12.0</div>
           <div class="roadmap-content">
             <h4>Multi-root workspaces</h4>
-            <p>With several folders open in VS Code, an agent started in any folder will be able to search all of them. Alongside it, hidden folders directly under your home directory are refused by default, so a repository's settings file cannot read them.</p>
-            <span class="status-tag">🛠️ In development</span>
+            <p>With several folders open in VS Code, an agent started in any folder can search all of them. Hidden folders directly under your home directory are refused by default, so a repository's settings file cannot read them. Deleting, moving or renaming a folder now reaches the index, and dependency edges and search results stay correct after re-indexing.</p>
+            <span class="status-tag">✅ Released</span>
           </div>
         </div>
       </div>
@@ -288,7 +288,7 @@
           <span class="step-num">1</span>
           <h4>Install the extension</h4>
           <p>Search the VS Code Extensions view (<code>Ctrl+Shift+X</code>) for "comP - Code Context Engine" and install it. To install from a released <code>.vsix</code> file instead, run:</p>
-          <pre><code>code --install-extension comP-0.11.11.vsix</code></pre>
+          <pre><code>code --install-extension comP-0.12.0.vsix</code></pre>
         </div>
         <div class="step">
           <span class="step-num">2</span>

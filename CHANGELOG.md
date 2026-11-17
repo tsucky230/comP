@@ -8,11 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-17
+
 ### Added
 
 - **マルチルートのワークスペースで、どのフォルダからも全フォルダを検索できるようにした**（設定 `comp.indexWorkspaceFolders`、既定 ON）: 拡張機能が、`.comp/` のある各フォルダの `.comp/config.json` に、ほかのフォルダを `workspace_folders` として書く。デーモンはこれを `additional_paths` と同じに扱い、1つの索引に入れる。`.comp/` のないフォルダには何も作らない。各フォルダがそれぞれ全フォルダを索引するので、索引の量と時間は増える。フォルダの追加・削除と設定の変更で一覧を書き直し、再索引する（`src/config/workspaceFolders.ts`、`daemon/src/indexer/roots.rs`）
 - 追加ルート（`additional_paths` / `workspace_folders`）のファイルは、絶対パス（`/` 区切り）で保存・表示する。ワークスペースルートのファイルは今までどおり相対パスなので、既存の索引はそのまま使える。ルートをまたぐ呼び出しも依存エッジになる
 - 追加ルートのファイルも、保存時の即時更新（`indexFile` / `removeFile`）と `compress_file` の対象にした。設定したルートの外のパスは今までどおり拒否する
+
+### Changed
+
+- CI: GitHub Actions の公式アクションを Node.js 24 で動く版へ更新した（checkout v7・setup-node v7・cache v6・upload-artifact v7・download-artifact v8・configure-pages v6・upload-pages-artifact v5・deploy-pages v5・action-gh-release v3）。Node.js 20 の非推奨警告への対応
 
 ### Security
 

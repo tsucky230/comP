@@ -175,9 +175,9 @@ build/
 *.min.js
 ```
 
-To bring other folders into the same index, list them under `additional_paths` in `.comp/config.json`. Starting with the next release, when a VS Code workspace has several folders open, comP writes the paths of the other folders as `workspace_folders` into the `.comp/config.json` of each folder that has a `.comp/`. An agent started in any folder can then search all of them (`comp.indexWorkspaceFolders`, on by default). Each folder indexes everything, so indexing takes longer.
+To bring other folders into the same index, list them under `additional_paths` in `.comp/config.json`. Since v0.12.0, when a VS Code workspace has several folders open, comP writes the paths of the other folders as `workspace_folders` into the `.comp/config.json` of each folder that has a `.comp/`. An agent started in any folder can then search all of them (`comp.indexWorkspaceFolders`, on by default). Each folder indexes everything, so indexing takes longer.
 
-Also from the next release, hidden folders directly under your home directory (folders starting with `.`, `AppData` and `Library`, except `AppData\Local\Temp`) are never indexed, even if a repository's settings file names them (`comp.blockHiddenHomeFolders`, on by default). This VS Code setting applies to the daemon the extension starts; for a daemon an agent starts, an environment variable turns the protection off.
+Also since v0.12.0, hidden folders directly under your home directory (folders starting with `.`, `AppData` and `Library`, except `AppData\Local\Temp`) are never indexed, even if a repository's settings file names them (`comp.blockHiddenHomeFolders`, on by default). This VS Code setting applies to the daemon the extension starts; for a daemon an agent starts, an environment variable turns the protection off.
 
 `.comp/config.json` also controls how much `run_pipeline` returns and how hard it compresses.
 
@@ -283,7 +283,7 @@ Most clients that follow MCP 2024-11-05 should work. If yours does not, please t
 | v0.11.7–v0.11.8 | Beta: conversation recording, rule sharing |
 | v0.11.9–v0.11.10 | Sturdier agent settings (Codex auto-review, path repair after updates) |
 | v0.11.11 | Antigravity 2.0 support; zstd vulnerabilities removed from the daemon |
-| In development | Multi-root workspaces, protection for hidden folders in the home directory |
+| v0.12.0 | Multi-root workspaces; protection for hidden folders in the home directory; deleted, moved and renamed folders reach the index; dependency edges and search results stay correct after re-indexing |
 | v1.0 | A stable API |
 
 The full history is in the [CHANGELOG](CHANGELOG.md).
