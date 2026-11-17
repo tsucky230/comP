@@ -1,6 +1,8 @@
 {
-  "commit": "e71584ccf4857691246b9b871bcbcf48f1b81d98",
+  "commit": "974eeed466323a673e4118c3ee70439a90043b93",
   "files": {
+    "daemon/src/indexer/caller_edges_tests.rs": "7b297352922c6911aa2dfc6120d926cc463399b60dec8bf480834b5e8f97f829",
+    "daemon/src/indexer/folder_reindex_tests.rs": "7602896f1cd136665468b2c24df72b7bc86789419a614eebd9cb5925ec899e67",
     "daemon/src/indexer/home_policy_tests.rs": "2da8f9a8b0ab8f15934de9cefb85fd16d5bb08e9f317f0a1b7af15c07f46f6b4",
     "daemon/src/indexer/multi_root_tests.rs": "448d041734370feb7652bacbdd2ef7439912a57cd34218d0c8d4c164fa368e71",
     "daemon/src/indexer/roots_tests.rs": "866d75e3f72733656a173bb6bc21e1ac1b6eea8744d47db26fc476eb3d757154",
@@ -9,16 +11,19 @@
     "daemon/src/mcp/multi_root_tests.rs": "a91812fe6ef25fe698417d99ac5fd980e11179465ba4de7784dbe5e4598eda1b",
     "daemon/src/mcp/record_turn_tests.rs": "c1c8ecc2bed68d1d750271aaa9d42cd8dbc7e6415e9c3e17378c0a564a8d8a19",
     "daemon/src/mcp/rule_sharing_tests.rs": "4cc1e8e631b1acf5df2cbcde8d4a8cfad300044cffa37f270aaded8c3fa86bd6",
+    "daemon/src/mcp/sync_folders_tests.rs": "6dc8bab268242d318187698d62d0e975878fb567edaa7c5ad9c0382413470d7b",
     "daemon/src/mcp/trace_tests.rs": "a74e0eb28b0122d2b630d3634123a67140188cfcb25a8c2ce011a04565c94af3",
     "daemon/src/rules/tests.rs": "6bde44788b30c1dfd7a0bf4bb0c61dcc8974884dba9da4cc0d16d02eaf9a7206",
+    "daemon/src/search/rebuild_tests.rs": "4859bfa1ca3179770a6dd93f4c6b27aec823be45a87138812f0f7feb593ca9f0",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts": "65132fdde0078562c83e8104d5f50f179a5315594d5b4954034d430a21114808",
     "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05",
     "src/test/daemonEnv.test.ts": "58b84b3346f129d66f36c217adb6495e2d29a4b1aa876a42269e483f8042b4fd",
     "src/test/ruleSharing.test.ts": "9fcebac114562d39d954ee6ba396e151a772ce29e9c05e7536c18ea700ef8a66",
     "src/test/workspaceFolders.test.ts": "1aa41a21bed6598527cb2809dc3b54ca1ef9b2d0f318d9a4e8941dcfee6f6a23",
-    "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e"
+    "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e",
+    "src/watch/tests/folderWatch.test.ts": "683566a52d7b768abc6e870a0da3b64235b051b98235e5cd21d2d7d4c9940fc6"
   },
-  "frozen_at": "2026-11-16T19:19:35Z",
+  "frozen_at": "2026-11-17T06:48:25Z",
   "history": [
     {
       "approved_by": null,
@@ -283,6 +288,42 @@
       },
       "note": "reviewer 指摘（バースト時のタイムアウト連鎖・ブランチ切り替え後の被依存エッジ欠落）への対応: 索引の待ち行列（1件ずつ・重複なし）、削除で待ち行列から外す、cancelPending、dispose 後に待ち行列から始めない、のテストを追加",
       "request": "TCR-14"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-17T06:18:24Z",
+      "commit": "c241861f99a56e048f16ac348579453eff35bd60",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "フォルダ単位の削除・リネーム・作成を索引に反映する（syncFolders と watchFolders）のテストを追加",
+      "request": "TCR-15"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-17T06:25:51Z",
+      "commit": "c241861f99a56e048f16ac348579453eff35bd60",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "実機確認で発見: TF-IDF の build_index が追記で、作り直しても消えた・改名前のファイルが run_pipeline に残る。回帰テストを追加",
+      "request": "TCR-16"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-17T06:48:25Z",
+      "commit": "974eeed466323a673e4118c3ee70439a90043b93",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "reviewer 指摘: 変わっていない呼び出し元のエッジが全体の差分索引で失われる、作り直したフォルダの判定漏れ、追加ルートのホーム保護、の回帰テストを追加",
+      "request": "TCR-17"
     }
   ],
   "metrics": {
@@ -306,7 +347,12 @@
     "daemon/src/mcp/home_policy_tests.rs",
     "src/test/daemonEnv.test.ts",
     "src/watch/tests/fileWatch.test.ts",
-    "daemon/src/mcp/mark_stale_tests.rs"
+    "daemon/src/mcp/mark_stale_tests.rs",
+    "src/watch/tests/folderWatch.test.ts",
+    "daemon/src/mcp/sync_folders_tests.rs",
+    "daemon/src/search/rebuild_tests.rs",
+    "daemon/src/indexer/caller_edges_tests.rs",
+    "daemon/src/indexer/folder_reindex_tests.rs"
   ],
   "version": 1
 }

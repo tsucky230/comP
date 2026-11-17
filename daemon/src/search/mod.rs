@@ -107,6 +107,11 @@ impl SearchEngine {
     /// # Returns
     /// - Result<()>: Success or error
     pub fn build_index(&mut self, symbols: &[(String, String, String, u32)]) -> Result<()> {
+        // WHY start empty: this is called again after every full pass (force
+        // re-index, branch switch, folder changes). Appending kept deleted and
+        // renamed files searchable and counted each symbol once per rebuild.
+        self.documents.clear();
+
         // 1. Store documents and count
         let mut tf_matrix: HashMap<String, HashMap<String, f32>> = HashMap::new();
 
@@ -246,7 +251,12 @@ impl SearchEngine {
         }
 
         // 4. Sort and return top N
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // WHY the path tie-break: `scores` comes from a HashMap, whose order
+        // changes from run to run; equal scores would otherwise come back in a
+        // random order (and `take(limit)` would cut a random one).
+        scores.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.cmp(&b.0))
+        });
 
         let mut results = Vec::new();
         for (file_path, score) in scores.iter().take(limit) {
@@ -460,6 +470,10 @@ impl TokenCounter {
         format!("${:.2}", cost)
     }
 }
+
+#[cfg(test)]
+#[path = "rebuild_tests.rs"]
+mod rebuild_tests;
 
 #[cfg(test)]
 mod tests {

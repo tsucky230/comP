@@ -314,3 +314,13 @@ The following limits are applied automatically and require no configuration:
 
 Run `comP: Force Re-index Workspace` from the Command Palette (`Ctrl+Shift+P`)
 to rebuild the index from scratch.
+
+You rarely need it. While `comp.autoIndex` is on, the index follows your edits:
+
+- Saving, creating or deleting a source file updates that file within about half a second.
+- Deleting, moving or renaming a folder — in the Explorer, or with `mv` / `git mv` in a terminal —
+  runs one incremental pass about a second later. It drops the entries of files that are gone, adds
+  the files that moved in, and re-links the dependencies of the moved files and of the files that
+  call into them. Changes inside hidden or excluded folders, empty folders and — in a git
+  repository — gitignored folders are ignored.
+- Switching git branches rebuilds the index from scratch, as Force Re-index does.

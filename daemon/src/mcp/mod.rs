@@ -30,6 +30,9 @@ mod symbol_id_tests;
 #[cfg(test)]
 #[path = "git_diff_paths_tests.rs"]
 mod git_diff_paths_tests;
+#[cfg(test)]
+#[path = "sync_folders_tests.rs"]
+mod sync_folders_tests;
 
 use anyhow::{Result, anyhow};
 use log::info;
@@ -1622,30 +1625,7 @@ impl MCPServer {
             }
 
             // Call appropriate handler
-            let result = match method {
-                "initialize" => self.handle_initialize(params).await,
-                "tools/list" => self.handle_tools_list().await,
-                "tools/call" => self.handle_tools_call(params).await,
-                "run_pipeline" => self.handle_run_pipeline(params).await,
-                "get_context" => self.handle_get_context(params).await,
-                "get_impact_graph" => self.handle_get_impact_graph(params).await,
-                "list_indexed_files" => self.handle_list_indexed_files().await,
-                "get_token_usage" => self.handle_get_token_usage().await,
-                "getStats" => self.handle_get_stats().await,
-                "forceReindex" => self.handle_force_reindex().await,
-                "indexFile" => self.handle_index_file(params).await,
-                "removeFile" => self.handle_remove_file(params).await,
-                "session_recall" => self.handle_session_recall(params).await,
-                "session_log" => self.handle_session_log(params).await,
-                "mark_stale" => self.handle_mark_stale(params).await,
-                "get_symbol" => self.handle_get_symbol(params).await,
-                "get_dependencies" => self.handle_get_dependencies(params).await,
-                "get_file_summary" => self.handle_get_file_summary(params).await,
-                "get_project_overview" => self.handle_get_project_overview().await,
-                "get_git_diff_context" => self.handle_get_git_diff_context(params).await,
-                "compressFile" => self.handle_compress_file(params).await,
-                _ => Err(anyhow!("Unknown method: {}", method)),
-            };
+            let result = self.handle_rpc_method(method, params).await;
 
             // WHY exit the process rather than return a normal error response: a
             // poisoned Mutex means a prior panic happened while a GraphDB method
@@ -2650,6 +2630,7 @@ impl MCPServer {
     /// WHY: Called from VSCode `comp.forceReindex` command.
     /// Clears and rebuilds the database. Response might be slow since indexing is blocking (beware of timeouts).
     pub async fn handle_force_reindex(&self) -> Result<Value> {
+        let _pass = self.state.full_pass_lock.lock().await;
         info!("handle_force_reindex: clearing index");
         self.state.graph_db.clear_index()?;
 
@@ -2672,12 +2653,7 @@ impl MCPServer {
         // graph DB. Without this, TF-IDF results (and therefore run_pipeline's
         // combined ranking score) would keep scoring every file 0.0 and go stale
         // after any force re-index that runs later than process startup.
-        if let Ok(all_symbols) = self.state.graph_db.get_all_symbols_for_search() {
-            let mut se = self.state.search_engine.lock().await;
-            if let Err(e) = se.build_index(&all_symbols) {
-                log::warn!("TF-IDF index build failed during force reindex: {}", e);
-            }
-        }
+        self.rebuild_search_index().await;
 
         let (files, nodes, edges) = self.state.graph_db.get_stats()?;
         info!(
@@ -2840,6 +2816,94 @@ impl MCPServer {
         }
 
         Ok(json!({ "marked": marked }))
+    }
+
+    /// Dispatch one JSON-RPC method to its handler. MCP clients use `tools/call`;
+    /// the camelCase methods are the VS Code extension's own.
+    pub async fn handle_rpc_method(&self, method: &str, params: Value) -> Result<Value> {
+        match method {
+            "initialize" => self.handle_initialize(params).await,
+            "tools/list" => self.handle_tools_list().await,
+            "tools/call" => self.handle_tools_call(params).await,
+            "run_pipeline" => self.handle_run_pipeline(params).await,
+            "get_context" => self.handle_get_context(params).await,
+            "get_impact_graph" => self.handle_get_impact_graph(params).await,
+            "list_indexed_files" => self.handle_list_indexed_files().await,
+            "get_token_usage" => self.handle_get_token_usage().await,
+            "getStats" => self.handle_get_stats().await,
+            "forceReindex" => self.handle_force_reindex().await,
+            "syncFolders" => self.handle_sync_folders(params).await,
+            "indexFile" => self.handle_index_file(params).await,
+            "removeFile" => self.handle_remove_file(params).await,
+            "session_recall" => self.handle_session_recall(params).await,
+            "session_log" => self.handle_session_log(params).await,
+            "mark_stale" => self.handle_mark_stale(params).await,
+            "get_symbol" => self.handle_get_symbol(params).await,
+            "get_dependencies" => self.handle_get_dependencies(params).await,
+            "get_file_summary" => self.handle_get_file_summary(params).await,
+            "get_project_overview" => self.handle_get_project_overview().await,
+            "get_git_diff_context" => self.handle_get_git_diff_context(params).await,
+            "compressFile" => self.handle_compress_file(params).await,
+            _ => Err(anyhow!("Unknown method: {}", method)),
+        }
+    }
+
+    /// Bring the index in step after folder-level changes the per-file watcher
+    /// cannot see: VS Code reports a deleted, moved or renamed folder as one
+    /// event for the folder, not one per file inside it.
+    ///
+    /// `params.paths`: absolute paths as the editor reports them (required,
+    /// array of strings). One full incremental pass (`index_all_roots`, no
+    /// `clear_index`) runs when at least one path
+    /// - is an existing directory inside a root, under which that root's walker
+    ///   (ignore files, hidden and excluded names) finds a file to index; or
+    /// - no longer exists, and the index holds an entry under it — including an
+    ///   additional root that was deleted as a whole.
+    ///
+    /// WHY a full pass rather than deleting the entries under the folder: the
+    /// pass removes only entries whose file is really gone, so a prefix mistake
+    /// cannot drop an unrelated file; it re-parses moved files and re-links
+    /// both their own calls and the calls of unchanged files into them.
+    ///
+    /// Returns `{ reindexed, total_files, total_nodes, total_edges }`.
+    pub async fn handle_sync_folders(&self, params: Value) -> Result<Value> {
+        let paths: Vec<String> = params["paths"]
+            .as_array()
+            .ok_or_else(|| anyhow!("Missing 'paths' parameter (an array of absolute paths)"))?
+            .iter()
+            .map(|v| v.as_str().map(str::to_string).ok_or_else(|| anyhow!("'paths' must contain only strings")))
+            .collect::<Result<_>>()?;
+
+        let _pass = self.state.full_pass_lock.lock().await;
+        let root = self.state.workspace_root.clone();
+        let reindexed = crate::indexer::folder_changes_need_reindex(&root, &paths, &self.state.graph_db)?;
+        if reindexed {
+            info!("handle_sync_folders: folder changes at {:?}, running an incremental pass", paths);
+            crate::indexer::index_all_roots(&root, &self.state.graph_db).await?;
+            // A full pass completed: see graph/mod.rs::clear_recovery_marker's doc.
+            if let Err(e) = self.state.graph_db.clear_recovery_marker() {
+                log::warn!("failed to clear index recovery marker after syncFolders: {}", e);
+            }
+            self.rebuild_search_index().await;
+        }
+
+        let (files, nodes, edges) = self.state.graph_db.get_stats()?;
+        Ok(json!({
+            "reindexed": reindexed,
+            "total_files": files,
+            "total_nodes": nodes,
+            "total_edges": edges
+        }))
+    }
+
+    /// Rebuild the TF-IDF index from the graph DB after a full pass.
+    async fn rebuild_search_index(&self) {
+        if let Ok(all_symbols) = self.state.graph_db.get_all_symbols_for_search() {
+            let mut se = self.state.search_engine.lock().await;
+            if let Err(e) = se.build_index(&all_symbols) {
+                log::warn!("TF-IDF index build failed: {}", e);
+            }
+        }
     }
 
     /// MCP initialize handshake — returns server capabilities

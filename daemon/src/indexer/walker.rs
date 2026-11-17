@@ -103,25 +103,7 @@ impl FileWalker {
     /// - .comp/ignore via `add_ignore`
     /// - filter_entry for hard-coded extra_skip_names (prunes entire subtrees)
     pub fn walk(&self, previous_hashes: Option<&HashMap<String, String>>) -> Result<WalkerResult> {
-        let mut builder = WalkBuilder::new(&self.workspace_root);
-        // Enables: gitignore, .ignore, global gitignore, hidden-file filtering
-        builder.standard_filters(true);
-
-        // Supplementary ignore file (e.g., .comp/ignore)
-        if let Some(ref p) = self.config.custom_ignore_file {
-            if p.exists() {
-                builder.add_ignore(p);
-            }
-        }
-
-        // Prune extra non-hidden directories by name.
-        // filter_entry returns false for a directory → the entire subtree is skipped,
-        // unlike a plain .filter_map which only skips the directory node itself.
-        let extra_skip = self.config.extra_skip_names.clone();
-        builder.filter_entry(move |e| {
-            let name = e.file_name().to_string_lossy();
-            !extra_skip.iter().any(|s| s == name.as_ref())
-        });
+        let builder = self.builder(None);
 
         let mut all_files = Vec::new();
         let mut changed_files = Vec::new();
@@ -200,6 +182,54 @@ impl FileWalker {
             changed_files,
             deleted_files,
         })
+    }
+
+    /// Whether [`Self::walk`] would return at least one file inside `dir`, a
+    /// directory under this walker's root (spelled from the root, e.g.
+    /// `root.join("src/new")`, so the comparison with walked paths holds).
+    ///
+    /// Only the directories from the root down to `dir`, and `dir`'s subtree,
+    /// are visited, under the same rules as a full walk: ignore files from the
+    /// root down (so a gitignored build folder counts as empty), hidden names,
+    /// extra skip names and the size limit.
+    pub fn has_file_under(&self, dir: &Path) -> bool {
+        self.builder(Some(dir.to_path_buf()))
+            .build()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                // `path().is_file()` follows symlinks, as `walk` does.
+                e.path().starts_with(dir)
+                    && e.path().is_file()
+                    && e.metadata().is_ok_and(|m| m.len() <= self.config.max_file_bytes)
+            })
+    }
+
+    /// The walker every pass uses. With `scope`, only the directories on the way
+    /// to it and the entries below it are visited.
+    fn builder(&self, scope: Option<PathBuf>) -> WalkBuilder {
+        let mut builder = WalkBuilder::new(&self.workspace_root);
+        // Enables: gitignore, .ignore, global gitignore, hidden-file filtering
+        builder.standard_filters(true);
+
+        // Supplementary ignore file (e.g., .comp/ignore)
+        if let Some(ref p) = self.config.custom_ignore_file {
+            if p.exists() {
+                builder.add_ignore(p);
+            }
+        }
+
+        // Prune extra non-hidden directories by name.
+        // filter_entry returns false for a directory → the entire subtree is skipped,
+        // unlike a plain .filter_map which only skips the directory node itself.
+        let extra_skip = self.config.extra_skip_names.clone();
+        builder.filter_entry(move |e| {
+            let name = e.file_name().to_string_lossy();
+            if extra_skip.iter().any(|s| s == name.as_ref()) {
+                return false;
+            }
+            scope.as_ref().is_none_or(|s| s.starts_with(e.path()) || e.path().starts_with(s))
+        });
+        builder
     }
 
     /// Scan `.comp/history/*.jsonl` and append them to the walk result.

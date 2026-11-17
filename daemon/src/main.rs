@@ -44,6 +44,11 @@ pub struct AppState {
     /// check. Taken from the environment in [`AppState::new`]; a field so
     /// tests can put a fake home in place without touching the environment.
     pub home_policy: indexer::roots::HomePolicy,
+    /// Held for the whole of every full pass (startup indexing, forceReindex,
+    /// syncFolders). WHY: the startup pass runs in a background task while
+    /// requests are answered, and two passes over the same DB at once would
+    /// each judge the other's half-written rows as changed or deleted.
+    pub full_pass_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -80,6 +85,7 @@ impl AppState {
             workspace_root: workspace_root.to_string(),
             agent_id: agent_id.to_string(),
             home_policy: indexer::roots::HomePolicy::from_env(),
+            full_pass_lock: tokio::sync::Mutex::new(()),
         })
     }
 }
@@ -137,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state_for_idx = Arc::clone(&state);
         let root_for_idx = workspace_root.clone();
         tokio::spawn(async move {
+            let _pass = state_for_idx.full_pass_lock.lock().await;
             info!("Starting initial workspace indexing...");
             // WHY: index_all_roots compares against the hashes of the previous
             // session's database, so only modified files are re-indexed.

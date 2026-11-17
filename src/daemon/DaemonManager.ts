@@ -243,6 +243,8 @@ export class DaemonManager {
       const METHOD_TIMEOUTS: Record<string, number> = {
         getStats: 5000,
         forceReindex: 120_000,
+        // A folder change can run the same full pass as forceReindex.
+        syncFolders: 120_000,
       };
       const timeoutMs = METHOD_TIMEOUTS[method] ?? 3000;
       const timeout = setTimeout(() => {

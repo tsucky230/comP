@@ -66,6 +66,9 @@ pub async fn index_all_roots_with(
 ) -> Result<IndexSummary> {
     let roots = roots::Roots::load_with(main_root, policy);
     let previous = db.get_all_file_hashes().unwrap_or_default();
+    // Taken before anything changes: re-parsing or deleting a file drops the
+    // edges pointing into it too, so its callers have to be re-resolved.
+    let dependents = db.file_dependents().unwrap_or_default();
     let mut summary = IndexSummary::default();
     let mut deferred: Vec<(String, Vec<dependency::Dependency>)> = Vec::new();
 
@@ -97,6 +100,8 @@ pub async fn index_all_roots_with(
             }
         }
     }
+
+    deferred.extend(unchanged_callers_of_touched_files(main_root, db, &previous, &dependents));
 
     // WHY: edges are resolved only now so a call from one root into another
     // finds its callee regardless of the order the roots were parsed in.
@@ -135,7 +140,68 @@ pub async fn index_one_file(
     let located = roots
         .locate(abs_path)
         .ok_or_else(|| anyhow::anyhow!("'{}' is outside every root", abs_path))?;
-    let (mut indexer, relative) = match located.owner {
+    let (mut indexer, relative) = indexer_for(main_root, &roots, &located);
+    let done = indexer
+        .index_resolved(Path::new(abs_path), &relative, located.stored_path.clone(), db)
+        .await?;
+    Ok(done.then_some(located.stored_path))
+}
+
+/// Dependencies of the files that were not re-parsed in this pass but had an
+/// edge into a file that changed or disappeared.
+///
+/// WHY: clearing a file's nodes (re-parse or delete) drops the edges pointing
+/// into it as well, and a pass only rebuilds the outgoing edges of the files it
+/// re-parsed. Without this, an unchanged caller of a moved or edited file lost
+/// that edge until the caller itself was edited — a restart did not bring it
+/// back — and impact analysis missed it. Re-resolving rebuilds all of the
+/// caller's outgoing edges (see `resolve_edges_for_file`), now pointing at the
+/// callee's new nodes, wherever it moved.
+fn unchanged_callers_of_touched_files(
+    main_root: &str,
+    db: &crate::graph::GraphDB,
+    previous: &HashMap<String, String>,
+    dependents: &HashMap<String, std::collections::HashSet<String>>,
+) -> Vec<(String, Vec<dependency::Dependency>)> {
+    let current = db.get_all_file_hashes().unwrap_or_default();
+    let mut callers: std::collections::BTreeSet<&String> = std::collections::BTreeSet::new();
+    for (path, old_hash) in previous {
+        if current.get(path) == Some(old_hash) {
+            continue;
+        }
+        for caller in dependents.get(path).into_iter().flatten() {
+            // A caller that changed was re-parsed already; one that is gone has no edges.
+            if current.contains_key(caller) && current.get(caller) == previous.get(caller) {
+                callers.insert(caller);
+            }
+        }
+    }
+    if callers.is_empty() {
+        return Vec::new();
+    }
+
+    let languages: HashMap<String, String> =
+        db.list_files().unwrap_or_default().into_iter().map(|(_, path, language)| (path, language)).collect();
+    let mut out = Vec::new();
+    for caller in callers {
+        let abs = if roots::looks_absolute(caller) {
+            std::path::PathBuf::from(caller)
+        } else {
+            Path::new(main_root).join(caller)
+        };
+        let Ok(source) = std::fs::read_to_string(&abs) else { continue };
+        let language = languages.get(caller).map(String::as_str).unwrap_or("");
+        let deps = DependencyAnalyzer::extract_dependencies(language, &source, caller).unwrap_or_default();
+        if !deps.is_empty() {
+            out.push((caller.clone(), deps));
+        }
+    }
+    out
+}
+
+/// The indexer of the root that owns `located`, and the path relative to that root.
+fn indexer_for(main_root: &str, roots: &roots::Roots, located: &roots::Located) -> (Indexer, String) {
+    match located.owner {
         roots::Owner::Main => (Indexer::new(main_root), located.stored_path.clone()),
         roots::Owner::Extra(i) => {
             let extra = &roots.extras()[i];
@@ -143,11 +209,65 @@ pub async fn index_one_file(
             let rel = located.stored_path.strip_prefix(&prefix).unwrap_or(&located.stored_path).to_string();
             (Indexer::new_additional(extra), rel)
         }
-    };
-    let done = indexer
-        .index_resolved(Path::new(abs_path), &relative, located.stored_path.clone(), db)
-        .await?;
-    Ok(done.then_some(located.stored_path))
+    }
+}
+
+/// Whether folder-level changes at `paths` (absolute, any spelling) can have
+/// left the index out of step, so that a full pass is worth running.
+///
+/// - An existing directory counts when it is inside a root and either that
+///   root's walker finds a file to index under it (a moved-in or created
+///   folder) or the index holds entries under it (a folder deleted and created
+///   again). In an additional root, folders the home policy blocks never count.
+/// - A path that no longer exists counts when the index holds an entry under
+///   it, in its stored form or as a normalized absolute path — the latter also
+///   covers an additional root deleted as a whole, which `locate` no longer knows.
+/// - Anything else (existing files, paths outside every root, a root itself,
+///   hidden, excluded or ignored folders, empty folders) does not count.
+pub fn folder_changes_need_reindex(main_root: &str, paths: &[String], db: &crate::graph::GraphDB) -> Result<bool> {
+    folder_changes_need_reindex_with(main_root, paths, db, &roots::HomePolicy::from_env())
+}
+
+/// [`folder_changes_need_reindex`] with an explicit [`roots::HomePolicy`].
+pub fn folder_changes_need_reindex_with(
+    main_root: &str,
+    paths: &[String],
+    db: &crate::graph::GraphDB,
+    policy: &roots::HomePolicy,
+) -> Result<bool> {
+    let roots = roots::Roots::load_with(main_root, policy);
+    for path in paths {
+        let p = Path::new(path);
+        if p.is_dir() {
+            let Some(located) = roots.locate(path) else { continue };
+            // The pass leaves these files out (see index_all_roots_with), so a change there changes nothing.
+            if matches!(located.owner, roots::Owner::Extra(_)) && policy.blocks(&located.stored_path) {
+                continue;
+            }
+            let (indexer, relative) = indexer_for(main_root, &roots, &located);
+            // WHY also entries under it: `rm -rf dir && mkdir dir` arrives as an
+            // existing, empty folder whose old files are still in the index.
+            if indexer.has_indexable_file_under(&relative)
+                || db.has_file_under(&format!("{}/", located.stored_path))?
+            {
+                return Ok(true);
+            }
+        } else if !p.exists() {
+            let mut prefixes = Vec::new();
+            if let Some(abs) = roots::normalize_abs(path) {
+                prefixes.push(format!("{}/", abs.trim_end_matches('/')));
+            }
+            if let Some(located) = roots.locate(path) {
+                prefixes.push(format!("{}/", located.stored_path));
+            }
+            for prefix in prefixes {
+                if db.has_file_under(&prefix)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Drop one file's entry, given the absolute path it had on disk (the file is
@@ -188,6 +308,14 @@ impl Indexer {
     /// Indexer for an additional root (`normalized_root` from [`roots::Roots::extras`]).
     pub fn new_additional(normalized_root: &str) -> Self {
         Self::with_prefix(normalized_root, Some(normalized_root.trim_end_matches('/').to_string()))
+    }
+
+    /// Whether this root's walk would index a file under the folder `relative`
+    /// (relative to this indexer's root, `/`-separated).
+    fn has_indexable_file_under(&self, relative: &str) -> bool {
+        !relative.is_empty()
+            && !self.walker.should_skip_relative_path(relative)
+            && self.walker.has_file_under(&Path::new(&self.workspace_root).join(relative))
     }
 
     fn with_home_policy(mut self, policy: roots::HomePolicy) -> Self {
@@ -941,3 +1069,11 @@ mod tests {
 #[cfg(test)]
 #[path = "multi_root_tests.rs"]
 mod multi_root_tests;
+
+#[cfg(test)]
+#[path = "caller_edges_tests.rs"]
+mod caller_edges_tests;
+
+#[cfg(test)]
+#[path = "folder_reindex_tests.rs"]
+mod folder_reindex_tests;

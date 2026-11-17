@@ -10,7 +10,7 @@
 // - Edges: Dependencies (function calls, type references, etc.)
 
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -652,6 +652,43 @@ impl GraphDB {
         conn.execute("DELETE FROM nodes", [])?;
         conn.execute("DELETE FROM files", [])?;
         Ok(())
+    }
+
+    /// For each file, the other files that have an edge into it:
+    /// `callee path -> {caller paths}`.
+    pub fn file_dependents(&self) -> Result<HashMap<String, std::collections::HashSet<String>>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT tf.path, sf.path
+             FROM edges e
+             JOIN nodes s ON e.from_id = s.id
+             JOIN nodes t ON e.to_id = t.id
+             JOIN files sf ON s.file_id = sf.id
+             JOIN files tf ON t.file_id = tf.id
+             WHERE sf.id != tf.id",
+        )?;
+        let mut map: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+        for row in stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))? {
+            let (callee, caller) = row?;
+            map.entry(callee).or_default().insert(caller);
+        }
+        Ok(map)
+    }
+
+    /// Whether any indexed file's stored path starts with `prefix`.
+    ///
+    /// WHY substr rather than LIKE: `%` and `_` in a folder name would act as
+    /// wildcards. Callers end `prefix` with `/` so `src/a/` never matches `src/ab/`.
+    pub fn has_file_under(&self, prefix: &str) -> Result<bool> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("DB mutex poisoned: {}", e))?;
+        let found = conn
+            .query_row(
+                "SELECT 1 FROM files WHERE substr(path, 1, ?1) = ?2 LIMIT 1",
+                rusqlite::params![prefix.chars().count() as i64, prefix],
+                |_| Ok(()),
+            )
+            .optional()?;
+        Ok(found.is_some())
     }
 
     /// Delete a single file and its associated nodes/edges

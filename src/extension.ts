@@ -23,6 +23,7 @@ import { AgentSetupManager } from "./mcp/AgentSetup";
 import { isJapaneseLocale, t } from "./i18n";
 import { startBranchWatch } from "./git/branchWatcher";
 import { IndexingWatch, watchForIndexing } from "./watch/fileWatch";
+import { watchFolders } from "./watch/folderWatch";
 import { syncBudget } from "./config/budget";
 
 /** Global context */
@@ -606,7 +607,9 @@ function setupFileWatchers(
   }
 
   // Watch for file changes (only code files)
-  const sourcePattern = "**/*.{ts,tsx,js,jsx,py,go,rs,java,cs,rb,php,sql,json,yaml,xml,md}";
+  const SOURCE_EXTENSIONS = ["ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "cs", "rb", "php", "sql", "json", "yaml", "xml", "md"];
+  const sourcePattern = `**/*.{${SOURCE_EXTENSIONS.join(",")}}`;
+  const sourceFile = new RegExp(`\\.(${SOURCE_EXTENSIONS.join("|")})$`, "i");
   const watcher = vscode.workspace.createFileSystemWatcher(sourcePattern, false, false, false);
 
   // WHY markStale gets the absolute path: in a multi-root workspace, a path
@@ -633,11 +636,33 @@ function setupFileWatchers(
     { isExcluded: isExcludedPath }
   );
 
+  // WHY a second watcher: VS Code reports a deleted, moved or renamed folder as
+  // one event for the folder, which the source-extension pattern above never
+  // matches, so the files inside it would stay in (or never enter) the index.
+  // Change events are not needed; create/delete are filtered before any I/O.
+  const folderWatcher = vscode.workspace.createFileSystemWatcher("**/*", false, true, false);
+  const folders = watchFolders(folderWatcher, {
+    isExcluded: isExcludedPath,
+    isSourceFile: (uri) => sourceFile.test(uri.fsPath),
+    isDirectory: async (uri) => ((await vscode.workspace.fs.stat(uri)).type & vscode.FileType.Directory) !== 0,
+    sync: async (paths) => {
+      const result = (await daemonManager.request("syncFolders", { paths })) as { reindexed?: boolean } | null;
+      if (!result?.reindexed) return;
+      codeLensProvider.clearCache();
+      codeLensProvider.refresh();
+      const stats = await daemonManager.getStats();
+      statusBar?.updateStats(stats.total_nodes || 0, stats.total_files || 0, "Ready", stats.efficiency || "0%");
+    },
+    onError: (error) => console.error("[comP] Error syncing folder changes:", error),
+  });
+
   const handle: IndexingWatch = {
     cancelPending: () => scheduling.cancelPending(),
     dispose: () => {
       scheduling.dispose();
       watcher.dispose();
+      folders.dispose();
+      folderWatcher.dispose();
     },
   };
   context.subscriptions.push(handle);
