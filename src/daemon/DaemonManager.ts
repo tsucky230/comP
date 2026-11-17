@@ -9,9 +9,12 @@
 
 import * as vscode from "vscode";
 import { spawn, ChildProcess } from "child_process";
-import * as path from "path";
-import { readFileSync } from "fs";
 import { buildDaemonEnv } from "../config/daemonEnv";
+import {
+  bundledDaemonBinaryPath,
+  resolveDaemonBinary,
+  USE_WORKSPACE_DAEMON_BUILD_SETTING,
+} from "../config/daemonBinary";
 
 interface JSONRPCRequest {
   jsonrpc: "2.0";
@@ -321,6 +324,7 @@ export class DaemonManager {
     queries_count?: number;
     avg_tokens_per_query?: number;
     last_activity_at?: number;
+    daemon_version?: string;
   }> {
     const result = await this.request("getStats", {});
     if (!result || typeof result !== "object") {
@@ -339,6 +343,7 @@ export class DaemonManager {
       // WHY: lets SidebarPanel show "last agent connection" without reading any
       // file itself — see daemon/src/mcp/mod.rs::latest_activity_timestamp's doc.
       last_activity_at: stats["last_activity_at"] !== undefined ? Number(stats["last_activity_at"]) : undefined,
+      daemon_version: typeof stats["daemon_version"] === "string" ? stats["daemon_version"] : undefined,
     };
   }
 
@@ -373,50 +378,19 @@ export class DaemonManager {
   }
 
   /**
-   * Get path to daemon binary
-   *
-   * Checks:
-   * 1. Bundled release binary (production)
-   * 2. Cargo build output (development)
+   * The bundled binary, or this workspace's cargo build when the developer set
+   * comp.useWorkspaceDaemonBuild (see resolveDaemonBinary for why it is opt-in).
+   * When nothing exists the bundled path is returned so the spawn error names it.
    */
   private getDaemonPath(): string {
-    // Production: bundled binary (different names per platform to support packaging all platforms in one VSIX)
-    let bundledBinaryName = "comp-daemon-linux";
-    if (process.platform === "win32") {
-      bundledBinaryName = "comp-daemon-win.exe";
-    } else if (process.platform === "darwin") {
-      bundledBinaryName = "comp-daemon-macos";
-    }
-
-    const bundledPath = path.join(
-      this.context.extensionPath,
-      "daemon",
-      "target",
-      "release",
-      bundledBinaryName
+    return (
+      resolveDaemonBinary({
+        extensionPath: this.context.extensionPath,
+        workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+        useWorkspaceBuild: vscode.workspace
+          .getConfiguration("comp")
+          .get<boolean>(USE_WORKSPACE_DAEMON_BUILD_SETTING, false),
+      }) ?? bundledDaemonBinaryPath(this.context.extensionPath)
     );
-
-    // Development: check workspace daemon build (first release, then debug)
-    // In development, the local cargo build outputs default to comp-daemon or comp-daemon.exe
-    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (workspacePath) {
-      const devBinaryName = process.platform === "win32" ? "comp-daemon.exe" : "comp-daemon";
-      const devPath = path.join(workspacePath, "daemon", "target", "release", devBinaryName);
-      try {
-        readFileSync(devPath);
-        return devPath;
-      } catch {
-        // Fallback to debug build if release build is not found
-        const debugPath = path.join(workspacePath, "daemon", "target", "debug", devBinaryName);
-        try {
-          readFileSync(debugPath);
-          return debugPath;
-        } catch {
-          // File doesn't exist, fall through
-        }
-      }
-    }
-
-    return bundledPath;
   }
 }

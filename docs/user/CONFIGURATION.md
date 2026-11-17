@@ -12,6 +12,7 @@ All settings are under `comp.*` in VS Code settings (`Ctrl+,`).
 | `comp.conversationRecording.claudeCode` | boolean | `true` | **Beta.** Record Claude Code turns (Stop hook). Only takes effect while `comp.conversationRecording.enabled` is on. |
 | `comp.indexWorkspaceFolders` | boolean | `true` | In a multi-root workspace, add the other workspace folders to each folder's index. See [Multi-root workspaces](#multi-root-workspaces). |
 | `comp.blockHiddenHomeFolders` | boolean | `true` | Refuse additional roots in hidden folders of your home directory (`~/.ssh`, `~/AppData`, …). See [Hidden folders of the home directory](#hidden-folders-of-the-home-directory). |
+| `comp.useWorkspaceDaemonBuild` | boolean | `false` | For comP developers. Run the daemon built in this workspace (`daemon/target/release/`, then `daemon/target/debug/`) instead of the bundled one, and write that path into agent MCP settings. Machine-level, so a repository's `.vscode/settings.json` cannot turn it on — but once on, it applies to **every** folder you open, so a cloned repository with a file at that path gets it run. Turn it on only while developing comP. comP warns when the running daemon's version differs from the extension's. |
 | `comp.ruleSharing.enabled` | boolean | `false` | **Beta.** Share git-tracked instruction files between agents: `run_pipeline` returns other agents' relevant rules and `check_rule_conflicts` lists possible contradictions. See [Beta Features → Rule sharing](./BETA_FEATURES.md#rule-sharing). |
 
 ## Conversation recording (beta)

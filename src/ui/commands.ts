@@ -19,6 +19,7 @@ import {
   UserScopeResult,
 } from "../mcp/AgentSetup";
 import { ConversationRecordingSettings } from "../config/conversationRecording";
+import { USE_WORKSPACE_DAEMON_BUILD_SETTING } from "../config/daemonBinary";
 
 /**
  * Current `comp.conversationRecording.*` values for the first workspace folder.
@@ -36,6 +37,11 @@ export function currentRecordingSettings(): ConversationRecordingSettings {
   };
 }
 
+/** `comp.useWorkspaceDaemonBuild` (machine scope, so a repository cannot turn it on). */
+export function useWorkspaceDaemonBuild(): boolean {
+  return vscode.workspace.getConfiguration("comp").get<boolean>(USE_WORKSPACE_DAEMON_BUILD_SETTING, false);
+}
+
 export function registerCommands(
   context: vscode.ExtensionContext,
   // WHY: A new DaemonManager is created on restart, so we accept a getter to get the latest
@@ -50,6 +56,7 @@ export function registerCommands(
       globalStorageDir: context.globalStorageUri?.fsPath,
       locale: isJapaneseLocale() ? "ja" : "en",
       conversationRecording: currentRecordingSettings(),
+      useWorkspaceDaemonBuild: useWorkspaceDaemonBuild(),
     });
 
   // WHY a channel rather than a notification: setup writes outside the

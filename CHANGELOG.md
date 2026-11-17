@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Security
+
+- **ワークスペースにあるデーモンのビルドを、既定では使わないようにした**（設定 `comp.useWorkspaceDaemonBuild`、既定 OFF、マシン単位）: 拡張機能とエージェント設定の自動生成・修復は、開いたフォルダに `daemon/target/release/comp-daemon(.exe)` があれば、同梱のバイナリより優先して使っていた。comP の開発環境では古いビルドが残り、0.12.0 に上げても 0.11.11 のデーモンが動き続けた（`syncFolders` が「unknown method」になり、フォルダの移動・削除が索引に反映されなかった）。また clone したリポジトリがそのパスに置いた実行ファイルを起動しうる。ON にできるのはユーザー設定だけで、ON にすると開いたすべてのフォルダに効く（`src/config/daemonBinary.ts`）。以前の版が `.mcp.json` などに書いた開発用ビルドのパスは、ファイルが残っている限り修復の対象にならないので、comP の開発環境では **comP: Setup Agents** を実行し直すか、ビルドを作り直すこと
+
+### Added
+
+- 拡張機能が起動したデーモンの版（`getStats` の `daemon_version`）が拡張機能の版と違うとき、警告を出す（`warnOnDaemonVersionMismatch`）
+
+### Fixed
+
+- **拡張機能を更新しても、`~/.claude.json` のプロジェクトごとの comP 登録が古い版のバイナリを指したままだった問題を修正**: 修復はユーザー全体の登録（最上位の `mcpServers`）しか見ていなかった。プロジェクトごとの登録はユーザー全体の登録より優先されるため、そのプロジェクトでは削除済みの拡張フォルダを指して comP が起動しなかった。`projects.*.mcpServers.comp` のうち、comP 拡張機能が配ったバイナリを指すものを、現行版の同梱バイナリへ直す（それ以外のコマンドは変えない）
+- **Codex の `config.toml` と、会話記録の Stop フック（`record-turn`）が、更新直後に古い版のバイナリを使い続けていた問題を修正**: パスが消えたときしか直していなかったが、VS Code は古い拡張フォルダをすぐには消さない。JSON の設定と同じく、古い版の拡張機能のバイナリを指していれば現行版へ移す。同じ版・新しい版の comP（別のエディタに入っているものなど）は、ファイルがある限り変えない（VS Code と Cursor の両方に入っていると、互いの設定を起動のたびに書き換え合っていたため。JSON の設定とユーザー全体の登録も同じ扱いにした）。Windows ではパスの大文字小文字を区別せずに比べる（`c:\` と `C:\` の違いだけで書き換えていた）
+
 ## [0.12.0] - 2026-11-17
 
 ### Added

@@ -12,6 +12,7 @@ import * as fs from "fs";
 import * as os from "os";
 import { spawn } from "child_process";
 import { DaemonManager } from "../daemon/DaemonManager";
+import { bundledDaemonBinaryPath, resolveDaemonBinary } from "../config/daemonBinary";
 import {
   ConversationRecordingSettings,
   DEFAULT_CONVERSATION_RECORDING,
@@ -132,6 +133,12 @@ export interface AgentSetupOptions {
    */
   codexHome?: string;
   /**
+   * `comp.useWorkspaceDaemonBuild`: write this workspace's cargo build into
+   * agent configs instead of the bundled binary. Off unless the caller passes
+   * it — see resolveDaemonBinary in config/daemonBinary.ts.
+   */
+  useWorkspaceDaemonBuild?: boolean;
+  /**
    * Language for generated prose (restart instructions, failure reasons, the
    * constitution snippet). Defaults to "en".
    *
@@ -194,6 +201,23 @@ interface McpConfigTarget {
  * Walk a key chain and return the object at the end, or null if any hop is
  * missing or is not a plain object.
  */
+/**
+ * Same file on this machine. Windows paths compare without case, as its file
+ * system does: Claude Code writes `c:\Users\…` where VS Code gives `C:\Users\…`,
+ * and treating those as different rewrote healthy configs on every upgrade check.
+ */
+function samePath(a: string, b: string): boolean {
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+/** [major, minor, patch] from a `tsucky230.comp-vscode-X.Y.Z…` folder, else null. */
+function extensionFolderVersion(folder: string): [number, number, number] | null {
+  const m = /^tsucky230\.comp-vscode-(\d+)\.(\d+)\.(\d+)(?:[-.][^\\/]*)?$/.exec(path.basename(folder));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
 function readObjectPath(doc: unknown, keys: string[]): Record<string, unknown> | null {
   let node: unknown = doc;
   for (const key of keys) {
@@ -235,6 +259,7 @@ export class AgentSetupManager {
   private globalStorageDir: string | undefined;
   private homeDir: string;
   private codexHomeOverride: string | undefined;
+  private useWorkspaceDaemonBuild: boolean;
   private locale: "en" | "ja";
   private conversationRecording: ConversationRecordingSettings;
 
@@ -250,6 +275,7 @@ export class AgentSetupManager {
     this.globalStorageDir = options?.globalStorageDir;
     this.homeDir = options?.homeDir ?? os.homedir();
     this.codexHomeOverride = options?.codexHome;
+    this.useWorkspaceDaemonBuild = options?.useWorkspaceDaemonBuild ?? false;
     this.locale = options?.locale ?? "en";
     this.conversationRecording = options?.conversationRecording ?? DEFAULT_CONVERSATION_RECORDING;
   }
@@ -1587,26 +1613,18 @@ export class AgentSetupManager {
    * - Absolute path of the daemon executable
    *
    * # Precedence
-   * 1. Development build: <workspaceRoot>/daemon/target/release/
-   * 2. Bundled package: <workspaceRoot>/.comp/bin/
+   * 1. This workspace's cargo build, only with useWorkspaceDaemonBuild
+   * 2. The binary bundled with the installed extension
+   * 3. <workspaceRoot>/.comp/bin/ (may not exist; callers check)
    */
   private getDaemonPath(): string {
+    const resolved = resolveDaemonBinary({
+      extensionPath: this.extensionPath,
+      workspaceRoot: this.workspaceRoot,
+      useWorkspaceBuild: this.useWorkspaceDaemonBuild,
+    });
+    if (resolved) return resolved;
     const binaryName = process.platform === "win32" ? "comp-daemon.exe" : "comp-daemon";
-    const bundledBinaryName = process.platform === "win32" ? "comp-daemon-win.exe"
-      : process.platform === "darwin" ? "comp-daemon-macos"
-      : "comp-daemon-linux";
-
-    // Development: cargo build output in workspace (default cargo output name)
-    const devPath = path.join(this.workspaceRoot, "daemon", "target", "release", binaryName);
-    if (fs.existsSync(devPath)) return devPath;
-
-    // Extension: binary bundled with the installed extension (platform-specific name)
-    if (this.extensionPath) {
-      const extPath = path.join(this.extensionPath, "daemon", "target", "release", bundledBinaryName);
-      if (fs.existsSync(extPath)) return extPath;
-    }
-
-    // Production: bundled binary in workspace .comp/bin
     return path.join(this.workspaceRoot, ".comp", "bin", binaryName);
   }
 
@@ -1614,17 +1632,14 @@ export class AgentSetupManager {
    * Path of the binary shipped inside the installed extension, if it is there.
    *
    * WHY separate from getDaemonPath(): global config files are shared by every
-   * project on the machine. getDaemonPath() prefers this workspace's cargo build,
-   * which would point other projects at a dev binary that moves or disappears.
+   * project on the machine. getDaemonPath() may prefer this workspace's cargo
+   * build, which would point other projects at a dev binary that moves or disappears.
    */
   private bundledDaemonPath(): string | null {
     if (!this.extensionPath) {
       return null;
     }
-    const bundledBinaryName = process.platform === "win32" ? "comp-daemon-win.exe"
-      : process.platform === "darwin" ? "comp-daemon-macos"
-      : "comp-daemon-linux";
-    const candidate = path.join(this.extensionPath, "daemon", "target", "release", bundledBinaryName);
+    const candidate = bundledDaemonBinaryPath(this.extensionPath);
     return fs.existsSync(candidate) ? candidate : null;
   }
 
@@ -1648,20 +1663,39 @@ export class AgentSetupManager {
     if (!/^tsucky230\.comp-vscode-\d+\.\d+\.\d+(?:[-.][^\\/]*)?$/.test(path.basename(extensionDir))) {
       return false;
     }
-    const bundledBinaryName = process.platform === "win32" ? "comp-daemon-win.exe"
-      : process.platform === "darwin" ? "comp-daemon-macos" : "comp-daemon-linux";
-    const expected = path.join(extensionDir, "daemon", "target", "release", bundledBinaryName);
-    const normalize = (value: string): string => {
-      const resolved = path.resolve(value);
-      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-    };
-    return normalize(command) === normalize(expected);
+    return samePath(command, bundledDaemonBinaryPath(extensionDir));
   }
 
   /**
-   * Refresh Claude Code's user registration when it points at an older comP
-   * extension. Unlike a general JSON repair, this never adopts an unrelated
-   * command: ~/.claude.json is shared across all projects and owned by Claude.
+   * A comP extension binary older than the running extension: the only kind a
+   * repair moves off while the file still exists.
+   *
+   * WHY older, not merely different: VS Code and Cursor (or Insiders) can both
+   * carry comP, and each refreshing toward its own copy would rewrite the
+   * other's choice on every start. Versions only move forward this way.
+   * When the running extension's folder carries no version (an Extension
+   * Development Host), any other installed copy counts as older, as before.
+   */
+  private isOlderInstalledExtensionBinary(command: string): boolean {
+    if (!this.isInstalledExtensionBinary(command)) return false;
+    const theirs = extensionFolderVersion(path.dirname(path.dirname(path.dirname(path.dirname(command)))));
+    const ours = this.extensionPath ? extensionFolderVersion(this.extensionPath) : null;
+    if (!theirs || !ours) return true;
+    for (let i = 0; i < 3; i++) {
+      if (theirs[i] !== ours[i]) return theirs[i] < ours[i];
+    }
+    return false;
+  }
+
+  /**
+   * Refresh Claude Code's registrations that point at an older comP extension:
+   * the user-scope one and the per-project (local-scope) ones under `projects`.
+   * Unlike a general JSON repair, this never adopts an unrelated command:
+   * ~/.claude.json is shared across all projects and owned by Claude.
+   *
+   * WHY per-project too: a local-scope entry overrides the user scope, and older
+   * comP versions wrote one per project. Left alone, those projects kept a path
+   * into a deleted extension folder and silently lost comP after an upgrade.
    */
   private repairClaudeCodeUserScope(): RepairEntry {
     const file = path.join(this.homeDir, ".claude.json");
@@ -1673,26 +1707,48 @@ export class AgentSetupManager {
     } catch (error) {
       return { file, status: "failed", reason: `invalid JSON: ${describeError(error)}` };
     }
-    const server = readObjectPath(doc, ["mcpServers", "comp"]);
-    if (!server) return { file, status: "skipped", reason: "no comp server entry" };
-
-    const command = server["command"];
-    if (typeof command !== "string" || !path.isAbsolute(command) || command.includes("${")) {
-      return { file, status: "skipped", reason: "command is not an absolute binary path" };
+    const servers: Record<string, unknown>[] = [];
+    const userServer = readObjectPath(doc, ["mcpServers", "comp"]);
+    if (userServer) servers.push(userServer);
+    const projects = readObjectPath(doc, ["projects"]);
+    for (const key of Object.keys(projects ?? {})) {
+      const projectServer = readObjectPath(projects, [key, "mcpServers", "comp"]);
+      if (projectServer) servers.push(projectServer);
     }
+    if (servers.length === 0) return { file, status: "skipped", reason: "no comp server entry" };
+
     const replacement = this.bundledDaemonPath();
     if (!replacement) return { file, status: "skipped", reason: "no bundled binary available" };
-    if (!this.isInstalledExtensionBinary(command)) {
-      return { file, status: "skipped", reason: "command is not a comP extension binary" };
-    }
-    if (path.resolve(command) === path.resolve(replacement)) {
-      return { file, status: "healthy" };
+
+    let from: string | undefined;
+    let healthy = false;
+    let skipReason: string | undefined;
+    for (const server of servers) {
+      const command = server["command"];
+      if (typeof command !== "string" || !path.isAbsolute(command) || command.includes("${")) {
+        skipReason ??= "command is not an absolute binary path";
+        continue;
+      }
+      if (!this.isInstalledExtensionBinary(command)) {
+        skipReason ??= "command is not a comP extension binary";
+        continue;
+      }
+      // The same or a newer comP in another editor is left alone while it exists.
+      if (samePath(command, replacement) ||
+        (!this.isOlderInstalledExtensionBinary(command) && fs.existsSync(command))) {
+        healthy = true;
+        continue;
+      }
+      server["command"] = replacement;
+      from ??= command;
     }
 
-    server["command"] = replacement;
+    if (from === undefined) {
+      return healthy ? { file, status: "healthy" } : { file, status: "skipped", reason: skipReason };
+    }
     this.backupIfExists(file);
     this.atomicWrite(file, JSON.stringify(doc, null, 2) + "\n");
-    return { file, status: "repaired", from: command, to: replacement };
+    return { file, status: "repaired", from, to: replacement };
   }
 
   /**
@@ -2006,11 +2062,16 @@ export class AgentSetupManager {
     }
 
     const exeBroken = !fs.existsSync(match[1]);
+    const available = this.resolveRepairPath("workspace");
+    // An older installed extension's binary outlives the upgrade for a while.
+    const exeOutdated = available !== null &&
+      this.isOlderInstalledExtensionBinary(match[1]) &&
+      !samePath(match[1], available);
     const wsStale = match[2] !== this.workspaceRoot.replace(/\\/g, "/");
-    if (!exeBroken && !wsStale) {
+    if (!exeBroken && !exeOutdated && !wsStale) {
       return { file, status: "healthy" };
     }
-    const exe = exeBroken ? this.resolveRepairPath("workspace") : match[1];
+    const exe = exeBroken || exeOutdated ? available : match[1];
     if (!exe) {
       return { file, status: "skipped", reason: "no replacement binary available" };
     }
@@ -2083,8 +2144,8 @@ export class AgentSetupManager {
     let replacement: string | null = null;
     const availableReplacement = this.resolveRepairPath(target.scope);
     const installedExtensionChanged = availableReplacement !== null &&
-      this.isInstalledExtensionBinary(command) &&
-      path.resolve(command) !== path.resolve(availableReplacement);
+      this.isOlderInstalledExtensionBinary(command) &&
+      !samePath(command, availableReplacement);
     if (commandBroken || installedExtensionChanged) {
       replacement = availableReplacement;
       if (!replacement) {
@@ -2162,10 +2223,16 @@ export class AgentSetupManager {
       return { file, status: "skipped", reason: "command is relative" };
     }
 
+    // Same rule as the JSON targets: an older installed extension's binary still
+    // exists right after an upgrade, so "broken" alone would keep it in use.
     const commandBroken = !fs.existsSync(command);
     let replacement: string | null = null;
-    if (commandBroken) {
-      replacement = this.resolveRepairPath(target.scope);
+    const availableReplacement = this.resolveRepairPath(target.scope);
+    const installedExtensionChanged = availableReplacement !== null &&
+      this.isOlderInstalledExtensionBinary(command) &&
+      !samePath(command, availableReplacement);
+    if (commandBroken || installedExtensionChanged) {
+      replacement = availableReplacement;
       if (!replacement) {
         return { file, status: "skipped", reason: "no replacement binary available" };
       }
@@ -2192,7 +2259,7 @@ export class AgentSetupManager {
       repairedBlock = withFreshRoot;
     }
 
-    if (!commandBroken && !envRepaired) {
+    if (!replacement && !envRepaired) {
       return { file, status: "healthy" };
     }
 

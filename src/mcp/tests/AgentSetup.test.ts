@@ -1335,6 +1335,9 @@ describe("AgentSetupManager", () => {
         // Codex reads CODEX_HOME, which would otherwise point these repairs at
         // the developer's own configuration.
         codexHome: path.join(caseDir, "codex-home"),
+        // These cases model a comP checkout whose developer opted into the
+        // workspace build; the default (off) is covered by its own case below.
+        useWorkspaceDaemonBuild: true,
       });
       repairCodexHome = path.join(caseDir, "codex-home");
       // The Antigravity target is redirected on top of that so the assertions
@@ -1573,6 +1576,135 @@ describe("AgentSetupManager", () => {
       expect(fs.readFileSync(userConfig, "utf-8")).to.equal(before);
     });
 
+    it("does not adopt a workspace build unless the developer opted in", () => {
+      // A cloned repository can ship daemon/target/release/comp-daemon(.exe);
+      // writing that path into an agent's config would make the agent run it.
+      const optedOut = new AgentSetupManager(mockDaemon as any, ws, extDir, {
+        homeDir: repairHomeDir,
+        codexHome: repairCodexHome,
+      });
+      (optedOut as any).antigravityConfigPath = () => globalConfig;
+      const cfg = path.join(ws, ".mcp.json");
+      writeJson(cfg, { mcpServers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } } } });
+
+      const entry = entryFor(optedOut.repairStaleConfigs(), cfg);
+
+      expect(entry?.status).to.equal("repaired");
+      expect(readJson(cfg).mcpServers.comp.command).to.equal(bundledBinary);
+    });
+
+    it("repairs per-project Claude registrations that point at an old extension, gone or still present", () => {
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      const oldPresent = path.join(
+        tmpRoot, "tsucky230.comp-vscode-0.11.6", "daemon", "target", "release", bundledBinaryName
+      );
+      const oldGone = path.join(
+        tmpRoot, "tsucky230.comp-vscode-0.8.0", "daemon", "target", "release", bundledBinaryName
+      );
+      fs.mkdirSync(path.dirname(oldPresent), { recursive: true });
+      fs.writeFileSync(oldPresent, "");
+      const custom = "/path/to/comp-daemon";
+      writeJson(userConfig, {
+        numStartups: 3,
+        projects: {
+          "E:/a": {
+            mcpServers: { comp: { command: oldPresent, env: { COMP_AGENT_ID: "claude-code" } }, other: { command: "o" } },
+            allowedTools: ["Read"],
+          },
+          "E:/b": { mcpServers: { comp: { command: oldGone } } },
+          "E:/c": { mcpServers: { comp: { command: devBinary } } },
+          "E:/d": { mcpServers: { comp: { command: custom } } },
+          "E:/e": { allowedTools: [] },
+        },
+      });
+      const original = fs.readFileSync(userConfig, "utf-8");
+
+      const entry = entryFor(repairManager.repairStaleConfigs(), userConfig);
+
+      expect(entry?.status).to.equal("repaired");
+      const written = readJson(userConfig);
+      expect(written.projects["E:/a"].mcpServers.comp.command).to.equal(bundledBinary);
+      expect(written.projects["E:/a"].mcpServers.comp.env).to.deep.equal({ COMP_AGENT_ID: "claude-code" });
+      expect(written.projects["E:/a"].mcpServers.other.command).to.equal("o");
+      expect(written.projects["E:/a"].allowedTools).to.deep.equal(["Read"]);
+      expect(written.projects["E:/b"].mcpServers.comp.command).to.equal(bundledBinary);
+      expect(written.projects["E:/c"].mcpServers.comp.command).to.equal(devBinary);
+      expect(written.projects["E:/d"].mcpServers.comp.command).to.equal(custom);
+      expect(written.projects["E:/e"]).to.deep.equal({ allowedTools: [] });
+      expect(written.numStartups).to.equal(3);
+      expect(fs.readFileSync(userConfig + ".bak", "utf-8")).to.equal(original);
+    });
+
+    it("treats a case-only path difference as the same binary on Windows", () => {
+      // Claude Code and VS Code write `c:\Users\…` and `C:\Users\…` for the same file.
+      // A middle segment is recased so the variant differs on every platform
+      // (a POSIX path starts with "/", which has no case).
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      const segment = `${path.sep}daemon${path.sep}target${path.sep}`;
+      expect(bundledBinary).to.include(segment);
+      const otherCase = bundledBinary.replace(segment, segment.toUpperCase());
+      // The global Codex config also takes the bundled binary, so it shares the rule.
+      const codexConfig = path.join(repairCodexHome, "config.toml");
+      fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+      fs.writeFileSync(codexConfig, ["[mcp_servers.comp]", `command = '${otherCase}'`, ""].join("\n"), "utf-8");
+      writeJson(userConfig, { mcpServers: { comp: { command: otherCase } } });
+      const userBefore = fs.readFileSync(userConfig, "utf-8");
+      const codexBefore = fs.readFileSync(codexConfig, "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      if (process.platform === "win32") {
+        expect(entryFor(entries, userConfig)?.status).to.equal("healthy");
+        expect(fs.readFileSync(userConfig, "utf-8")).to.equal(userBefore);
+        expect(entryFor(entries, codexConfig)?.status).to.equal("healthy");
+        expect(fs.readFileSync(codexConfig, "utf-8")).to.equal(codexBefore);
+      } else {
+        // Case-sensitive file systems: a differently cased path is another file.
+        expect(entryFor(entries, userConfig)?.status).to.not.equal("healthy");
+      }
+    });
+
+    it("leaves the same or a newer comP version installed in another editor alone", () => {
+      // VS Code and Cursor (or Insiders) can both carry comP. Each repairing toward
+      // its own copy would rewrite the other's choice on every start; only an
+      // older version is worth moving off.
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      const cfg = path.join(ws, ".mcp.json");
+      const sameVersionElsewhere = path.join(
+        tmpRoot, "other-editor", "tsucky230.comp-vscode-0.11.9", "daemon", "target", "release", bundledBinaryName
+      );
+      const newerElsewhere = path.join(
+        tmpRoot, "other-editor", "tsucky230.comp-vscode-0.12.1", "daemon", "target", "release", bundledBinaryName
+      );
+      for (const binary of [sameVersionElsewhere, newerElsewhere]) {
+        fs.mkdirSync(path.dirname(binary), { recursive: true });
+        fs.writeFileSync(binary, "");
+      }
+      writeJson(userConfig, {
+        mcpServers: { comp: { command: sameVersionElsewhere } },
+        projects: { "E:/a": { mcpServers: { comp: { command: newerElsewhere } } } },
+      });
+      writeJson(cfg, { mcpServers: { comp: { command: newerElsewhere, env: { COMP_WORKSPACE_ROOT: ws } } } });
+      const userBefore = fs.readFileSync(userConfig, "utf-8");
+      const cfgBefore = fs.readFileSync(cfg, "utf-8");
+
+      const entries = repairManager.repairStaleConfigs();
+
+      expect(entryFor(entries, userConfig)?.status).to.not.equal("repaired");
+      expect(fs.readFileSync(userConfig, "utf-8")).to.equal(userBefore);
+      expect(entryFor(entries, cfg)?.status).to.equal("healthy");
+      expect(fs.readFileSync(cfg, "utf-8")).to.equal(cfgBefore);
+    });
+
+    it("reports per-project Claude registrations on the current extension as healthy", () => {
+      const userConfig = path.join(repairHomeDir, ".claude.json");
+      writeJson(userConfig, { projects: { "E:/a": { mcpServers: { comp: { command: bundledBinary } } } } });
+      const before = fs.readFileSync(userConfig, "utf-8");
+
+      expect(entryFor(repairManager.repairStaleConfigs(), userConfig)?.status).to.equal("healthy");
+      expect(fs.readFileSync(userConfig, "utf-8")).to.equal(before);
+    });
+
     it("repairs .gemini/settings.json under the mcpServers key (Gemini CLI, workspace)", () => {
       const cfg = path.join(ws, ".gemini", "settings.json");
       writeJson(cfg, { mcpServers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } } } });
@@ -1797,6 +1929,21 @@ describe("AgentSetupManager", () => {
         expect(repaired).to.include('url = "http://127.0.0.1:9000/mcp"');
         expect(repaired).to.include("[mcp_servers.other]");
         expect(repaired).to.include('command = "/usr/bin/other"');
+      });
+
+      it("moves off an older installed extension even while that binary still exists", () => {
+        const oldPresent = path.join(
+          tmpRoot, "tsucky230.comp-vscode-0.11.6", "daemon", "target", "release", bundledBinaryName
+        );
+        fs.mkdirSync(path.dirname(oldPresent), { recursive: true });
+        fs.writeFileSync(oldPresent, "");
+        writeToml(codexConfig(), ["[mcp_servers.comp]", `command = '${oldPresent}'`, "args = []", ""].join("\n"));
+
+        const entry = entryFor(repairManager.repairStaleConfigs(), codexConfig());
+
+        expect(entry?.status).to.equal("repaired");
+        expect(entry?.from).to.equal(oldPresent);
+        expect(readToml(codexConfig())).to.include(`command = '${bundledBinary}'`);
       });
 
       it("reads a command written as a basic string", () => {

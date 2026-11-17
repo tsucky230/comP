@@ -14,7 +14,8 @@ import { DaemonManager } from "./daemon/DaemonManager";
 import { StatusBar } from "./ui/StatusBar";
 import { SidebarPanel } from "./ui/SidebarPanel";
 import { DependencyCodeLensProvider } from "./ui/CodeLens";
-import { currentRecordingSettings, registerCommands } from "./ui/commands";
+import { currentRecordingSettings, registerCommands, useWorkspaceDaemonBuild } from "./ui/commands";
+import { describeDaemonVersionMismatch } from "./config/daemonBinary";
 import { syncConversationRecording } from "./config/conversationRecording";
 import { syncRuleSharing } from "./config/ruleSharing";
 import { syncWorkspaceFolders } from "./config/workspaceFolders";
@@ -101,7 +102,7 @@ export function repairMcpConfigs(context: vscode.ExtensionContext): void {
       null as unknown as DaemonManager,
       workspaceRoot,
       context.extensionPath,
-      { locale: isJapaneseLocale() ? "ja" : "en" }
+      { locale: isJapaneseLocale() ? "ja" : "en", useWorkspaceDaemonBuild: useWorkspaceDaemonBuild() }
     );
     const repaired = agentSetup.repairStaleConfigs().filter((entry) => entry.status === "repaired");
 
@@ -119,6 +120,33 @@ export function repairMcpConfigs(context: vscode.ExtensionContext): void {
   } catch (error) {
     console.warn("[comP] MCP config repair failed:", error);
   }
+}
+
+/**
+ * Warn when the daemon the extension started is not the extension's version.
+ *
+ * WHY: requests added in a newer extension (e.g. 0.12.0's `syncFolders`) fail
+ * on an older daemon, and those failures are logged, not shown — an upgraded
+ * extension ran a stale workspace build of 0.11.11 without anyone noticing.
+ * The bundled binary always matches, so this fires only for a workspace build.
+ *
+ * Exported for unit testing; startDaemonStack() is the only production caller.
+ */
+export function warnOnDaemonVersionMismatch(
+  context: vscode.ExtensionContext,
+  daemonVersion: string | undefined
+): void {
+  const extensionVersion: unknown = context.extension?.packageJSON?.version;
+  if (typeof extensionVersion !== "string") return;
+  const mismatch = describeDaemonVersionMismatch(extensionVersion, daemonVersion);
+  if (!mismatch) return;
+  console.warn(`[comP] Daemon version mismatch: ${mismatch}`);
+  void vscode.window.showWarningMessage(
+    t(
+      `comP: the running daemon is not this extension's version (${mismatch}), so some features may not work. If you use comp.useWorkspaceDaemonBuild, rebuild the daemon (cargo build --release) and reload the window.`,
+      `comP: 動いているデーモンが拡張機能と別の版です（${mismatch}）。一部の機能が動かない場合があります。comp.useWorkspaceDaemonBuild を使っている場合は、デーモンを作り直して（cargo build --release）ウィンドウを再読み込みしてください。`
+    )
+  );
 }
 
 /**
@@ -219,7 +247,9 @@ function watchConversationRecording(context: vscode.ExtensionContext): void {
       previous = now;
       if (!turnedOn) return;
 
-      const probe = new AgentSetupManager(null as unknown as DaemonManager, workspaceRoot, context.extensionPath);
+      const probe = new AgentSetupManager(null as unknown as DaemonManager, workspaceRoot, context.extensionPath, {
+        useWorkspaceDaemonBuild: useWorkspaceDaemonBuild(),
+      });
       if (probe.historyHookInstalled()) return;
       const runSetup = t("Run Setup Agents", "Setup Agents を実行");
       const answer = await vscode.window.showInformationMessage(
@@ -448,6 +478,7 @@ async function startDaemonStack(context: vscode.ExtensionContext): Promise<void>
   try {
     const stats = await daemonManager.getStats();
     statusBar?.updateStats(stats.total_nodes || 0, stats.total_files || 0, "Ready", stats.efficiency || "0%");
+    warnOnDaemonVersionMismatch(context, stats.daemon_version);
   } catch {
     statusBar?.show("Ready");
   }

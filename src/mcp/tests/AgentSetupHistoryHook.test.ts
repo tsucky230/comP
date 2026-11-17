@@ -258,6 +258,33 @@ describe("AgentSetupManager — Claude Code history hook", () => {
       expect(stopCommands(readJson(localSettings))).to.deep.equal(["keep.sh", expectedCommand(daemon, ws)]);
     });
 
+    it("moves a hook off an older installed extension even while that binary still exists", () => {
+      // VS Code removes an old extension folder only later, so after an upgrade
+      // the previous version's binary is still there and still "healthy".
+      const bundledName = process.platform === "win32" ? "comp-daemon-win.exe"
+        : process.platform === "darwin" ? "comp-daemon-macos" : "comp-daemon-linux";
+      const oldExtensionBinary = path.join(
+        path.dirname(ws), "tsucky230.comp-vscode-0.11.6", "daemon", "target", "release", bundledName
+      );
+      writeText(oldExtensionBinary, "");
+      const old = `"${fwd(oldExtensionBinary)}" record-turn "${fwd(ws)}"`;
+      writeJson(localSettings, { hooks: { Stop: [{ hooks: [{ type: "command", command: old }] }] } });
+      (manager as any).resolveRepairPath = () => daemon;
+      const entry = hookEntry(manager.repairStaleConfigs());
+      expect(entry).to.deep.include({ status: "repaired", from: old, to: expectedCommand(daemon, ws) });
+      expect(stopCommands(readJson(localSettings))).to.deep.equal([expectedCommand(daemon, ws)]);
+    });
+
+    it("keeps a hook that points at a binary comP did not ship, while it exists", () => {
+      const custom = path.join(path.dirname(ws), "custom-build", "comp-daemon.exe");
+      writeText(custom, "");
+      const own = `"${fwd(custom)}" record-turn "${fwd(ws)}"`;
+      writeJson(localSettings, { hooks: { Stop: [{ hooks: [{ type: "command", command: own }] }] } });
+      (manager as any).resolveRepairPath = () => daemon;
+      expect(hookEntry(manager.repairStaleConfigs())?.status).to.equal("healthy");
+      expect(stopCommands(readJson(localSettings))).to.deep.equal([own]);
+    });
+
     it("rewrites the workspace argument when the project moved", () => {
       const moved = `"${fwd(daemon)}" record-turn "C:/old/location"`;
       writeJson(localSettings, { hooks: { Stop: [{ hooks: [{ type: "command", command: moved }] }] } });

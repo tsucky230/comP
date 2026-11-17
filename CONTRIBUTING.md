@@ -88,8 +88,17 @@ it already has the CI's platform-specific filename (`comp-daemon-win.exe`,
 `comp-daemon-linux`, `comp-daemon-macos`). A local `cargo build --release`
 produces `comp-daemon`/`comp-daemon.exe` instead, so `.vscodeignore`'s allowlist
 won't match it and the resulting VSIX will silently ship without a daemon
-binary — the extension will fail to start on any workspace that doesn't
-already have a matching dev build.
+binary — the extension will fail to start.
+
+### Running Your Own Daemon Build in VS Code
+
+The extension runs the daemon bundled with it. To run the one you built in this
+checkout (`daemon/target/release/comp-daemon`, then `daemon/target/debug/`), turn
+on `comp.useWorkspaceDaemonBuild` in your **user** settings; workspace settings
+cannot turn it on. Once on, it applies to every folder you open, so turn it off
+when you are not working on comP. Rebuild after pulling: comP warns when the daemon's version
+differs from the extension's. On Windows a running `comp-daemon.exe` cannot be
+overwritten, so stop it (or rename the file) before `cargo build --release`.
 
 To build and package a VSIX that actually works when installed:
 

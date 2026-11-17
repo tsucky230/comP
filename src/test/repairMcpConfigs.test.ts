@@ -29,6 +29,10 @@ describe("repairMcpConfigs", () => {
   let infoStub: sinon.SinonStub;
   let originalHome: string | undefined;
   let originalUserProfile: string | undefined;
+  let originalGetConfiguration: unknown;
+  // These cases model a comP checkout whose developer opted into the workspace
+  // build (comp.useWorkspaceDaemonBuild); the default is covered separately.
+  let useWorkspaceBuild: boolean;
 
   const writeJson = (file: string, value: unknown): void => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -56,6 +60,11 @@ describe("repairMcpConfigs", () => {
     process.env.USERPROFILE = caseDir;
 
     mockContext = { extensionPath: extDir };
+    useWorkspaceBuild = true;
+    originalGetConfiguration = (vscode.workspace as any).getConfiguration;
+    (vscode.workspace as any).getConfiguration = () => ({
+      get: (key: string, fallback?: unknown) => (key === "useWorkspaceDaemonBuild" ? useWorkspaceBuild : fallback),
+    });
     infoStub = sinon.stub().resolves(undefined);
     (vscode.window as any).showInformationMessage = infoStub;
     (vscode.workspace as any).workspaceFolders = [{ uri: { fsPath: ws } }];
@@ -67,6 +76,7 @@ describe("repairMcpConfigs", () => {
     if (originalHome === undefined) delete process.env.HOME;
     if (originalUserProfile === undefined) delete process.env.USERPROFILE;
     (vscode.workspace as any).workspaceFolders = undefined;
+    (vscode.workspace as any).getConfiguration = originalGetConfiguration;
   });
 
   after(() => {
@@ -93,6 +103,22 @@ describe("repairMcpConfigs", () => {
     expect(JSON.parse(fs.readFileSync(configPath, "utf-8")).servers.comp.command).to.equal(devBinary);
     expect(infoStub.calledOnce).to.be.true;
     expect(infoStub.firstCall.args[0]).to.contain("MCP");
+  });
+
+  it("uses the bundled binary, not the workspace build, while the setting is off", () => {
+    useWorkspaceBuild = false;
+    const bundledName = process.platform === "win32" ? "comp-daemon-win.exe"
+      : process.platform === "darwin" ? "comp-daemon-macos" : "comp-daemon-linux";
+    const bundled = path.join(extDir, "daemon", "target", "release", bundledName);
+    fs.mkdirSync(path.dirname(bundled), { recursive: true });
+    fs.writeFileSync(bundled, "");
+    writeJson(configPath, {
+      servers: { comp: { command: stalePath, args: [], env: { COMP_WORKSPACE_ROOT: ws } } },
+    });
+
+    repairMcpConfigs(mockContext);
+
+    expect(JSON.parse(fs.readFileSync(configPath, "utf-8")).servers.comp.command).to.equal(bundled);
   });
 
   it("leaves a healthy config untouched and stays quiet", () => {
