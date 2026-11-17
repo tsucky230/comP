@@ -243,9 +243,12 @@ fn load_with_refuses_a_symlink_into_a_hidden_home_folder() {
     std::os::unix::fs::symlink(&ssh, &innocent).unwrap();
     set_roots(main.path(), &[innocent.to_string_lossy().to_string()]);
 
+    // WHY from_vars, as from_env does: on macOS the temp folder sits behind a
+    // symlink (/var -> /private/var), so the link's canonical target is only
+    // under the home once the home's canonical form is known too.
     let roots = Roots::load_with(
         &main.path().to_string_lossy(),
-        &HomePolicy::new(&[home.path().to_string_lossy().to_string()], false),
+        &HomePolicy::from_vars(Some(&home.path().to_string_lossy()), None, None),
     );
 
     assert!(roots.extras().is_empty(), "kept: {:?}", roots.extras());

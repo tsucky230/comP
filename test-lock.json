@@ -1,9 +1,9 @@
 {
-  "commit": "974eeed466323a673e4118c3ee70439a90043b93",
+  "commit": "858ebe1cb60dbfa8cc9b6bc315759e4781ae5652",
   "files": {
     "daemon/src/indexer/caller_edges_tests.rs": "7b297352922c6911aa2dfc6120d926cc463399b60dec8bf480834b5e8f97f829",
     "daemon/src/indexer/folder_reindex_tests.rs": "7602896f1cd136665468b2c24df72b7bc86789419a614eebd9cb5925ec899e67",
-    "daemon/src/indexer/home_policy_tests.rs": "2da8f9a8b0ab8f15934de9cefb85fd16d5bb08e9f317f0a1b7af15c07f46f6b4",
+    "daemon/src/indexer/home_policy_tests.rs": "6d5ef02eb3764c901c7f7b3ea8b638be923f387f2c4114e477411ac3b5371ad1",
     "daemon/src/indexer/multi_root_tests.rs": "448d041734370feb7652bacbdd2ef7439912a57cd34218d0c8d4c164fa368e71",
     "daemon/src/indexer/roots_tests.rs": "866d75e3f72733656a173bb6bc21e1ac1b6eea8744d47db26fc476eb3d757154",
     "daemon/src/mcp/home_policy_tests.rs": "345572f80767fa4ffeeb1c25a7340d3e296ad393cc69aa5ea0bd6a744e2a4f1d",
@@ -23,7 +23,7 @@
     "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e",
     "src/watch/tests/folderWatch.test.ts": "683566a52d7b768abc6e870a0da3b64235b051b98235e5cd21d2d7d4c9940fc6"
   },
-  "frozen_at": "2026-11-17T06:48:25Z",
+  "frozen_at": "2026-11-17T08:03:17Z",
   "history": [
     {
       "approved_by": null,
@@ -324,6 +324,18 @@
       },
       "note": "reviewer 指摘: 変わっていない呼び出し元のエッジが全体の差分索引で失われる、作り直したフォルダの判定漏れ、追加ルートのホーム保護、の回帰テストを追加",
       "request": "TCR-17"
+    },
+    {
+      "approved_by": "claude",
+      "at": "2026-11-17T08:03:17Z",
+      "commit": "858ebe1cb60dbfa8cc9b6bc315759e4781ae5652",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "macOS の CI で失敗: テストが正規化していない一時フォルダ（/var→/private/var のリンク下）をホームとして HomePolicy::new に渡していた。本番と同じ from_vars で作るよう修正（判定の厳しさは不変）",
+      "request": "TCR-18"
     }
   ],
   "metrics": {
