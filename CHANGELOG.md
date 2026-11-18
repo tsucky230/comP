@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-18
+
 ### Security
 
 - **ワークスペースにあるデーモンのビルドを、既定では使わないようにした**（設定 `comp.useWorkspaceDaemonBuild`、既定 OFF、マシン単位）: 拡張機能とエージェント設定の自動生成・修復は、開いたフォルダに `daemon/target/release/comp-daemon(.exe)` があれば、同梱のバイナリより優先して使っていた。comP の開発環境では古いビルドが残り、0.12.0 に上げても 0.11.11 のデーモンが動き続けた（`syncFolders` が「unknown method」になり、フォルダの移動・削除が索引に反映されなかった）。また clone したリポジトリがそのパスに置いた実行ファイルを起動しうる。ON にできるのはユーザー設定だけで、ON にすると開いたすべてのフォルダに効く（`src/config/daemonBinary.ts`）。以前の版が `.mcp.json` などに書いた開発用ビルドのパスは、ファイルが残っている限り修復の対象にならないので、comP の開発環境では **comP: Setup Agents** を実行し直すか、ビルドを作り直すこと
