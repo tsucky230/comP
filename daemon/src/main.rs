@@ -9,6 +9,7 @@
 use log::info;
 use std::sync::Arc;
 
+mod build_staleness;
 mod indexer;
 mod graph;
 mod search;
@@ -49,6 +50,9 @@ pub struct AppState {
     /// requests are answered, and two passes over the same DB at once would
     /// each judge the other's half-written rows as changed or deleted.
     pub full_pass_lock: tokio::sync::Mutex<()>,
+    /// Set when this process is the workspace's own cargo build and older than
+    /// its sources; see [`build_staleness`]. Reported by `initialize` and `getStats`.
+    pub build_staleness: Option<String>,
 }
 
 impl AppState {
@@ -86,6 +90,9 @@ impl AppState {
             agent_id: agent_id.to_string(),
             home_policy: indexer::roots::HomePolicy::from_env(),
             full_pass_lock: tokio::sync::Mutex::new(()),
+            build_staleness: std::env::current_exe()
+                .ok()
+                .and_then(|exe| build_staleness::stale_workspace_build(&exe, std::path::Path::new(workspace_root))),
         })
     }
 }
@@ -134,6 +141,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     info!("Application state initialized");
+    if let Some(warning) = &state.build_staleness {
+        log::warn!("{}", warning);
+    }
 
     // Start indexing in the background and immediately start the MCP server.
     // WHY: Safe to share across threads now that GraphDB uses Mutex<Connection>.
@@ -226,6 +236,40 @@ mod integration_tests {
         assert_eq!(state.workspace_root, root, "workspace_root must equal the path passed to new()");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// A stale workspace build is announced where agents and the extension look:
+    /// the MCP `initialize` instructions and `getStats`.
+    #[tokio::test]
+    async fn a_stale_workspace_build_is_reported_by_initialize_and_get_stats() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let mut state = AppState::new(temp_dir.path().to_str().unwrap(), "test-agent")
+            .await
+            .expect("AppState::new failed");
+        // The test binary does not live under this workspace's daemon/target.
+        assert_eq!(state.build_staleness, None);
+        state.build_staleness = Some("stale build: rebuild it".to_string());
+        let server = mcp::MCPServer::new(Arc::new(state));
+
+        let init = server.handle_initialize(serde_json::json!({})).await.expect("initialize");
+        assert!(init["instructions"].as_str().expect("instructions").contains("stale build: rebuild it"));
+        let stats = server.handle_get_stats().await.expect("getStats");
+        assert_eq!(stats["daemon_build_stale"], "stale build: rebuild it");
+    }
+
+    #[tokio::test]
+    async fn a_current_build_adds_no_instructions_or_stale_flag() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let state = AppState::new(temp_dir.path().to_str().unwrap(), "test-agent")
+            .await
+            .expect("AppState::new failed");
+        let server = mcp::MCPServer::new(Arc::new(state));
+
+        let init = server.handle_initialize(serde_json::json!({})).await.expect("initialize");
+        assert!(init.get("instructions").is_none());
+        let stats = server.handle_get_stats().await.expect("getStats");
+        // Present and null, so clients can tell "not stale" from "too old to report it".
+        assert!(stats.get("daemon_build_stale").is_some_and(|v| v.is_null()), "{stats}");
     }
 
     /// Verify getStats returns correct initial values (0/0/0) after MCPServer creation

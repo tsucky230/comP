@@ -11,10 +11,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 ### Security
 
 - **ワークスペースにあるデーモンのビルドを、既定では使わないようにした**（設定 `comp.useWorkspaceDaemonBuild`、既定 OFF、マシン単位）: 拡張機能とエージェント設定の自動生成・修復は、開いたフォルダに `daemon/target/release/comp-daemon(.exe)` があれば、同梱のバイナリより優先して使っていた。comP の開発環境では古いビルドが残り、0.12.0 に上げても 0.11.11 のデーモンが動き続けた（`syncFolders` が「unknown method」になり、フォルダの移動・削除が索引に反映されなかった）。また clone したリポジトリがそのパスに置いた実行ファイルを起動しうる。ON にできるのはユーザー設定だけで、ON にすると開いたすべてのフォルダに効く（`src/config/daemonBinary.ts`）。以前の版が `.mcp.json` などに書いた開発用ビルドのパスは、ファイルが残っている限り修復の対象にならないので、comP の開発環境では **comP: Setup Agents** を実行し直すか、ビルドを作り直すこと
+- **エージェント設定に `<workspace>/.comp/bin/comp-daemon(.exe)` を書かないようにした**: 同梱のバイナリが見つからないときの最後の候補だったが、そこへ置く処理はどこにもなく、置けるのはリポジトリだけだった。設定の生成でも修復でも候補にしない
+- **Windows で外部コマンド（`claude` など）を起動するとき、作業フォルダにある同名の実行ファイルを使わないようにした**: cmd.exe 経由で起動するため、PATH より先に作業フォルダが探され、プロジェクトのフォルダで動かすとリポジトリが置いた `claude.bat` などが実行されうる。起動時に `NoDefaultCurrentDirectoryInExePath=1` を渡す
 
 ### Added
 
 - 拡張機能が起動したデーモンの版（`getStats` の `daemon_version`）が拡張機能の版と違うとき、警告を出す（`warnOnDaemonVersionMismatch`）
+- **デーモンが、自分がソースより古いワークスペースのビルドだと気づいたら知らせる**（`daemon/src/build_staleness.rs`）: 実行ファイルが `<workspace>/daemon/target/` の下にあり、`daemon/src/**/*.rs`・`Cargo.toml`・`Cargo.lock` のどれかがビルド後に変わっていれば、MCP の `initialize` の instructions（エージェントがモデルに見せる）と `getStats` の `daemon_build_stale`（拡張機能が警告に出す）で伝える。同じ版番号のまま古いビルドが動いている場合は、版の照合では見つけられないため
+
+### Changed
+
+- **`~/.claude.json` の comP 登録の修復を、できるだけ `claude mcp` CLI 経由にした**: ファイルを直接書き戻すと、その間に Claude Code が書いた内容を消すか、Claude Code に修正を上書きされるおそれがあった。
+  - 古い版を指すプロジェクトごとの登録は、そのフォルダで `claude mcp remove --scope local` するだけにし、最新のユーザー全体の登録に任せる（作り直す途中で失敗しても、複数のウィンドウが同時に消しても、comP がなくなる状態を作らないため）。ユーザー全体の登録がないときは消さず、従来どおりファイル上でパスを書き換える
+  - 古い版を指すユーザー全体の登録は remove と add で作り直す（args と env はそのまま、`COMP_AGENT_ID=claude-code` がなければ足す）。add が通らなかったときはファイルに直接書き戻す
+  - CLI がない、プロジェクトのフォルダがない、CLI で表せない項目があるなど、CLI で直しきれなかった分は、従来どおりファイルを直接書く
+  - CLI は1件ごとにプロセスを起動するので、拡張機能の起動を待たせないよう後から走らせる。失敗したら警告を出す
+- **Setup Agents が登録するユーザー全体の comP に `COMP_AGENT_ID=claude-code` を付けるようにした**: 付いていないと、その登録で動く Claude Code の記録が `unknown` になっていた
 
 ### Fixed
 

@@ -325,6 +325,7 @@ export class DaemonManager {
     avg_tokens_per_query?: number;
     last_activity_at?: number;
     daemon_version?: string;
+    daemon_build_stale?: string;
   }> {
     const result = await this.request("getStats", {});
     if (!result || typeof result !== "object") {
@@ -344,6 +345,7 @@ export class DaemonManager {
       // file itself — see daemon/src/mcp/mod.rs::latest_activity_timestamp's doc.
       last_activity_at: stats["last_activity_at"] !== undefined ? Number(stats["last_activity_at"]) : undefined,
       daemon_version: typeof stats["daemon_version"] === "string" ? stats["daemon_version"] : undefined,
+      daemon_build_stale: typeof stats["daemon_build_stale"] === "string" ? stats["daemon_build_stale"] : undefined,
     };
   }
 

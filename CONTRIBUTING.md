@@ -97,8 +97,10 @@ checkout (`daemon/target/release/comp-daemon`, then `daemon/target/debug/`), tur
 on `comp.useWorkspaceDaemonBuild` in your **user** settings; workspace settings
 cannot turn it on. Once on, it applies to every folder you open, so turn it off
 when you are not working on comP. Rebuild after pulling: comP warns when the daemon's version
-differs from the extension's. On Windows a running `comp-daemon.exe` cannot be
-overwritten, so stop it (or rename the file) before `cargo build --release`.
+differs from the extension's, and a workspace build warns by itself (to the
+agent and in VS Code) once `daemon/src`, `Cargo.toml` or `Cargo.lock` is newer
+than it. On Windows a running `comp-daemon.exe` cannot be overwritten, so stop
+it (or rename the file) before `cargo build --release`.
 
 To build and package a VSIX that actually works when installed:
 

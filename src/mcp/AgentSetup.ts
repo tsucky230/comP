@@ -102,8 +102,19 @@ export interface GenerateConfigResult {
 /** Runs an external command. Injectable so tests never spawn a real process. */
 export type CommandRunner = (
   file: string,
-  args: string[]
+  args: string[],
+  options?: { cwd?: string }
 ) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+
+/** A comP registration in ~/.claude.json that should move to the bundled binary. */
+interface ClaudeRegistrationFix {
+  /** `local` is a per-project entry under `projects[project]` */
+  scope: "user" | "local";
+  project?: string;
+  /** The registration object inside the parsed document */
+  server: Record<string, unknown>;
+  from: string;
+}
 
 export interface UserScopeResult {
   registered: boolean;
@@ -1588,6 +1599,8 @@ export class AgentSetupManager {
       "comp",
       "-e",
       "RUST_LOG=info",
+      "-e",
+      `COMP_AGENT_ID=${AgentSetupManager.agentIdFor("Claude Code")}`,
       "--",
       daemonPath,
     ];
@@ -1615,7 +1628,11 @@ export class AgentSetupManager {
    * # Precedence
    * 1. This workspace's cargo build, only with useWorkspaceDaemonBuild
    * 2. The binary bundled with the installed extension
-   * 3. <workspaceRoot>/.comp/bin/ (may not exist; callers check)
+   * 3. Nothing exists: the bundled path anyway (callers that adopt a path check
+   *    it exists), or the bare binary name when there is no extension path
+   *
+   * WHY no `<workspaceRoot>/.comp/bin/` fallback any more: nothing ever installs
+   * there, so a binary at that path could only have come with the repository.
    */
   private getDaemonPath(): string {
     const resolved = resolveDaemonBinary({
@@ -1624,8 +1641,8 @@ export class AgentSetupManager {
       useWorkspaceBuild: this.useWorkspaceDaemonBuild,
     });
     if (resolved) return resolved;
-    const binaryName = process.platform === "win32" ? "comp-daemon.exe" : "comp-daemon";
-    return path.join(this.workspaceRoot, ".comp", "bin", binaryName);
+    if (this.extensionPath) return bundledDaemonBinaryPath(this.extensionPath);
+    return process.platform === "win32" ? "comp-daemon.exe" : "comp-daemon";
   }
 
   /**
@@ -1698,33 +1715,183 @@ export class AgentSetupManager {
    * into a deleted extension folder and silently lost comP after an upgrade.
    */
   private repairClaudeCodeUserScope(): RepairEntry {
+    // WHY read, change and write back to back: Claude Code rewrites this file
+    // often, and anything it saves between our read and our write is lost. This
+    // direct write is the fallback; repairClaudeCodeRegistrations goes through
+    // the CLI when it can.
+    const plan = this.planClaudeCodeRepairs();
+    if (plan.done) return plan.done;
+    for (const fix of plan.fixes) {
+      fix.server["command"] = plan.replacement;
+    }
+    this.backupIfExists(plan.file);
+    this.atomicWrite(plan.file, JSON.stringify(plan.doc, null, 2) + "\n");
+    return { file: plan.file, status: "repaired", from: plan.fixes[0].from, to: plan.replacement };
+  }
+
+  /**
+   * Same repair as repairClaudeCodeUserScope, applied through `claude mcp`
+   * wherever it can be.
+   *
+   * WHY the CLI: ~/.claude.json is Claude Code's own state and a running Claude
+   * Code rewrites it, so a direct write can lose its changes or be lost to them.
+   *
+   * WHY per-project registrations are removed rather than re-added: a stale one
+   * is only an override of the user-scope registration. Removing it is the one
+   * CLI step that cannot leave a project without comP — a failed or late remove,
+   * or two windows removing at once, all end with either the old override or the
+   * user scope in effect. So projects lose their override only while a current
+   * user-scope registration exists to take over; otherwise their command is
+   * rewritten in the file as before. The user scope itself is replaced with
+   * remove + add, and written into the file directly if the add did not land.
+   *
+   * Whatever is still stale afterwards (no CLI, a project folder that is gone, a
+   * key the CLI spells differently) is finished by the direct write.
+   */
+  async repairClaudeCodeRegistrations(runner: CommandRunner = defaultCommandRunner): Promise<RepairEntry> {
+    const plan = this.planClaudeCodeRepairs();
+    if (plan.done) return plan.done;
+    if (!(await runner("claude", ["--version"])).ok) return this.repairClaudeCodeUserScope();
+
+    const userFix = plan.fixes.find((fix) => fix.scope === "user");
+    if (userFix) {
+      const add = this.claudeAddArgs(userFix, plan.replacement);
+      if (add) {
+        await runner("claude", ["mcp", "remove", "comp", "--scope", "user"]);
+        await runner("claude", add);
+      }
+      if (!readObjectPath(this.readClaudeConfig(), ["mcpServers", "comp"])) {
+        // The remove landed but the add did not: put the registration back by hand.
+        this.writeUserScopeRegistration({ ...userFix.server, command: plan.replacement });
+      }
+    }
+
+    if (this.userScopeServesProjects(plan.replacement)) {
+      for (const fix of plan.fixes) {
+        if (fix.scope !== "local" || !fix.project || !fs.existsSync(fix.project)) continue;
+        await runner("claude", ["mcp", "remove", "comp", "--scope", "local"], { cwd: fix.project });
+      }
+    }
+
+    const after = this.planClaudeCodeRepairs();
+    if (after.done?.status === "failed") return after.done;
+    if (!after.done) {
+      const fallback = this.repairClaudeCodeUserScope();
+      if (fallback.status !== "repaired") return fallback;
+    }
+    return { file: plan.file, status: "repaired", from: plan.fixes[0].from, to: plan.replacement };
+  }
+
+  private readClaudeConfig(): unknown {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(this.homeDir, ".claude.json"), "utf-8"));
+    } catch {
+      return null;
+    }
+  }
+
+  /** True when the user-scope registration runs the current (or a newer) comP. */
+  private userScopeServesProjects(replacement: string): boolean {
+    const command = readObjectPath(this.readClaudeConfig(), ["mcpServers", "comp"])?.["command"];
+    return typeof command === "string" && fs.existsSync(command) &&
+      (samePath(command, replacement) ||
+        (this.isInstalledExtensionBinary(command) && !this.isOlderInstalledExtensionBinary(command)));
+  }
+
+  /** Re-read ~/.claude.json and set the user-scope comP registration in it. */
+  private writeUserScopeRegistration(server: Record<string, unknown>): void {
     const file = path.join(this.homeDir, ".claude.json");
-    if (!fs.existsSync(file)) return { file, status: "missing" };
+    const doc = this.readClaudeConfig();
+    if (doc === null || typeof doc !== "object" || Array.isArray(doc)) return;
+    const root = doc as Record<string, unknown>;
+    const servers = readObjectPath(root, ["mcpServers"]) ?? {};
+    servers["comp"] = server;
+    root["mcpServers"] = servers;
+    this.backupIfExists(file);
+    this.atomicWrite(file, JSON.stringify(root, null, 2) + "\n");
+  }
+
+  /**
+   * `claude mcp add` arguments that re-create this registration with `command`,
+   * or null when the CLI cannot reproduce it exactly: fields other than
+   * type/command/args/env, a non-stdio type, or — on Windows, where the runner
+   * goes through cmd.exe — a value with shell metacharacters or a trailing
+   * backslash (`"C:\a b\"` would escape its own closing quote).
+   *
+   * A user-scope registration gains COMP_AGENT_ID=claude-code when it lacks one:
+   * the projects whose overrides are removed run on it from now on, and their
+   * history would otherwise be recorded as "unknown".
+   */
+  private claudeAddArgs(fix: ClaudeRegistrationFix, command: string): string[] | null {
+    const server = fix.server;
+    if (Object.keys(server).some((key) => !["type", "command", "args", "env"].includes(key))) return null;
+    if (server["type"] !== undefined && server["type"] !== "stdio") return null;
+    const args = server["args"] ?? [];
+    const env = server["env"] ?? {};
+    if (!Array.isArray(args) || !args.every((a) => typeof a === "string")) return null;
+    if (env === null || typeof env !== "object" || Array.isArray(env)) return null;
+    const envPairs = Object.entries(env as Record<string, unknown>);
+    if (!envPairs.every(([key, value]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && typeof value === "string")) {
+      return null;
+    }
+    if (fix.scope === "user" && !envPairs.some(([key]) => key === "COMP_AGENT_ID")) {
+      envPairs.push(["COMP_AGENT_ID", AgentSetupManager.agentIdFor("Claude Code")]);
+    }
+    const values = [command, ...(args as string[]), ...envPairs.map(([, value]) => value as string)];
+    if (process.platform === "win32" &&
+      values.some((value) => SHELL_METACHARACTERS.test(value) || (value.endsWith("\\") && quoteForShell(value) !== value))) {
+      return null;
+    }
+    return [
+      "mcp", "add", "--scope", fix.scope, "--transport", "stdio", "comp",
+      ...envPairs.flatMap(([key, value]) => ["-e", `${key}=${value as string}`]),
+      "--", command, ...(args as string[]),
+    ];
+  }
+
+  /**
+   * Read ~/.claude.json and list the comP registrations to move to the bundled
+   * binary. `done` is set when there is nothing to apply (missing, unreadable,
+   * healthy, or skipped) and is the entry to report as is.
+   *
+   * Only commands that are comP extension binaries are ever touched. The same or
+   * a newer comP in another editor is left alone while its file exists.
+   */
+  private planClaudeCodeRepairs(): {
+    file: string;
+    done?: RepairEntry;
+    doc?: unknown;
+    replacement: string;
+    fixes: ClaudeRegistrationFix[];
+  } {
+    const file = path.join(this.homeDir, ".claude.json");
+    const finish = (done: RepairEntry) => ({ file, done, replacement: "", fixes: [] });
+    if (!fs.existsSync(file)) return finish({ file, status: "missing" });
 
     let doc: unknown;
     try {
       doc = JSON.parse(fs.readFileSync(file, "utf-8"));
     } catch (error) {
-      return { file, status: "failed", reason: `invalid JSON: ${describeError(error)}` };
+      return finish({ file, status: "failed", reason: `invalid JSON: ${describeError(error)}` });
     }
-    const servers: Record<string, unknown>[] = [];
+    const registrations: Array<{ scope: "user" | "local"; project?: string; server: Record<string, unknown> }> = [];
     const userServer = readObjectPath(doc, ["mcpServers", "comp"]);
-    if (userServer) servers.push(userServer);
+    if (userServer) registrations.push({ scope: "user", server: userServer });
     const projects = readObjectPath(doc, ["projects"]);
     for (const key of Object.keys(projects ?? {})) {
       const projectServer = readObjectPath(projects, [key, "mcpServers", "comp"]);
-      if (projectServer) servers.push(projectServer);
+      if (projectServer) registrations.push({ scope: "local", project: key, server: projectServer });
     }
-    if (servers.length === 0) return { file, status: "skipped", reason: "no comp server entry" };
+    if (registrations.length === 0) return finish({ file, status: "skipped", reason: "no comp server entry" });
 
     const replacement = this.bundledDaemonPath();
-    if (!replacement) return { file, status: "skipped", reason: "no bundled binary available" };
+    if (!replacement) return finish({ file, status: "skipped", reason: "no bundled binary available" });
 
-    let from: string | undefined;
+    const fixes: ClaudeRegistrationFix[] = [];
     let healthy = false;
     let skipReason: string | undefined;
-    for (const server of servers) {
-      const command = server["command"];
+    for (const registration of registrations) {
+      const command = registration.server["command"];
       if (typeof command !== "string" || !path.isAbsolute(command) || command.includes("${")) {
         skipReason ??= "command is not an absolute binary path";
         continue;
@@ -1733,22 +1900,18 @@ export class AgentSetupManager {
         skipReason ??= "command is not a comP extension binary";
         continue;
       }
-      // The same or a newer comP in another editor is left alone while it exists.
       if (samePath(command, replacement) ||
         (!this.isOlderInstalledExtensionBinary(command) && fs.existsSync(command))) {
         healthy = true;
         continue;
       }
-      server["command"] = replacement;
-      from ??= command;
+      fixes.push({ ...registration, from: command });
     }
 
-    if (from === undefined) {
-      return healthy ? { file, status: "healthy" } : { file, status: "skipped", reason: skipReason };
+    if (fixes.length === 0) {
+      return finish(healthy ? { file, status: "healthy" } : { file, status: "skipped", reason: skipReason });
     }
-    this.backupIfExists(file);
-    this.atomicWrite(file, JSON.stringify(doc, null, 2) + "\n");
-    return { file, status: "repaired", from, to: replacement };
+    return { file, doc, replacement, fixes };
   }
 
   /**
@@ -1817,7 +1980,7 @@ export class AgentSetupManager {
    *
    * Never throws — a failure here must not block activation.
    */
-  repairStaleConfigs(): RepairEntry[] {
+  repairStaleConfigs(options?: { skipClaudeCodeConfig?: boolean }): RepairEntry[] {
     const entries = this.repairTargets().map((target) => {
       try {
         return target.format === "toml" ? this.repairTomlTarget(target) : this.repairTarget(target);
@@ -1830,7 +1993,9 @@ export class AgentSetupManager {
       }
     });
     try {
-      entries.push(this.repairClaudeCodeUserScope());
+      // The extension passes skipClaudeCodeConfig and runs repairClaudeCodeRegistrations
+      // (the CLI route) instead; this direct write stays for every other caller.
+      if (!options?.skipClaudeCodeConfig) entries.push(this.repairClaudeCodeUserScope());
     } catch (error) {
       entries.push({
         file: path.join(this.homeDir, ".claude.json"),
@@ -2409,6 +2574,7 @@ export class AgentSetupManager {
     return [
       "claude mcp add --scope user --transport stdio comp",
       "-e RUST_LOG=info",
+      `-e COMP_AGENT_ID=${AgentSetupManager.agentIdFor("Claude Code")}`,
       "--",
       quote(daemonPath),
     ].join(" ");
@@ -2524,7 +2690,7 @@ function quoteForShell(value: string): string {
  * A non-zero exit is a normal result here, not an exception: the caller reports
  * it and falls back to showing the user the command.
  */
-const defaultCommandRunner: CommandRunner = (file, args) =>
+export const defaultCommandRunner: CommandRunner = (file, args, options) =>
   new Promise((resolve) => {
     // WHY the command line is assembled here: with `shell: true`, Node
     // concatenates the argument array without escaping it (DEP0190), so a
@@ -2535,10 +2701,16 @@ const defaultCommandRunner: CommandRunner = (file, args) =>
       ? spawn([file, ...args].map(quoteForShell).join(" "), {
           windowsHide: true,
           shell: true,
+          cwd: options?.cwd,
+          // WHY: cmd.exe looks for the command in the current directory before
+          // PATH. Runs whose cwd is a project folder would otherwise start a
+          // claude.bat or claude.exe the repository put there.
+          env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
           stdio: ["ignore", "pipe", "pipe"],
         })
       : spawn(file, args, {
           windowsHide: true,
+          cwd: options?.cwd,
           stdio: ["ignore", "pipe", "pipe"],
         });
 

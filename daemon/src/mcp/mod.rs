@@ -2741,6 +2741,8 @@ impl MCPServer {
             // Lets clients detect a stale running binary after an upgrade
             // (Windows locks the exe, so rebuilds don't take effect until restart).
             "daemon_version": env!("CARGO_PKG_VERSION"),
+            // A workspace build older than its sources: see build_staleness.rs.
+            "daemon_build_stale": self.state.build_staleness,
             "total_files": file_count,
             "total_nodes": node_count,
             "total_edges": edge_count,
@@ -2908,11 +2910,17 @@ impl MCPServer {
 
     /// MCP initialize handshake — returns server capabilities
     pub async fn handle_initialize(&self, _params: Value) -> Result<Value> {
-        Ok(json!({
+        let mut result = json!({
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "comP", "version": env!("CARGO_PKG_VERSION") }
-        }))
+        });
+        // WHY instructions: agents put a server's instructions in front of the
+        // model, so the model can tell the user their workspace build is stale.
+        if let Some(warning) = &self.state.build_staleness {
+            result["instructions"] = json!(warning);
+        }
+        Ok(result)
     }
 
     /// MCP tools/list — AI-accessible tools with precise descriptions and input schemas

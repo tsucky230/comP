@@ -11,7 +11,7 @@ import { expect } from "chai";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { AgentSetupManager, GenerateConfigResult, RepairEntry } from "../AgentSetup";
+import { AgentSetupManager, GenerateConfigResult, RepairEntry, defaultCommandRunner } from "../AgentSetup";
 import { DaemonManager } from "../../daemon/DaemonManager";
 
 // Mock DaemonManager
@@ -84,6 +84,18 @@ describe("AgentSetupManager", () => {
       expect(result.success).to.be.true;
       expect(writtenPaths(result)).to.deep.equal([path.join(testWorkspace, ".mcp.json")]);
       expect(readJson(result.configPath).mcpServers.comp).to.exist;
+    });
+
+    it("never writes a binary under <workspace>/.comp/bin into the config", async () => {
+      const planted = path.join(testWorkspace, ".comp", "bin", process.platform === "win32" ? "comp-daemon.exe" : "comp-daemon");
+      fs.mkdirSync(path.dirname(planted), { recursive: true });
+      fs.writeFileSync(planted, "");
+
+      const result = await manager.generateConfig("Claude Code");
+
+      const command: string = readJson(result.configPath).mcpServers.comp.command;
+      expect(path.resolve(command)).to.not.equal(path.resolve(planted));
+      expect(command).to.not.include(`.comp${path.sep}bin`);
     });
 
     it("Codex writes the global config.toml before the project one", async () => {
@@ -1576,6 +1588,21 @@ describe("AgentSetupManager", () => {
       expect(fs.readFileSync(userConfig, "utf-8")).to.equal(before);
     });
 
+    it("never adopts a binary under <workspace>/.comp/bin, which only a repository could put there", () => {
+      fs.rmSync(devBinary);
+      fs.rmSync(bundledBinary);
+      const planted = path.join(ws, ".comp", "bin", devBinaryName);
+      fs.mkdirSync(path.dirname(planted), { recursive: true });
+      fs.writeFileSync(planted, "");
+      const cfg = path.join(ws, ".mcp.json");
+      writeJson(cfg, { mcpServers: { comp: { command: stalePath, env: { COMP_WORKSPACE_ROOT: ws } } } });
+
+      const entry = entryFor(repairManager.repairStaleConfigs(), cfg);
+
+      expect(entry?.status).to.equal("skipped");
+      expect(readJson(cfg).mcpServers.comp.command).to.equal(stalePath);
+    });
+
     it("does not adopt a workspace build unless the developer opted in", () => {
       // A cloned repository can ship daemon/target/release/comp-daemon(.exe);
       // writing that path into an agent's config would make the agent run it.
@@ -1695,6 +1722,181 @@ describe("AgentSetupManager", () => {
       expect(entryFor(entries, cfg)?.status).to.equal("healthy");
       expect(fs.readFileSync(cfg, "utf-8")).to.equal(cfgBefore);
     });
+
+    describe("repairClaudeCodeRegistrations (claude CLI)", () => {
+      type Call = { args: string[]; cwd?: string };
+      const userConfig = (): string => path.join(repairHomeDir, ".claude.json");
+      const gone = (version: string): string =>
+        // The folder of an uninstalled version: never created.
+        path.join(tmpRoot, `tsucky230.comp-vscode-${version}`, "daemon", "target", "release", bundledBinaryName);
+
+      /**
+       * Stands in for `claude`: applies remove/add to ~/.claude.json the way the
+       * CLI does (local scope keyed by cwd), so tests can assert the end state.
+       * `fail` turns a call into a failure that changes nothing.
+       */
+      const fakeClaude = (fail: (args: string[]) => boolean = () => false) => {
+        const calls: Call[] = [];
+        const run = async (_file: string, args: string[], options?: { cwd?: string }) => {
+          calls.push({ args, cwd: options?.cwd });
+          if (fail(args)) return { ok: false, stdout: "", stderr: "boom" };
+          if (args[0] === "mcp") {
+            const doc = readJson(userConfig());
+            const scope = args[args.indexOf("--scope") + 1];
+            const holder = scope === "user" ? doc : doc.projects[options?.cwd as string];
+            if (args[1] === "remove") {
+              if (!holder?.mcpServers?.comp) return { ok: false, stdout: "", stderr: "not found" };
+              delete holder.mcpServers.comp;
+            } else {
+              const sep = args.indexOf("--");
+              const env: Record<string, string> = {};
+              args.forEach((a, i) => {
+                if (a === "-e") {
+                  const [k, ...v] = args[i + 1].split("=");
+                  env[k] = v.join("=");
+                }
+              });
+              holder.mcpServers = { ...(holder.mcpServers ?? {}), comp: { type: "stdio", command: args[sep + 1], args: args.slice(sep + 2), env } };
+            }
+            writeJson(userConfig(), doc);
+          }
+          return { ok: true, stdout: "", stderr: "" };
+        };
+        return { calls, run };
+      };
+
+      it("removes stale per-project overrides through the CLI while a current user-scope registration serves them", async () => {
+        const project = path.join(tmpRoot, `proj-${caseIndex}`);
+        fs.mkdirSync(project, { recursive: true });
+        writeJson(userConfig(), {
+          mcpServers: { comp: { type: "stdio", command: bundledBinary, args: [], env: { RUST_LOG: "info" } } },
+          projects: { [project]: { mcpServers: { comp: { command: gone("0.8.0"), env: { COMP_AGENT_ID: "claude-code" } } }, allowedTools: ["Read"] } },
+        });
+        const { calls, run } = fakeClaude();
+
+        const entry = await repairManager.repairClaudeCodeRegistrations(run);
+
+        expect(entry).to.include({ status: "repaired", from: gone("0.8.0"), to: bundledBinary });
+        expect(calls).to.deep.equal([
+          { args: ["--version"], cwd: undefined },
+          { args: ["mcp", "remove", "comp", "--scope", "local"], cwd: project },
+        ]);
+        const written = readJson(userConfig());
+        expect(written.projects[project].mcpServers.comp).to.equal(undefined);
+        expect(written.projects[project].allowedTools).to.deep.equal(["Read"]);
+        expect(written.mcpServers.comp.command).to.equal(bundledBinary);
+      });
+
+      it("replaces a stale user-scope registration with remove and add, keeping its env and adding COMP_AGENT_ID", async () => {
+        writeJson(userConfig(), { mcpServers: { comp: { type: "stdio", command: gone("0.9.4"), args: ["--x"], env: { RUST_LOG: "info" } } } });
+        const { calls, run } = fakeClaude();
+
+        const entry = await repairManager.repairClaudeCodeRegistrations(run);
+
+        expect(entry.status).to.equal("repaired");
+        expect(calls.map((c) => c.args)).to.deep.equal([
+          ["--version"],
+          ["mcp", "remove", "comp", "--scope", "user"],
+          ["mcp", "add", "--scope", "user", "--transport", "stdio", "comp",
+            "-e", "RUST_LOG=info", "-e", "COMP_AGENT_ID=claude-code", "--", bundledBinary, "--x"],
+        ]);
+        expect(readJson(userConfig()).mcpServers.comp).to.deep.equal({
+          type: "stdio", command: bundledBinary, args: ["--x"], env: { RUST_LOG: "info", COMP_AGENT_ID: "claude-code" },
+        });
+      });
+
+      it("puts the user-scope registration back in the file when the add does not land", async () => {
+        writeJson(userConfig(), { mcpServers: { comp: { command: gone("0.9.4"), env: { RUST_LOG: "info" } } } });
+        const { run } = fakeClaude((args) => args[1] === "add");
+
+        const entry = await repairManager.repairClaudeCodeRegistrations(run);
+
+        expect(entry.status).to.equal("repaired");
+        expect(readJson(userConfig()).mcpServers.comp).to.deep.equal({ command: bundledBinary, env: { RUST_LOG: "info" } });
+      });
+
+      it("rewrites per-project commands in the file instead when there is no user-scope registration", async () => {
+        const project = path.join(tmpRoot, `proj-nouser-${caseIndex}`);
+        fs.mkdirSync(project, { recursive: true });
+        writeJson(userConfig(), { projects: { [project]: { mcpServers: { comp: { command: gone("0.8.0") } } } } });
+        const { calls, run } = fakeClaude();
+
+        const entry = await repairManager.repairClaudeCodeRegistrations(run);
+
+        expect(entry.status).to.equal("repaired");
+        expect(calls.map((c) => c.args[0])).to.deep.equal(["--version"]);
+        expect(readJson(userConfig()).projects[project].mcpServers.comp.command).to.equal(bundledBinary);
+      });
+
+      it("finishes in the file what the CLI could not reach: a project folder that is gone", async () => {
+        const missing = path.join(tmpRoot, "no-such-project");
+        writeJson(userConfig(), {
+          mcpServers: { comp: { command: bundledBinary } },
+          projects: { [missing]: { mcpServers: { comp: { command: gone("0.8.0") } } } },
+        });
+        const { calls, run } = fakeClaude();
+
+        const entry = await repairManager.repairClaudeCodeRegistrations(run);
+
+        expect(entry.status).to.equal("repaired");
+        expect(calls.map((c) => c.args[0])).to.deep.equal(["--version"]);
+        expect(readJson(userConfig()).projects[missing].mcpServers.comp.command).to.equal(bundledBinary);
+      });
+
+      it("falls back to writing the file when the CLI is missing", async () => {
+        writeJson(userConfig(), { mcpServers: { comp: { command: gone("0.8.0") } } });
+        const { calls, run } = fakeClaude((args) => args[0] === "--version");
+
+        const entry = await repairManager.repairClaudeCodeRegistrations(run);
+
+        expect(entry.status).to.equal("repaired");
+        expect(readJson(userConfig()).mcpServers.comp.command).to.equal(bundledBinary);
+        expect(calls).to.have.length(1);
+      });
+
+      it("reports a healthy file without running the CLI at all", async () => {
+        writeJson(userConfig(), { mcpServers: { comp: { command: bundledBinary } } });
+        const { calls, run } = fakeClaude();
+
+        expect((await repairManager.repairClaudeCodeRegistrations(run)).status).to.equal("healthy");
+        expect(calls).to.have.length(0);
+      });
+
+      it("is left out of repairStaleConfigs when the caller runs it separately", () => {
+        writeJson(userConfig(), { mcpServers: { comp: { command: gone("0.8.0") } } });
+        const before = fs.readFileSync(userConfig(), "utf-8");
+
+        const entries = repairManager.repairStaleConfigs({ skipClaudeCodeConfig: true });
+
+        expect(entryFor(entries, userConfig())).to.equal(undefined);
+        expect(fs.readFileSync(userConfig(), "utf-8")).to.equal(before);
+      });
+    });
+
+    if (process.platform === "win32") {
+      // The runner goes through cmd.exe, which would otherwise search the
+      // working directory before PATH.
+      it("does not start a command placed in the working directory (Windows)", async () => {
+        const dir = path.join(tmpRoot, `planted-${caseIndex}`);
+        fs.mkdirSync(dir, { recursive: true });
+        const marker = path.join(dir, "ran.txt");
+        fs.writeFileSync(path.join(dir, "comp-planted-probe.bat"), `@echo off\r\necho ran> "${marker}"\r\n`);
+        // The runner must set the guard itself, not inherit it: some shells
+        // (Claude Code's among them) already export it.
+        const inherited = process.env.NoDefaultCurrentDirectoryInExePath;
+        delete process.env.NoDefaultCurrentDirectoryInExePath;
+
+        let result: { ok: boolean };
+        try {
+          result = await defaultCommandRunner("comp-planted-probe", [], { cwd: dir });
+        } finally {
+          if (inherited !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = inherited;
+        }
+
+        expect(result.ok).to.equal(false);
+        expect(fs.existsSync(marker)).to.equal(false);
+      });
+    }
 
     it("reports per-project Claude registrations on the current extension as healthy", () => {
       const userConfig = path.join(repairHomeDir, ".claude.json");

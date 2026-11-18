@@ -14,7 +14,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as sinon from "sinon";
 import * as vscode from "vscode";
-import { warnOnDaemonVersionMismatch } from "../extension";
+import { warnOnDaemonVersionMismatch, warnOnStaleDaemonBuild } from "../extension";
 import {
   bundledDaemonBinaryPath,
   describeDaemonVersionMismatch,
@@ -110,6 +110,14 @@ describe("warnOnDaemonVersionMismatch", () => {
     expect(warn.calledOnce).to.equal(true);
     expect(warn.firstCall.args[0]).to.include("0.11.11");
     expect(warn.firstCall.args[0]).to.include("0.12.0");
+  });
+
+  it("passes on the daemon's stale-build warning, and says nothing without one", () => {
+    warnOnStaleDaemonBuild(undefined);
+    expect(warn.called).to.equal(false);
+    warnOnStaleDaemonBuild("daemon/src/mcp/mod.rs changed after it was built");
+    expect(warn.calledOnce).to.equal(true);
+    expect(warn.firstCall.args[0]).to.include("daemon/src/mcp/mod.rs changed after it was built");
   });
 
   it("stays quiet when the versions match or the extension version is unknown", () => {

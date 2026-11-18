@@ -20,7 +20,7 @@ import { syncConversationRecording } from "./config/conversationRecording";
 import { syncRuleSharing } from "./config/ruleSharing";
 import { syncWorkspaceFolders } from "./config/workspaceFolders";
 import { registerChatParticipant } from "./mcp/chatParticipant";
-import { AgentSetupManager } from "./mcp/AgentSetup";
+import { AgentSetupManager, RepairEntry } from "./mcp/AgentSetup";
 import { isJapaneseLocale, t } from "./i18n";
 import { startBranchWatch } from "./git/branchWatcher";
 import { IndexingWatch, watchForIndexing } from "./watch/fileWatch";
@@ -104,22 +104,44 @@ export function repairMcpConfigs(context: vscode.ExtensionContext): void {
       context.extensionPath,
       { locale: isJapaneseLocale() ? "ja" : "en", useWorkspaceDaemonBuild: useWorkspaceDaemonBuild() }
     );
-    const repaired = agentSetup.repairStaleConfigs().filter((entry) => entry.status === "repaired");
+    const repaired = agentSetup
+      .repairStaleConfigs({ skipClaudeCodeConfig: true })
+      .filter((entry) => entry.status === "repaired");
+    notifyRepaired(repaired);
 
-    if (repaired.length === 0) return;
-
-    for (const entry of repaired) {
-      console.log(`[comP] Repaired MCP config: ${entry.file}${entry.to ? ` -> ${entry.to}` : " (workspace root)"}`);
-    }
-    vscode.window.showInformationMessage(
-      t(
-        `comP: repaired ${repaired.length} MCP config(s) to point at the current daemon path. Restart the agent(s) to pick it up.`,
-        `comP: ${repaired.length} 件の MCP 設定を現在の daemon パスへ修復しました。エージェントを再起動してください。`
-      )
-    );
+    // ~/.claude.json goes through the `claude` CLI, which runs a process per
+    // registration, so it must not hold up activation. See repairClaudeCodeRegistrations.
+    void agentSetup
+      .repairClaudeCodeRegistrations()
+      .then((entry) => {
+        if (entry.status === "failed") {
+          console.warn(`[comP] Claude Code registration repair failed: ${entry.reason}`);
+          void vscode.window.showWarningMessage(
+            t(
+              `comP: could not update comP's registration in ~/.claude.json (${entry.reason}). Run comP: Setup Agents for Claude Code.`,
+              `comP: ~/.claude.json の comP の登録を更新できませんでした（${entry.reason}）。comP: Setup Agents で Claude Code を設定し直してください。`
+            )
+          );
+        }
+        notifyRepaired(entry.status === "repaired" ? [entry] : []);
+      })
+      .catch((error) => console.warn("[comP] Claude Code registration repair failed:", error));
   } catch (error) {
     console.warn("[comP] MCP config repair failed:", error);
   }
+}
+
+function notifyRepaired(repaired: RepairEntry[]): void {
+  if (repaired.length === 0) return;
+  for (const entry of repaired) {
+    console.log(`[comP] Repaired MCP config: ${entry.file}${entry.to ? ` -> ${entry.to}` : " (workspace root)"}`);
+  }
+  vscode.window.showInformationMessage(
+    t(
+      `comP: repaired ${repaired.length} MCP config(s) to point at the current daemon path. Restart the agent(s) to pick it up.`,
+      `comP: ${repaired.length} 件の MCP 設定を現在の daemon パスへ修復しました。エージェントを再起動してください。`
+    )
+  );
 }
 
 /**
@@ -146,6 +168,23 @@ export function warnOnDaemonVersionMismatch(
       `comP: the running daemon is not this extension's version (${mismatch}), so some features may not work. If you use comp.useWorkspaceDaemonBuild, rebuild the daemon (cargo build --release) and reload the window.`,
       `comP: 動いているデーモンが拡張機能と別の版です（${mismatch}）。一部の機能が動かない場合があります。comp.useWorkspaceDaemonBuild を使っている場合は、デーモンを作り直して（cargo build --release）ウィンドウを再読み込みしてください。`
     )
+  );
+}
+
+/**
+ * Show the daemon's own warning that it is a workspace build older than its
+ * sources (getStats `daemon_build_stale`, see daemon/src/build_staleness.rs).
+ * The version check above cannot catch this: an old build of the same version
+ * reports the same number.
+ *
+ * Exported for unit testing; startDaemonStack() is the only production caller.
+ */
+export function warnOnStaleDaemonBuild(warning: string | undefined): void {
+  if (!warning) return;
+  console.warn(`[comP] ${warning}`);
+  // The daemon's text is English only; the lead-in tells a Japanese reader what it is about.
+  void vscode.window.showWarningMessage(
+    t(`comP: ${warning}`, `comP: デーモンのビルドがソースより古くなっています。${warning}`)
   );
 }
 
@@ -479,6 +518,7 @@ async function startDaemonStack(context: vscode.ExtensionContext): Promise<void>
     const stats = await daemonManager.getStats();
     statusBar?.updateStats(stats.total_nodes || 0, stats.total_files || 0, "Ready", stats.efficiency || "0%");
     warnOnDaemonVersionMismatch(context, stats.daemon_version);
+    warnOnStaleDaemonBuild(stats.daemon_build_stale);
   } catch {
     statusBar?.show("Ready");
   }
