@@ -298,9 +298,13 @@ comP implements the **Model Context Protocol (MCP)** to expose tools to AI agent
 
 ### MCP Tool Development Checklist
 
-1. **Define the tool** in `daemon/src/mcp/mod.rs`:
-   - Implement the tool handler function
-   - Update the tool list in `handle_tools_list()`
+1. **Define the tool** in `daemon/src/mcp/`:
+   - Implement the handler as a method in the matching `daemon/src/mcp/tools/*.rs` file
+     (`pipeline`, `symbols`, `session`, `index_admin`, `overview`)
+   - Add its definition to `tool_definitions()` in `daemon/src/mcp/tool_schema.rs`
+     and its dispatch to `handle_tools_call()` in `daemon/src/mcp/mod.rs`
+   - Refresh the tool-list snapshot on purpose:
+     `COMP_UPDATE_SNAPSHOTS=1 cargo test tool_definitions_match_snapshot` (in `daemon/`)
    - Add JSDoc-style documentation
 
 2. **Test the tool**:
@@ -323,7 +327,7 @@ comP implements the **Model Context Protocol (MCP)** to expose tools to AI agent
 ### Example: Adding a New MCP Tool
 
 ```rust
-// daemon/src/mcp/mod.rs
+// daemon/src/mcp/tools/<group>.rs
 pub async fn handle_new_tool(params: Value) -> Result<Value> {
     let query = params["query"]
         .as_str()

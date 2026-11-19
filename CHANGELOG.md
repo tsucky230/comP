@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Changed
+
+- **内部構造の整理（動作は変わらない）**: 6,300 行あったデーモンの `daemon/src/mcp/mod.rs` を、セッション記録（`session_store.rs`・`history_file.rs`）、CLI（`cli.rs`）、ツール定義（`tool_schema.rs`）、系統ごとのハンドラ（`tools/`）に分けた（`mod.rs` は 565 行）。拡張機能の `src/mcp/AgentSetup.ts`（2,747 行）も、処理を `src/mcp/agentSetup/` に分けて 1,641 行にした。あわせて、`tools/list` のツール定義を固定するスナップショットテストと、MAGATAMA が読む `index.db` の列を固定する契約テストを追加した
+
 ## [0.12.1] - 2026-11-18
 
 ### Security

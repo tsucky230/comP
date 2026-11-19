@@ -60,6 +60,7 @@ The frontend manages user interactions, workspace file changes, and automates ag
 3. **`AgentSetupManager` ([AgentSetup.ts](file:///e:/dev/comP/src/mcp/AgentSetup.ts))**
    - Automatically registers the comP daemon inside the MCP configuration files of popular coding agents.
    - Supports automated config merging for GitHub Copilot (`.vscode/mcp.json`), Cline, Cursor, Windsurf, and other major systems.
+   - The class is a thin entry point. The work lives in `src/mcp/agentSetup/`: `text.ts` (TOML/YAML/string helpers), `hookSettings.ts`, `snippets.ts`, `claudeRegistration.ts` (Claude Code user-scope registration), `historyHook.ts` (conversation-recording hook), and `repair.ts` (config repair).
 
 4. **`DependencyCodeLensProvider` ([CodeLens.ts](file:///e:/dev/comP/src/ui/CodeLens.ts))**
    - Injects visual indicators ("X dependents") above function and class declarations, allowing developers to inspect upstream dependencies directly inside the editor.

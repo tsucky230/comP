@@ -60,6 +60,7 @@ graph TD
 3. **`AgentSetupManager` ([AgentSetup.ts](file:///e:/dev/comP/src/mcp/AgentSetup.ts))**
    - ワークスペース内の設定ファイルを自動スキャンし、各 AI エージェントの MCP 構成ファイルに comP をサーバーとして登録します。
    - GitHub Copilot 連携用 (`.vscode/mcp.json`)、Cline 用 (`~/.config/Code/User/globalStorage/...`)、Cursor 用、Windsurf 用などのフォーマットへのシームレスなマージ・自動構築を行います。
+   - クラスは入口だけで、処理は `src/mcp/agentSetup/` にあります。`text.ts`（TOML・YAML・文字列の処理）、`hookSettings.ts`、`snippets.ts`、`claudeRegistration.ts`（Claude Code のユーザー登録）、`historyHook.ts`（会話記録フック）、`repair.ts`（設定の修復）。
 
 4. **`DependencyCodeLensProvider` ([CodeLens.ts](file:///e:/dev/comP/src/ui/CodeLens.ts))**
    - クラスや関数の宣言上部に「X dependents（X件の依存元）」といった CodeLens インジケータを自動挿入します。クリック時に依存関係グラフをビジュアルまたはツリー表示できます。
@@ -131,7 +132,7 @@ v0.11.1 のエージェント別分割以降、TypeScript側の `SessionMemoryMa
 
 `SessionMemoryManager` クラスとそのテストは削除し、呼び出し元が Rust daemon へ直接 RPC で委譲する方式に統合しました。
 
-- **`mark_stale` RPC**（`daemon/src/mcp/mod.rs::handle_mark_stale`）: `.comp/session-memory/*.json` を全エージェント分スキャンし、`files` に指定パスを含む呼び出しへ `stale: true` を立てる。ファイルごとに `mark_stale_in_file` が `record_mcp_call` と同じサイドカーロック＋アトミック書込を使うため、対象エージェントのプロセスが同時に書き込んでいても安全。マッチが0件のファイルは書き込み自体を行わない（`tools/list` には載せない内部APIで、AIエージェントからは呼ばれない）。
+- **`mark_stale` RPC**（`daemon/src/mcp/tools/session.rs::handle_mark_stale`）: `.comp/session-memory/*.json` を全エージェント分スキャンし、`files` に指定パスを含む呼び出しへ `stale: true` を立てる。ファイルごとに `mark_stale_in_file` が `record_mcp_call` と同じサイドカーロック＋アトミック書込を使うため、対象エージェントのプロセスが同時に書き込んでいても安全。マッチが0件のファイルは書き込み自体を行わない（`tools/list` には載せない内部APIで、AIエージェントからは呼ばれない）。
 - **`getStats`（拡張機能専用の JSON-RPC。MCP ツールではない）の `last_activity_at`**: `latest_activity_timestamp` が全session-memoryファイル＋全historyファイルを横断して最新タイムスタンプを計算し返す。`SidebarPanel.ts` は既に呼んでいる `getStats()` のレスポンスからこの値を読むだけになり、専用のファイルアクセスが不要になった。
 - **`comp.exportDebugLog`**: 単一ファイルという前提が無くなったため、`session_recall` RPCが返す集約済みMarkdownをエクスポート対象に変更（出力拡張子も `.json` → `.md`）。
 
@@ -167,7 +168,7 @@ BM25 の対象言語フィルタには `jsonl` が含まれ（v0.9.3〜）、`ru
 
 #### 4.2.1 複数 LLM 書き込みとロック
 
-複数の独立した `comp-daemon` プロセスが同じ JSONL に追記できるよう、`append_history_line`（`daemon/src/mcp/mod.rs`）が以下を保証します。
+複数の独立した `comp-daemon` プロセスが同じ JSONL に追記できるよう、`append_history_line`（`daemon/src/mcp/history_file.rs`）が以下を保証します。
 
 - **ロック方式**: `std::fs::File::lock()`（Rust 1.89 で安定化された標準ライブラリの機能。追加の外部クレート依存は不要）で**排他ロック**を取得してから 1 行を単一の `write_all` で書き込む。
   - WHY 排他ロック: 当初 POSIX の `flock` を念頭に「追記は共有ロックで並行させ、コンパクションだけ排他ロックにする」設計を検討したが、**Windows の `LockFileEx` は POSIX の `flock` と異なり、共有ロックを保持したハンドルからの書き込みを `ERROR_LOCK_VIOLATION` (os error 33) で拒否する**ことが実装時に判明した（同一ハンドルでの自己書き込みでも拒否される）。そのため全ての書き手（追記・コンパクション）が排他ロックを取る設計に統一した。書き込みは1行分の一瞬で終わるため、複数エージェントが同時に書いても実質的な待ち合いは無視できる。
@@ -177,7 +178,7 @@ BM25 の対象言語フィルタには `jsonl` が含まれ（v0.9.3〜）、`ru
 
 #### 4.2.2 コンパクション（定期整理）
 
-`compact_history_file`（`daemon/src/mcp/mod.rs`）は、肥大化した JSONL を要約・重複排除するための関数です。
+`compact_history_file`（`daemon/src/mcp/history_file.rs`）は、肥大化した JSONL を要約・重複排除するための関数です。
 
 - 排他ロックを取得したまま「全体読込 → 呼び出し元が渡した `compact_fn` で圧縮 → 同じファイルへ seek(0) + 上書き + truncate」を行う。**新ファイル書き出し + atomic rename 方式は採用していない**（Windows では開いているハンドルへのリネームが失敗しうる上、ロック解放とリネームの間に隙間ができ、その隙間に入った追記が消える恐れがあるため）。
 - `compact_fn` が失敗した場合は元ファイルを一切変更せず、`.bak` も書かない。成功時のみ、上書き前に元の内容を `<file>.jsonl.bak` として保存する（誤要約からの手動ロールバック用）。`.bak` は世代管理される（後述 4.2.3）。

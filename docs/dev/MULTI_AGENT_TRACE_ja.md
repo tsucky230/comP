@@ -29,7 +29,7 @@ Claude Code の Stop フックから `comp-daemon record-turn` を呼び、往�
 2. **渡したルールを記録に残す。** 渡した節の本文を、内容の SHA-256 を名前にして `.comp/rules/<hash>.md` に1回だけ保存し、session-memory の記録には `rules: [{file, heading, hash}]` として参照だけを残す。後でルールが書き換わっても、当時の本文をそのまま読める。`session_recall` は「Rules」の行に表示する。
 3. **ルール同士の矛盾の候補を出す。** 新しい MCP ツール `check_rule_conflicts` が、持ち主の違うファイルの節の組のうち、話題が近い（TF-IDF のコサイン類似度 0.3 以上、共通する語が2つ以上、本文40文字以上）ものを返す。矛盾かどうかの判断は呼び出したエージェントに任せ、comP は判断しない。中身の語がまったく同じ組（類似度 0.999 以上）は一致として外す。
 
-実装は `daemon/src/rules/mod.rs`（判定）と `daemon/src/mcp/mod.rs`（組み込み）にある。
+実装は `daemon/src/rules/mod.rs`（判定）と `daemon/src/mcp/mod.rs`・`daemon/src/mcp/session_store.rs`（組み込み）にある。
 
 ### T3 指示のつながり
 
