@@ -1,20 +1,26 @@
 {
-  "commit": "8684d6d123c5bc4e060b5194a08e2355f7eaa0b1",
+  "commit": "e9dee1c292cabceaa53567c6e7d1cac67d0d3af9",
   "files": {
     "daemon/src/indexer/caller_edges_tests.rs": "7b297352922c6911aa2dfc6120d926cc463399b60dec8bf480834b5e8f97f829",
     "daemon/src/indexer/folder_reindex_tests.rs": "7602896f1cd136665468b2c24df72b7bc86789419a614eebd9cb5925ec899e67",
     "daemon/src/indexer/home_policy_tests.rs": "6d5ef02eb3764c901c7f7b3ea8b638be923f387f2c4114e477411ac3b5371ad1",
     "daemon/src/indexer/multi_root_tests.rs": "448d041734370feb7652bacbdd2ef7439912a57cd34218d0c8d4c164fa368e71",
     "daemon/src/indexer/roots_tests.rs": "866d75e3f72733656a173bb6bc21e1ac1b6eea8744d47db26fc476eb3d757154",
+    "daemon/src/mcp/git_diff_paths_tests.rs": "a2dd43f6a2a9767dbe460cdb70e559fd6d21c6160167c92206623ec2e5ca12af",
     "daemon/src/mcp/home_policy_tests.rs": "345572f80767fa4ffeeb1c25a7340d3e296ad393cc69aa5ea0bd6a744e2a4f1d",
     "daemon/src/mcp/mark_stale_tests.rs": "e0b515d413793a400b2ce7f8980c27fb71bd7d1064c10113c7448535a1a62637",
     "daemon/src/mcp/multi_root_tests.rs": "a91812fe6ef25fe698417d99ac5fd980e11179465ba4de7784dbe5e4598eda1b",
     "daemon/src/mcp/record_turn_tests.rs": "c1c8ecc2bed68d1d750271aaa9d42cd8dbc7e6415e9c3e17378c0a564a8d8a19",
     "daemon/src/mcp/rule_sharing_tests.rs": "4cc1e8e631b1acf5df2cbcde8d4a8cfad300044cffa37f270aaded8c3fa86bd6",
+    "daemon/src/mcp/server_tests.rs": "818bcba6e79e6b2cff9c2e1cfaf68e56d93bfe741f42546e08ff91d01ffa6563",
+    "daemon/src/mcp/symbol_id_tests.rs": "b24a6bc77a4880edb71e11a741f7661bfce15b6693eb182c765f0d3cd2497eb9",
     "daemon/src/mcp/sync_folders_tests.rs": "6dc8bab268242d318187698d62d0e975878fb567edaa7c5ad9c0382413470d7b",
+    "daemon/src/mcp/testdata/tool_definitions.json": "86da7c4f22a5fa9c49a521f3e0617e48ad0151daf9613f972e0d75f19ce34975",
+    "daemon/src/mcp/tool_schema_tests.rs": "4df829a33bf6c6db5229b485d80ffa5dbb04e369458f1d885a8059f53b8fa72e",
     "daemon/src/mcp/trace_tests.rs": "a74e0eb28b0122d2b630d3634123a67140188cfcb25a8c2ce011a04565c94af3",
     "daemon/src/rules/tests.rs": "6bde44788b30c1dfd7a0bf4bb0c61dcc8974884dba9da4cc0d16d02eaf9a7206",
     "daemon/src/search/rebuild_tests.rs": "4859bfa1ca3179770a6dd93f4c6b27aec823be45a87138812f0f7feb593ca9f0",
+    "src/mcp/tests/AgentSetup.test.ts": "ba4b64debbd3f01cdc43da85be0300ce5c8d863121541e88c9782ca7f0fe4fb4",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts": "0b08695a4c9ad46ec4ace75a697aa093f903d3f6b68e76450f1596f84bdae66d",
     "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05",
     "src/test/daemonEnv.test.ts": "58b84b3346f129d66f36c217adb6495e2d29a4b1aa876a42269e483f8042b4fd",
@@ -23,7 +29,7 @@
     "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e",
     "src/watch/tests/folderWatch.test.ts": "683566a52d7b768abc6e870a0da3b64235b051b98235e5cd21d2d7d4c9940fc6"
   },
-  "frozen_at": "2026-11-17T20:30:53Z",
+  "frozen_at": "2026-11-19T20:31:55Z",
   "history": [
     {
       "approved_by": null,
@@ -348,6 +354,18 @@
       },
       "note": "デーモンの版ずれ対策: 古い拡張のバイナリが残っていても record-turn フックを現行版へ移す回帰テストと、拡張が配っていないバイナリは残すテストを追加（既存テストは無変更）",
       "request": "TCR-19"
+    },
+    {
+      "approved_by": "user(2026-11-20 リファクタ計画をおすすめの方法で承認)",
+      "at": "2026-11-19T20:31:55Z",
+      "commit": "e9dee1c292cabceaa53567c6e7d1cac67d0d3af9",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "リファクタ段階0: mod.rs のインラインテストを中身を変えずに server_tests.rs へ移動、tools/list のスナップショットテストを追加、ロック対象外だった symbol_id/git_diff_paths/AgentSetup のテストを追加",
+      "request": "TCR-20"
     }
   ],
   "metrics": {
@@ -376,7 +394,13 @@
     "daemon/src/mcp/sync_folders_tests.rs",
     "daemon/src/search/rebuild_tests.rs",
     "daemon/src/indexer/caller_edges_tests.rs",
-    "daemon/src/indexer/folder_reindex_tests.rs"
+    "daemon/src/indexer/folder_reindex_tests.rs",
+    "daemon/src/mcp/server_tests.rs",
+    "daemon/src/mcp/tool_schema_tests.rs",
+    "daemon/src/mcp/testdata/tool_definitions.json",
+    "daemon/src/mcp/symbol_id_tests.rs",
+    "daemon/src/mcp/git_diff_paths_tests.rs",
+    "src/mcp/tests/AgentSetup.test.ts"
   ],
   "version": 1
 }

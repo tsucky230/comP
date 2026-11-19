@@ -1,0 +1,267 @@
+{
+  "tools": [
+    {
+      "description": "ALWAYS call this tool FIRST at the start of every task — before reading files, running grep/find/Bash searches, or exploring the codebase manually. Covers coding tasks (bug fix, feature, refactor) and documentation tasks (writing/editing Markdown). Do NOT use Read, Bash, or get_context to locate relevant files — this tool replaces all of that. Returns pivot files and related symbols ranked by relevance. Tracked files with uncommitted changes (`git diff HEAD`: staged or unstaged edits) are ranked first and marked with `git_diff: true` in the response; changes already committed on the branch and new untracked files are not included. IMPORTANT: The 'task' parameter MUST be in English. Translate queries from other languages (e.g. Japanese) to English before calling.",
+      "inputSchema": {
+        "properties": {
+          "compression_level": {
+            "description": "Omit for auto-adjustment (comP picks the lowest level that fits the budget). Set explicitly to disable auto-adjustment: 0=full source, 1=compact (comments removed, ~30% smaller), 2=skeleton (signatures only, ~75% smaller)",
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "include_content": {
+            "description": "If true, include compressed file content in each pivot_file entry. Default: false",
+            "type": "boolean"
+          },
+          "include_tests": {
+            "description": "Include test files in results. Default: false",
+            "type": "boolean"
+          },
+          "max_tokens": {
+            "description": "Token budget for returned context. Default: 8000",
+            "type": "integer"
+          },
+          "task": {
+            "description": "One sentence describing what you are about to implement, fix, or write. IMPORTANT: The task description MUST be in English. Translate to English if needed. Examples: 'fix JWT token expiry bug in auth middleware', 'write installation section in README.md'",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "type": "object"
+      },
+      "name": "run_pipeline"
+    },
+    {
+      "description": "Search for specific symbols (functions, classes, types) by name or keyword. Use when you know the exact name to look up. Each result carries the symbol's `id`, which get_impact_graph takes. Do NOT use for starting a new task — use run_pipeline instead. IMPORTANT: The 'query' parameter MUST be in English or match exact symbol names.",
+      "inputSchema": {
+        "properties": {
+          "kind_filter": {
+            "description": "Filter by symbol kind: 'function', 'class', 'type', or 'variable'",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max results to return. Default: 10",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Symbol name or keyword. IMPORTANT: The query MUST be in English or match exact symbol names in the code. Example: 'authenticate' or 'UserRepository'",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "get_context"
+    },
+    {
+      "description": "Show which files and symbols are affected when a specific symbol changes. Call before modifying a function or class to understand the blast radius. Requires a numeric symbol_id: call get_context with the symbol's name first and take the `id` of the matching result.",
+      "inputSchema": {
+        "properties": {
+          "max_depth": {
+            "default": 0,
+            "description": "Maximum traversal depth for transitive impact (0 = unlimited, 1 = direct dependents only, N = N hops)",
+            "type": "integer"
+          },
+          "symbol_id": {
+            "description": "Numeric ID of the symbol to analyze: the `id` of a get_context result",
+            "type": "integer"
+          },
+          "symbol_name": {
+            "description": "Human-readable name for display purposes only",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_impact_graph"
+    },
+    {
+      "description": "List all indexed files with symbol counts and language breakdown. Use to understand overall codebase structure. Do NOT use to find relevant files for a task — use run_pipeline for that.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_indexed_files"
+    },
+    {
+      "description": "Recall past MCP tool invocations (queries, symbols, files, tokens) across ALL sessions, newest first, each tagged with its date/time. Survives daemon restarts and session breaks — call this when resuming work to reconstruct what was previously asked and done. Returns a Markdown list with stale status. If query is provided, substring matches come first (newest first), then other records ranked by relevance (BM25 over character bigrams, so Japanese and multi-word queries work) weighted by recency. Turns list the delegations they ran; delegations name the turn that ran them.",
+      "inputSchema": {
+        "properties": {
+          "limit": {
+            "description": "Max number of past invocations to return (default: 20)",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Optional search query: case-insensitive substring matches first, then relevance-ranked matches",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "session_recall"
+    },
+    {
+      "description": "Rule sharing (beta, off unless comp.ruleSharing.enabled is on): list pairs of sections from different agents' instruction files in this repository (CLAUDE.md, AGENTS.md, GEMINI.md, .cursor/rules, ... — git-tracked only) that may contradict. comP only finds candidates; you judge each pair and report real contradictions to the user. Do not edit instruction files unless asked.",
+      "inputSchema": {
+        "properties": {
+          "max_pairs": {
+            "description": "Maximum number of pairs to return (1-100). Default: 20",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "check_rule_conflicts"
+    },
+    {
+      "description": "Record an interaction — a user request and what was done in response — so it can be recalled in later sessions (survives daemon restarts). Call this after completing a task to persist intent and outcome. Stored in .comp/history and indexed so run_pipeline can also surface it.",
+      "inputSchema": {
+        "properties": {
+          "files": {
+            "description": "Optional list of files touched",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "description": "What was done in response (summary of the action and result)",
+            "type": "string"
+          },
+          "request": {
+            "description": "What the user asked for (their request/instruction)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request"
+        ],
+        "type": "object"
+      },
+      "name": "session_log"
+    },
+    {
+      "description": "Get source code, outbound dependencies, and inbound dependents for a specific symbol by name. Useful when you need to inspect a function, class, or type definition.",
+      "inputSchema": {
+        "properties": {
+          "compression_level": {
+            "default": 0,
+            "description": "0=full source (default), 1=compact (comments+blank lines removed, 20-35% smaller), 2=skeleton (signatures only, 50-70% smaller)",
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "type": "integer"
+          },
+          "file_path": {
+            "description": "Optional file path relative to workspace root to narrow search",
+            "type": "string"
+          },
+          "name": {
+            "description": "Symbol name (e.g. 'authenticate' or 'MCPServer')",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "get_symbol"
+    },
+    {
+      "description": "Retrieve dependencies of a symbol. Direction 'out' returns symbols that this symbol depends on. Direction 'in' returns symbols that depend on this symbol.",
+      "inputSchema": {
+        "properties": {
+          "direction": {
+            "description": "Dependency direction. 'in' for incoming dependencies (dependents), 'out' for outgoing dependencies.",
+            "enum": [
+              "in",
+              "out"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "Symbol name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "direction"
+        ],
+        "type": "object"
+      },
+      "name": "get_dependencies"
+    },
+    {
+      "description": "List all symbol names, their kinds (function, class, etc.), and signatures inside a specific file. Excludes body content.",
+      "inputSchema": {
+        "properties": {
+          "file_path": {
+            "description": "File path relative to workspace root (e.g., 'src/extension.ts')",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      },
+      "name": "get_file_summary"
+    },
+    {
+      "description": "Get a high-level summary of the workspace: total file count, symbol count, language distribution, top files by symbol count, and lists of exported symbols.",
+      "inputSchema": {
+        "properties": {},
+        "type": "object"
+      },
+      "name": "get_project_overview"
+    },
+    {
+      "description": "Get context for files changed in a git diff. Useful for PR review or understanding recent changes. Returns a table of changed files with symbol counts.",
+      "inputSchema": {
+        "properties": {
+          "base_ref": {
+            "description": "Git ref to diff against. Default: HEAD~1. Use 'main' or 'master' for branch diffs.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_git_diff_context"
+    },
+    {
+      "description": "Compress a file using AST-based compression. Removes comments (level 1) or extracts signatures only (level 2). Useful for reading large files with fewer tokens. Requires an absolute path within the workspace.",
+      "inputSchema": {
+        "properties": {
+          "compression_level": {
+            "description": "0=full (no-op), 1=compact (comments removed), 2=skeleton (signatures only). Default: 1",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Absolute path to the file within the workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "compress_file"
+    }
+  ]
+}
