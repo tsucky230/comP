@@ -554,7 +554,7 @@ impl MCPServer {
 
     /// Read `default_budget_tokens` from `.comp/config.json`.
     /// Falls back to 8000 if the file is absent or the key is missing.
-    pub(crate) fn load_default_budget(root: &str) -> usize {
+    pub(in crate::mcp) fn load_default_budget(root: &str) -> usize {
         let path = std::path::Path::new(root).join(".comp/config.json");
         let content = std::fs::read_to_string(path).unwrap_or_default();
         let json: Value = serde_json::from_str(&content).unwrap_or(Value::Null);
@@ -565,7 +565,7 @@ impl MCPServer {
     ///
     /// Rules map glob patterns to compression levels (0/1/2).
     /// Returns an empty map when the file is absent, invalid, or has no rules key.
-    pub(crate) fn load_compression_rules(root: &str) -> std::collections::HashMap<String, i64> {
+    pub(in crate::mcp) fn load_compression_rules(root: &str) -> std::collections::HashMap<String, i64> {
         let path = std::path::Path::new(root).join(".comp/config.json");
         let content = std::fs::read_to_string(path).unwrap_or_default();
         let json: Value = serde_json::from_str(&content).unwrap_or(Value::Null);
@@ -584,7 +584,7 @@ impl MCPServer {
     /// Match a filename against a simple glob pattern.
     ///
     /// Supported forms: `*` (any), `*.ext` (suffix), `prefix*` (prefix), `exact` (literal).
-    pub(crate) fn match_pattern(filename: &str, pattern: &str) -> bool {
+    pub(in crate::mcp) fn match_pattern(filename: &str, pattern: &str) -> bool {
         if pattern == "*" {
             return true;
         }
@@ -606,7 +606,7 @@ impl MCPServer {
     ///      ties broken alphabetically so results never vary between runs.
     ///
     /// Returns None when no rule matches (caller falls back to the base level).
-    pub(crate) fn apply_compression_rule(
+    pub(in crate::mcp) fn apply_compression_rule(
         file_path: &str,
         rules: &std::collections::HashMap<String, i64>,
     ) -> Option<i64> {
@@ -655,7 +655,7 @@ impl MCPServer {
     /// Reduction factors mirror the compression ratio ranges advertised in the tool schema:
     ///   level 1 (compact)   → ~30% reduction  → factor 0.70
     ///   level 2 (skeleton)  → ~75% reduction  → factor 0.25
-    pub(crate) fn estimate_tokens(base_tokens: usize, level: i64) -> usize {
+    pub(in crate::mcp) fn estimate_tokens(base_tokens: usize, level: i64) -> usize {
         match level {
             1 => ((base_tokens as f64) * 0.70) as usize,
             2 => ((base_tokens as f64) * 0.25) as usize,
@@ -667,7 +667,7 @@ impl MCPServer {
     ///
     /// Returns (level, budget_adjusted).
     /// If even level 2 overflows, returns (2, true) — greedy truncation handles the rest.
-    pub(crate) fn choose_compression_level(candidates: &[(String, usize, usize)], budget: usize) -> (i64, bool) {
+    pub(in crate::mcp) fn choose_compression_level(candidates: &[(String, usize, usize)], budget: usize) -> (i64, bool) {
         for level in [0i64, 1, 2] {
             let total: usize = candidates.iter()
                 .map(|(_, _, base)| Self::estimate_tokens(*base, level))
@@ -684,7 +684,7 @@ impl MCPServer {
     /// Iterates in relevance order (highest first). A file that exceeds the remaining
     /// budget is skipped rather than stopping the loop, so smaller subsequent files
     /// can still fill remaining space.
-    pub(crate) fn pack_within_budget(
+    pub(in crate::mcp) fn pack_within_budget(
         candidates: &[(String, usize, usize)],
         budget: usize,
         level: i64,

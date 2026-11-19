@@ -1,7 +1,7 @@
 use super::*;
 
 impl MCPServer {
-    pub(crate) fn tool_definitions() -> Value {
+    pub(in crate::mcp) fn tool_definitions() -> Value {
         json!({
             "tools": [
                 {

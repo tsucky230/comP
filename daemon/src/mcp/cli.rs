@@ -5,7 +5,7 @@ use super::*;
 /// binary path). Kept separate from execution (`run_append_history`) so parsing
 /// alone is unit-testable without touching stdin or the filesystem.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum CliSubcommand {
+pub(in crate::mcp) enum CliSubcommand {
     AppendHistory { workspace_root: String, agent_id: String },
     Doctor { workspace_root: String, repair: bool },
     CompactHistory { workspace_root: String },
@@ -23,7 +23,7 @@ pub(crate) enum CliSubcommand {
 /// - `doctor <workspace_root> [--repair]`
 /// - `compact-history <workspace_root>`
 /// - `record-turn [workspace_root]` (Claude Code Stop hook; see record_turn.rs)
-pub(crate) fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
+pub(in crate::mcp) fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
     if args.len() == 4 && args[1] == "append-history" {
         return Some(CliSubcommand::AppendHistory {
             workspace_root: args[2].clone(),
@@ -62,7 +62,7 @@ pub(crate) fn parse_cli_subcommand(args: &[String]) -> Option<CliSubcommand> {
 ///
 /// `input` is injectable (any `Read`) so this is unit-testable without real stdin;
 /// the CLI entry point below passes `std::io::stdin()`.
-pub(crate) fn run_append_history(
+pub(in crate::mcp) fn run_append_history(
     workspace_root: &str,
     agent_id: &str,
     mut input: impl std::io::Read,
@@ -260,21 +260,21 @@ pub fn try_run_cli_subcommand(args: &[String]) -> Option<i32> {
 /// and only quarantines it (never reopens/recreates it) when `--repair` is
 /// given, leaving recreation to the next real daemon startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DoctorReport {
-    pub(crate) session_memory_files_ok: usize,
-    pub(crate) session_memory_files_corrupt: usize,
-    pub(crate) history_lines_ok: usize,
-    pub(crate) history_lines_corrupt: usize,
+pub(in crate::mcp) struct DoctorReport {
+    pub(in crate::mcp) session_memory_files_ok: usize,
+    pub(in crate::mcp) session_memory_files_corrupt: usize,
+    pub(in crate::mcp) history_lines_ok: usize,
+    pub(in crate::mcp) history_lines_corrupt: usize,
     /// "ok" | "missing" | "corrupt" | "corrupt_and_quarantined" | "check_failed"
     /// ("check_failed": the database is busy/locked by another process right
     /// now — inconclusive, never treated as corruption, never quarantined).
-    pub(crate) index_db_status: &'static str,
+    pub(in crate::mcp) index_db_status: &'static str,
 }
 
 impl DoctorReport {
     /// Human-readable report for the CLI. Not JSON: `doctor` is a terminal
     /// diagnostic tool, not an MCP tool response.
-    pub(crate) fn render(&self, workspace_root: &str, repair: bool) -> String {
+    pub(in crate::mcp) fn render(&self, workspace_root: &str, repair: bool) -> String {
         let mode = if repair { "repair" } else { "report-only" };
         format!(
             "comP doctor ({mode}) — {root}\n  session-memory: {mem_ok} ok, {mem_bad} corrupt\n  history: {hist_ok} line(s) ok, {hist_bad} line(s) corrupt\n  index.db: {db}",
@@ -294,7 +294,7 @@ impl DoctorReport {
     /// and "check_failed" (busy/locked, not confirmed corrupt) counts as
     /// unhealthy too: it means doctor could not actually determine the
     /// database's health, which must not be reported as "fine".
-    pub(crate) fn is_healthy(&self, repair: bool) -> bool {
+    pub(in crate::mcp) fn is_healthy(&self, repair: bool) -> bool {
         if self.index_db_status == "corrupt" || self.index_db_status == "check_failed" {
             return false;
         }
@@ -314,7 +314,7 @@ impl DoctorReport {
 /// in a test means actually holding a lock across the 5-second
 /// `busy_timeout`. Testing this classification against a synthetic
 /// `rusqlite::Error` is instant and exercises the same decision.
-pub(crate) fn classify_quick_check_result(check: &std::result::Result<String, rusqlite::Error>) -> &'static str {
+pub(in crate::mcp) fn classify_quick_check_result(check: &std::result::Result<String, rusqlite::Error>) -> &'static str {
     match check {
         Ok(s) if s == "ok" => "ok",
         Err(rusqlite::Error::SqliteFailure(e, _))
@@ -329,7 +329,7 @@ pub(crate) fn classify_quick_check_result(check: &std::result::Result<String, ru
 /// Inspect (and, if `repair` is true, quarantine/fix) the three `.comp/`
 /// stores. See `DoctorReport`'s doc for why this never opens `index.db` via
 /// the full `GraphDB`.
-pub(crate) fn run_doctor(workspace_root: &str, repair: bool) -> Result<DoctorReport> {
+pub(in crate::mcp) fn run_doctor(workspace_root: &str, repair: bool) -> Result<DoctorReport> {
     let comp_dir = std::path::Path::new(workspace_root).join(".comp");
 
     let mut session_memory_files_ok = 0usize;
@@ -433,7 +433,7 @@ pub(crate) fn run_doctor(workspace_root: &str, repair: bool) -> Result<DoctorRep
 /// WHY: session_recall must show *when* past work happened so resumed work can be
 /// placed in time. We compute the civil date by hand (Howard Hinnant's days-from-civil
 /// algorithm) to avoid pulling in a date crate for this single formatting need.
-pub(crate) fn format_epoch_ms(ms: u64) -> String {
+pub(in crate::mcp) fn format_epoch_ms(ms: u64) -> String {
     let secs = (ms / 1000) as i64;
     let days = secs.div_euclid(86_400);
     let secs_of_day = secs.rem_euclid(86_400);

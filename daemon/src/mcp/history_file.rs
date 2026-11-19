@@ -28,7 +28,7 @@ use super::*;
 ///
 /// Synchronous / blocking: callers on the async runtime must wrap this in
 /// `tokio::task::spawn_blocking`.
-pub(crate) fn append_history_line(hist_path: &std::path::Path, line: &str) -> Result<()> {
+pub(in crate::mcp) fn append_history_line(hist_path: &std::path::Path, line: &str) -> Result<()> {
     // WHY no external crate: std::fs::File::lock (stable since Rust 1.89) wraps
     // flock/LockFileEx natively — no locking dependency needed.
     use std::io::Write;
@@ -79,7 +79,7 @@ pub(crate) fn append_history_line(hist_path: &std::path::Path, line: &str) -> Re
 /// is logged too — leaving it behind risks a harmless duplicate on the next
 /// merge, which is preferable to losing the caller's own append by surfacing
 /// an error here.
-pub(crate) fn merge_spill_files(hist_dir: &std::path::Path, file: &mut std::fs::File) {
+pub(in crate::mcp) fn merge_spill_files(hist_dir: &std::path::Path, file: &mut std::fs::File) {
     use std::io::Write;
 
     let entries = match std::fs::read_dir(hist_dir) {
@@ -138,7 +138,7 @@ pub(crate) fn merge_spill_files(hist_dir: &std::path::Path, file: &mut std::fs::
 /// see `run_compact_history`), which supplies `dedup_exact_duplicate_lines` as
 /// `compact_fn` — the only policy wired up so far. Never called from the
 /// request-handling path.
-pub(crate) fn compact_history_file(
+pub(in crate::mcp) fn compact_history_file(
     hist_path: &std::path::Path,
     compact_fn: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
 ) -> Result<()> {
@@ -177,7 +177,7 @@ pub(crate) fn compact_history_file(
 /// elsewhere in it, never by judging age or relevance, so it cannot discard
 /// information a less conservative policy (see `compact_history_file`'s doc)
 /// might.
-pub(crate) fn dedup_exact_duplicate_lines(original: &[u8]) -> Result<Vec<u8>> {
+pub(in crate::mcp) fn dedup_exact_duplicate_lines(original: &[u8]) -> Result<Vec<u8>> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for line in String::from_utf8_lossy(original).lines() {
@@ -196,7 +196,7 @@ pub(crate) fn dedup_exact_duplicate_lines(original: &[u8]) -> Result<Vec<u8>> {
 /// Like `run_compact_history`, but after the exact-duplicate pass also folds the
 /// text of records older than `days` days (trace::fold_old_lines). `now_ms` is
 /// injectable for tests. Same locking and `.bak` guarantees (compact_history_file).
-pub(crate) fn run_compact_history_fold(
+pub(in crate::mcp) fn run_compact_history_fold(
     workspace_root: &str,
     days: u32,
     now_ms: u64,
@@ -223,7 +223,7 @@ pub(crate) fn run_compact_history_fold(
     Ok(results)
 }
 
-pub(crate) fn run_compact_history(workspace_root: &str) -> Result<Vec<(std::path::PathBuf, usize, usize)>> {
+pub(in crate::mcp) fn run_compact_history(workspace_root: &str) -> Result<Vec<(std::path::PathBuf, usize, usize)>> {
     let hist_dir = std::path::Path::new(workspace_root).join(".comp").join("history");
     let mut results = Vec::new();
     let entries = match std::fs::read_dir(&hist_dir) {
@@ -253,7 +253,7 @@ pub(crate) fn run_compact_history(workspace_root: &str) -> Result<Vec<(std::path
 /// first run's only copy (Phase 2, B6). Propagated as an error rather than
 /// best-effort: proceeding to overwrite the one remaining backup on a rename
 /// failure would defeat the whole point of taking one.
-pub(crate) fn write_generational_backup(backup_path: &std::path::Path, content: &[u8]) -> Result<()> {
+pub(in crate::mcp) fn write_generational_backup(backup_path: &std::path::Path, content: &[u8]) -> Result<()> {
     if backup_path.exists() {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -270,9 +270,9 @@ pub(crate) fn write_generational_backup(backup_path: &std::path::Path, content: 
 /// Outcome of repairing one `.jsonl` history file: how many lines parsed
 /// successfully and were kept, and how many were unparseable and moved aside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RepairReport {
-    pub(crate) good_lines: usize,
-    pub(crate) bad_lines: usize,
+pub(in crate::mcp) struct RepairReport {
+    pub(in crate::mcp) good_lines: usize,
+    pub(in crate::mcp) bad_lines: usize,
 }
 
 /// Rewrite `hist_path` to contain only its successfully-parseable lines,
@@ -295,7 +295,7 @@ pub(crate) struct RepairReport {
 /// like `compact_history_file`'s) — a line this function classifies as "bad"
 /// might just be a schema this version of `SessionCall` doesn't know about yet,
 /// and that should stay recoverable, not merely quarantined-by-value.
-pub(crate) fn repair_history_file(hist_path: &std::path::Path) -> Result<RepairReport> {
+pub(in crate::mcp) fn repair_history_file(hist_path: &std::path::Path) -> Result<RepairReport> {
     use std::io::{Read, Seek, SeekFrom, Write};
 
     let mut file = std::fs::OpenOptions::new().read(true).write(true).open(hist_path)?;

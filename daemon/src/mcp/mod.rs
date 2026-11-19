@@ -48,12 +48,13 @@ use crate::rules;
 
 mod session_store;
 mod history_file;
-pub(crate) use session_store::*;
-pub(crate) use history_file::*;
+use session_store::*;
+use history_file::*;
 mod cli;
 mod tool_schema;
 mod tools;
-pub(crate) use cli::*;
+use cli::*;
+pub use cli::try_run_cli_subcommand;
 
 /// Shown with run_pipeline's related_rules. WHY this wording: the text comes
 /// from repository files written for other agents; it must read as reference,

@@ -288,7 +288,7 @@ impl MCPServer {
     }
 
     /// Rebuild the TF-IDF index from the graph DB after a full pass.
-    pub(crate) async fn rebuild_search_index(&self) {
+    pub(in crate::mcp) async fn rebuild_search_index(&self) {
         if let Ok(all_symbols) = self.state.graph_db.get_all_symbols_for_search() {
             let mut se = self.state.search_engine.lock().await;
             if let Err(e) = se.build_index(&all_symbols) {

@@ -69,7 +69,7 @@ pub struct RuleRef {
 /// Token budget for run_pipeline's `related_rules`, separate from `max_tokens`.
 pub const RELATED_RULES_MAX_TOKENS: usize = 1000;
 
-pub(crate) fn default_agent() -> String {
+pub(in crate::mcp) fn default_agent() -> String {
     "unknown".to_string()
 }
 
@@ -91,7 +91,7 @@ pub struct SessionMemory {
 /// this prevents a malformed value (path separators, "..") from escaping the
 /// session-memory directory. Agent ids are drawn from a small, known set defined
 /// by AgentSetup.ts, so Windows-reserved names (CON, NUL, ...) are out of scope.
-pub(crate) fn sanitize_agent_id(agent_id: &str) -> String {
+pub(in crate::mcp) fn sanitize_agent_id(agent_id: &str) -> String {
     agent_id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
@@ -108,7 +108,7 @@ pub(crate) fn sanitize_agent_id(agent_id: &str) -> String {
 /// torn-write parse failure (see docs/ARCHITECTURE_ja.md's session-memory ADR).
 /// Splitting by agent id makes each file single-writer by construction, so no
 /// locking is needed for this layer at all.
-pub(crate) fn get_session_memory_path(root: &str, agent_id: &str) -> std::path::PathBuf {
+pub(in crate::mcp) fn get_session_memory_path(root: &str, agent_id: &str) -> std::path::PathBuf {
     std::path::Path::new(root)
         .join(".comp")
         .join("session-memory")
@@ -121,7 +121,7 @@ pub(crate) fn get_session_memory_path(root: &str, agent_id: &str) -> std::path::
 /// WHY: recall entries auto-recorded by run_pipeline can carry 30-50 symbols
 /// and files each; enumerating them all makes session_recall output so long
 /// it defeats its own purpose (fast context reconstruction, low tokens).
-pub(crate) fn format_capped_list(items: &[String], cap: usize) -> String {
+pub(in crate::mcp) fn format_capped_list(items: &[String], cap: usize) -> String {
     let shown: Vec<String> = items.iter().take(cap).map(|s| format!("`{}`", s)).collect();
     let mut out = shown.join(", ");
     if items.len() > cap {
@@ -140,7 +140,7 @@ pub(crate) fn format_capped_list(items: &[String], cap: usize) -> String {
 /// `path` completely unlocked. Locking a separate `.lock` file for the whole
 /// critical section still serializes concurrent writers (see
 /// `record_mcp_call`) without ever touching `path`'s own lock state.
-pub(crate) fn session_memory_lock_path(path: &std::path::Path) -> std::path::PathBuf {
+pub(in crate::mcp) fn session_memory_lock_path(path: &std::path::Path) -> std::path::PathBuf {
     let mut s = path.as_os_str().to_os_string();
     s.push(".lock");
     std::path::PathBuf::from(s)
@@ -165,7 +165,7 @@ pub(crate) fn session_memory_lock_path(path: &std::path::Path) -> std::path::Pat
 /// with a near-empty one once the transient condition clears, recreating the
 /// exact data-loss bug this function exists to close via a different trigger
 /// (Gemini acceptance-check finding, Phase 1).
-pub(crate) fn load_session_memory_or_quarantine(path: &std::path::Path) -> Result<SessionMemory> {
+pub(in crate::mcp) fn load_session_memory_or_quarantine(path: &std::path::Path) -> Result<SessionMemory> {
     if !path.exists() {
         return Ok(SessionMemory { sessions: Vec::new() });
     }
@@ -203,7 +203,7 @@ pub(crate) fn load_session_memory_or_quarantine(path: &std::path::Path) -> Resul
 /// same-directory rename is atomic on both POSIX and Windows (same volume), so
 /// `path` only ever contains either the previous complete document or the new
 /// complete one, never a partial write.
-pub(crate) fn write_session_memory_atomically(path: &std::path::Path, memory: &SessionMemory) -> Result<()> {
+pub(in crate::mcp) fn write_session_memory_atomically(path: &std::path::Path, memory: &SessionMemory) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| anyhow!("session-memory path {} has no parent directory", path.display()))?;
@@ -251,7 +251,7 @@ pub(crate) fn write_session_memory_atomically(path: &std::path::Path, memory: &S
 /// Isolated from the rename step so `write_session_memory_atomically` can
 /// clean up `tmp_path` on any failure here without duplicating the writer
 /// setup at each call site.
-pub(crate) fn write_tmp_session_memory(tmp_path: &std::path::Path, memory: &SessionMemory) -> Result<()> {
+pub(in crate::mcp) fn write_tmp_session_memory(tmp_path: &std::path::Path, memory: &SessionMemory) -> Result<()> {
     use std::io::Write;
     let file = std::fs::File::create(tmp_path)?;
     let mut writer = std::io::BufWriter::new(file);
@@ -261,7 +261,7 @@ pub(crate) fn write_tmp_session_memory(tmp_path: &std::path::Path, memory: &Sess
     Ok(())
 }
 
-pub(crate) fn record_mcp_call(
+pub(in crate::mcp) fn record_mcp_call(
     workspace_root: &str,
     agent_id: &str,
     session_id: &str,
@@ -275,7 +275,7 @@ pub(crate) fn record_mcp_call(
 
 /// record_mcp_call plus the rule-sharing sections handed out with the call.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn record_mcp_call_with_rules(
+pub(in crate::mcp) fn record_mcp_call_with_rules(
     workspace_root: &str,
     agent_id: &str,
     session_id: &str,
@@ -372,7 +372,7 @@ pub(crate) fn record_mcp_call_with_rules(
 /// sidecar-lock + atomic-write discipline as `record_mcp_call`, instead of a
 /// second, divergent implementation in another language touching the same
 /// class of file (Phase 3, A7/A9).
-pub(crate) fn mark_stale_in_file(path: &std::path::Path, relative_path: &str) -> Result<usize> {
+pub(in crate::mcp) fn mark_stale_in_file(path: &std::path::Path, relative_path: &str) -> Result<usize> {
     let lock_path = session_memory_lock_path(path);
     let lock_file = std::fs::OpenOptions::new().create(true).read(true).append(true).open(&lock_path)?;
     lock_file.lock()?;
@@ -408,7 +408,7 @@ pub(crate) fn mark_stale_in_file(path: &std::path::Path, relative_path: &str) ->
 /// Read-only and deliberately tolerant of unreadable files/lines (same
 /// best-effort posture as `handle_session_recall`) — this is a UI
 /// nice-to-have, not a correctness-critical path.
-pub(crate) fn latest_activity_timestamp(workspace_root: &str) -> Option<u64> {
+pub(in crate::mcp) fn latest_activity_timestamp(workspace_root: &str) -> Option<u64> {
     let mut latest: Option<u64> = None;
 
     let memory_dir = std::path::Path::new(workspace_root).join(".comp").join("session-memory");
