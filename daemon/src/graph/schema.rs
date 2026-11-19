@@ -100,6 +100,10 @@ impl Schema {
 }
 
 #[cfg(test)]
+#[path = "magatama_contract_tests.rs"]
+mod magatama_contract_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

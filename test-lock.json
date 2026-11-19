@@ -1,6 +1,7 @@
 {
-  "commit": "e9dee1c292cabceaa53567c6e7d1cac67d0d3af9",
+  "commit": "728d60de295a6996a8908a01c1509998728bebdc",
   "files": {
+    "daemon/src/graph/magatama_contract_tests.rs": "45aa90a91264daa48594b45219e3112041d5ba244b36e6fb923afb6e912c1d44",
     "daemon/src/indexer/caller_edges_tests.rs": "7b297352922c6911aa2dfc6120d926cc463399b60dec8bf480834b5e8f97f829",
     "daemon/src/indexer/folder_reindex_tests.rs": "7602896f1cd136665468b2c24df72b7bc86789419a614eebd9cb5925ec899e67",
     "daemon/src/indexer/home_policy_tests.rs": "6d5ef02eb3764c901c7f7b3ea8b638be923f387f2c4114e477411ac3b5371ad1",
@@ -29,7 +30,7 @@
     "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e",
     "src/watch/tests/folderWatch.test.ts": "683566a52d7b768abc6e870a0da3b64235b051b98235e5cd21d2d7d4c9940fc6"
   },
-  "frozen_at": "2026-11-19T20:31:55Z",
+  "frozen_at": "2026-11-19T20:37:01Z",
   "history": [
     {
       "approved_by": null,
@@ -366,6 +367,18 @@
       },
       "note": "リファクタ段階0: mod.rs のインラインテストを中身を変えずに server_tests.rs へ移動、tools/list のスナップショットテストを追加、ロック対象外だった symbol_id/git_diff_paths/AgentSetup のテストを追加",
       "request": "TCR-20"
+    },
+    {
+      "approved_by": "user(2026-11-20 リファクタ計画をおすすめの方法で承認)",
+      "at": "2026-11-19T20:37:01Z",
+      "commit": "728d60de295a6996a8908a01c1509998728bebdc",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "リファクタ段階3: MAGATAMA が読む index.db の列を固定する契約テストを追加（列名を変えると失敗することを確認済み）",
+      "request": "TCR-21"
     }
   ],
   "metrics": {
@@ -400,7 +413,8 @@
     "daemon/src/mcp/testdata/tool_definitions.json",
     "daemon/src/mcp/symbol_id_tests.rs",
     "daemon/src/mcp/git_diff_paths_tests.rs",
-    "src/mcp/tests/AgentSetup.test.ts"
+    "src/mcp/tests/AgentSetup.test.ts",
+    "daemon/src/graph/magatama_contract_tests.rs"
   ],
   "version": 1
 }
