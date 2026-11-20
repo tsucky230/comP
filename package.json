@@ -77,6 +77,11 @@
         "command": "comp.removeHistoryHooks",
         "title": "%comp.removeHistoryHooks.title%",
         "category": "comP"
+      },
+      {
+        "command": "comp.manageMagatama",
+        "title": "%comp.manageMagatama.title%",
+        "category": "comP"
       }
     ],
     "viewsContainers": {
@@ -174,6 +179,13 @@
           "scope": "machine",
           "order": 140,
           "markdownDescription": "%comp.useWorkspaceDaemonBuild.description%"
+        },
+        "comp.magatama.manage": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "order": 150,
+          "markdownDescription": "%comp.magatama.manage.description%"
         }
       }
     }

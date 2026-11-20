@@ -57,6 +57,13 @@ import {
   refreshWorkspaceRootEnv,
 } from "./agentSetup/repair";
 import { compRuleSnippet } from "./agentSetup/snippets";
+import {
+  applyMagatamaToContent,
+  findUserManaged,
+  manageAt,
+  resolveSettings,
+  updateManaged,
+} from "./agentSetup/magatama";
 
 /**
  * How comP has to be encoded into one particular config file.
@@ -137,6 +144,8 @@ export interface GenerateConfigResult {
    * reported failure.
    */
   historyHook?: WriteOutcome;
+  /** JSON と Codex TOML の対象ごとの MAGATAMA の登録の結果（tasks/magatama_sync_plan.md） */
+  magatama?: MagatamaOutcome[];
 }
 
 /** Runs an external command. Injectable so tests never spawn a real process. */
@@ -205,6 +214,34 @@ export interface AgentSetupOptions {
    * is beta and installs nothing unless the user switched it on.
    */
   conversationRecording?: ConversationRecordingSettings;
+  /**
+   * MAGATAMA の起動登録の管理（tasks/magatama_sync_plan.md）。省略時は管理しない（manage=false, uv なし）。
+   * pin を省略したら MAGATAMA_PIN。テストと、uv の有無を調べた呼び出し側が渡す。
+   */
+  magatama?: MagatamaSettings;
+}
+
+/** MAGATAMA の登録の管理の設定。pin 省略時は MAGATAMA_PIN。 */
+export interface MagatamaSettings {
+  manage: boolean;
+  uvAvailable: boolean;
+  pin?: string;
+}
+
+/** MAGATAMA の登録について、1つの設定ファイルで何をしたか。 */
+export interface MagatamaOutcome {
+  path: string;
+  scope: "workspace" | "global";
+  outcome: "added" | "updated" | "kept" | "failed";
+  /** kept の理由（MagatamaKeepReason）か、failed の理由 */
+  reason?: string;
+}
+
+/** ユーザーが自分で書いた MAGATAMA の登録（版の確認と、管理を任せるボタンの対象）。 */
+export interface UserMagatamaEntry {
+  path: string;
+  scope: "workspace" | "global";
+  entry: unknown;
 }
 
 /**
@@ -281,6 +318,7 @@ export class AgentSetupManager {
   private useWorkspaceDaemonBuild: boolean;
   private locale: "en" | "ja";
   private conversationRecording: ConversationRecordingSettings;
+  private magatamaSettings: Required<MagatamaSettings>;
 
   constructor(
     _daemonManager: DaemonManager,
@@ -297,6 +335,7 @@ export class AgentSetupManager {
     this.useWorkspaceDaemonBuild = options?.useWorkspaceDaemonBuild ?? false;
     this.locale = options?.locale ?? "en";
     this.conversationRecording = options?.conversationRecording ?? DEFAULT_CONVERSATION_RECORDING;
+    this.magatamaSettings = resolveSettings(options?.magatama);
   }
 
   /** Pick the string matching the configured locale; English is the default. */
@@ -535,6 +574,11 @@ export class AgentSetupManager {
    * at the comp entry itself, because the two walk the document for different
    * reasons.
    */
+  /** @internal agentSetup/ のモジュールから使う */
+  targetsForAgent(agentName: string): WriteTarget[] {
+    return this.targetsFor(agentName) ?? [];
+  }
+
   private targetsFor(agentName: string): WriteTarget[] | null {
     const ws = (...segments: string[]) => path.join(this.workspaceRoot, ...segments);
     const home = (...segments: string[]) => path.join(this.homeDir, ...segments);
@@ -1091,8 +1135,9 @@ export class AgentSetupManager {
    * keep a history. Throws on failure so the caller aborts the write: silently
    * overwriting a global config the user cannot restore is the one outcome
    * worth refusing outright.
+   *
+   * @internal agentSetup/ のモジュールから使う
    */
-  /** @internal agentSetup/ のモジュールから使う */
   backupIfExists(filePath: string): string | null {
     if (!fs.existsSync(filePath)) {
       return null;
@@ -1108,8 +1153,9 @@ export class AgentSetupManager {
    * A rename within one filesystem is atomic, so an interrupted run leaves the
    * previous config intact rather than a truncated file the agent would fail to
    * parse — that would break a working setup instead of merely not improving it.
+   *
+   * @internal agentSetup/ のモジュールから使う
    */
-  /** @internal agentSetup/ のモジュールから使う */
   atomicWrite(filePath: string, content: string): void {
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
@@ -1136,26 +1182,48 @@ export class AgentSetupManager {
    * caller reports every outcome. Rendering happens first so a config that
    * cannot be parsed leaves no stray `.bak` behind.
    */
-  private writeTarget(target: WriteTarget, daemonPath: string, agentId: string): WriteOutcome {
+  private writeTarget(
+    target: WriteTarget,
+    daemonPath: string,
+    agentId: string,
+    magatamaOutcomes?: MagatamaOutcome[]
+  ): WriteOutcome {
     const base = { path: target.path, scope: target.scope };
+    const failMagatama = (reason: string): void => {
+      if (target.format.kind === "json" || target.format.kind === "toml") {
+        magatamaOutcomes?.push({ ...base, outcome: "failed", reason });
+      }
+    };
 
     let content: string;
     try {
       content = this.renderTarget(target, daemonPath, agentId);
     } catch (error) {
+      failMagatama("comp config could not be rendered");
       return { ...base, status: "failed", reason: describeError(error) };
     }
+
+    // comP と MAGATAMA は同じファイルの1回の書き込みにまとめる（バックアップも1回）。
+    const magatama = applyMagatamaToContent(content, target, this.magatamaSettings);
+    if (magatama) {
+      content = magatama.content;
+    }
+    const record = (): void => {
+      if (magatama) magatamaOutcomes?.push(magatama.outcome);
+    };
 
     let backupPath: string | null;
     try {
       backupPath = this.backupIfExists(target.path);
     } catch (error) {
+      failMagatama("backup failed");
       return { ...base, status: "failed", reason: `backup failed: ${describeError(error)}` };
     }
 
     try {
       this.atomicWrite(target.path, content);
     } catch (error) {
+      failMagatama("write failed");
       return {
         ...base,
         status: "failed",
@@ -1164,7 +1232,29 @@ export class AgentSetupManager {
       };
     }
 
+    record();
     return { ...base, status: "written", ...(backupPath ? { backupPath } : {}) };
+  }
+
+  /**
+   * 起動時の修復: 既にある設定ファイルの、comP が管理する MAGATAMA の登録だけを PIN へ上げる。
+   * 登録を足さず、ファイルを作らない。ユーザーの登録には触れない。
+   */
+  async updateManagedMagatama(): Promise<MagatamaOutcome[]> {
+    return updateManaged(this, this.magatamaSettings);
+  }
+
+  /** 既にある JSON・Codex TOML の設定から、ユーザーが自分で書いた MAGATAMA の登録を集める。 */
+  async findUserManagedMagatama(): Promise<UserMagatamaEntry[]> {
+    return findUserManaged(this);
+  }
+
+  /**
+   * 通知の「comP に管理を任せる」: 指定した設定ファイルの MAGATAMA の登録を、管理登録に置き換える。
+   * uv がなければ置き換えない（outcome: failed, reason: uv-missing）。指定外のファイルには触れない。
+   */
+  async manageMagatamaAt(paths: string[]): Promise<MagatamaOutcome[]> {
+    return manageAt(this, paths, this.magatamaSettings);
   }
 
   /**
@@ -1207,9 +1297,10 @@ export class AgentSetupManager {
 
     const daemonPath = this.getDaemonPath();
     const agentId = AgentSetupManager.agentIdFor(agentName);
+    const magatamaOutcomes: MagatamaOutcome[] = [];
     const attempts = targets.map((target) => ({
       target,
-      outcome: this.writeTarget(target, daemonPath, agentId),
+      outcome: this.writeTarget(target, daemonPath, agentId, magatamaOutcomes),
     }));
     const writes = attempts.map((a) => a.outcome);
 
@@ -1236,6 +1327,9 @@ export class AgentSetupManager {
       constitutionFiles,
       restartHint,
     };
+    if (magatamaOutcomes.length > 0) {
+      result.magatama = magatamaOutcomes;
+    }
 
     if (agentName === "Claude Code") {
       result.command = this.generateClaudeCodeCommand(daemonPath);

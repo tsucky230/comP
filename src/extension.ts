@@ -26,6 +26,13 @@ import { startBranchWatch } from "./git/branchWatcher";
 import { IndexingWatch, watchForIndexing } from "./watch/fileWatch";
 import { watchFolders } from "./watch/folderWatch";
 import { syncBudget } from "./config/budget";
+import {
+  checkUserMagatamaVersions,
+  detectUv,
+  magatamaOptions,
+  manageMagatamaCommand,
+  prewarmIfChanged,
+} from "./ui/magatamaSupport";
 
 /** Global context */
 let daemonManager: DaemonManager | null = null;
@@ -102,12 +109,23 @@ export function repairMcpConfigs(context: vscode.ExtensionContext): void {
       null as unknown as DaemonManager,
       workspaceRoot,
       context.extensionPath,
-      { locale: isJapaneseLocale() ? "ja" : "en", useWorkspaceDaemonBuild: useWorkspaceDaemonBuild() }
+      {
+        globalStorageDir: context.globalStorageUri?.fsPath,
+        locale: isJapaneseLocale() ? "ja" : "en",
+        useWorkspaceDaemonBuild: useWorkspaceDaemonBuild(),
+        magatama: magatamaOptions(),
+      }
     );
     const repaired = agentSetup
       .repairStaleConfigs({ skipClaudeCodeConfig: true })
       .filter((entry) => entry.status === "repaired");
     notifyRepaired(repaired);
+
+    // comP が書いた MAGATAMA の登録だけを検証済みの版へ上げる（登録は足さない）。
+    void agentSetup
+      .updateManagedMagatama()
+      .then((outcomes) => prewarmIfChanged(outcomes))
+      .catch((error) => console.warn("[comP] MAGATAMA registration update failed:", error));
 
     // ~/.claude.json goes through the `claude` CLI, which runs a process per
     // registration, so it must not hold up activation. See repairClaudeCodeRegistrations.
@@ -288,6 +306,7 @@ function watchConversationRecording(context: vscode.ExtensionContext): void {
 
       const probe = new AgentSetupManager(null as unknown as DaemonManager, workspaceRoot, context.extensionPath, {
         useWorkspaceDaemonBuild: useWorkspaceDaemonBuild(),
+        magatama: magatamaOptions(),
       });
       if (probe.historyHookInstalled()) return;
       const runSetup = t("Run Setup Agents", "Setup Agents を実行");
@@ -423,6 +442,53 @@ function watchWorkspaceFolders(context: vscode.ExtensionContext): void {
   );
 }
 
+/** comp.manageMagatama: registerCommands 側ではなくここで登録する（コマンド数を数える既存テストを動かさないため）。 */
+function registerManageMagatama(context: vscode.ExtensionContext): void {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ".";
+  const makeSetup = (): AgentSetupManager =>
+    new AgentSetupManager(null as unknown as DaemonManager, workspaceRoot, context.extensionPath, {
+      globalStorageDir: context.globalStorageUri?.fsPath,
+      locale: isJapaneseLocale() ? "ja" : "en",
+      conversationRecording: currentRecordingSettings(),
+      useWorkspaceDaemonBuild: useWorkspaceDaemonBuild(),
+      magatama: magatamaOptions(),
+    });
+  context.subscriptions.push(
+    vscode.commands.registerCommand("comp.manageMagatama", async () => {
+      try {
+        await detectUv();
+        await manageMagatamaCommand(makeSetup);
+      } catch (error) {
+        vscode.window.showErrorMessage(
+          t(
+            `Could not set up MAGATAMA management: ${error instanceof Error ? error.message : String(error)}`,
+            `MAGATAMA の管理を設定できませんでした: ${error instanceof Error ? error.message : String(error)}`
+          )
+        );
+      }
+    })
+  );
+}
+
+/** activate を止めずに、ユーザー管理の MAGATAMA の版を確かめる。 */
+function startMagatamaVersionCheck(context: vscode.ExtensionContext): void {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) return;
+  void detectUv()
+    .then(() =>
+      checkUserMagatamaVersions(
+        context,
+        () =>
+          new AgentSetupManager(null as unknown as DaemonManager, workspaceRoot, context.extensionPath, {
+            locale: isJapaneseLocale() ? "ja" : "en",
+            useWorkspaceDaemonBuild: useWorkspaceDaemonBuild(),
+            magatama: magatamaOptions(),
+          })
+      )
+    )
+    .catch((error) => console.warn("[comP] MAGATAMA version check failed:", error));
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log("[comP] Extension activating...");
 
@@ -430,6 +496,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Before anything else: an upgrade may have left MCP configs pointing at a
     // binary that no longer exists. Runs in both auto and manual mode.
     repairMcpConfigs(context);
+    startMagatamaVersionCheck(context);
 
     const autoStartDaemon = hasCompDirectory();
     console.log(`[comP] .comp directory exists: ${autoStartDaemon}`);
@@ -449,6 +516,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBar.show("Stopped");
     context.subscriptions.push({ dispose: () => statusBar?.dispose() });
     registerCommands(context, () => daemonManager, statusBar);
+    registerManageMagatama(context);
     registerChatParticipant(context, () => daemonManager);
     watchConversationRecording(context);
     watchRuleSharing(context);

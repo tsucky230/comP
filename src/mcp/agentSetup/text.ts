@@ -143,11 +143,24 @@ export function tomlQuote(value: string): string {
  * exactly one definition.
  */
 export function findCompSection(text: string): { start: number; end: number } | null {
+  return findServerSection(text, "comp");
+}
+
+/**
+ * `findCompSection` for any server name: the range of `[mcp_servers.<name>]`
+ * and its `[mcp_servers.<name>.*]` sub-tables. `name` must be a plain bare key.
+ */
+export function findServerSection(
+  text: string,
+  name: string
+): { start: number; end: number } | null {
   const lines = text.split("\n");
-  // Header of comP's table, or of one of its sub-tables. Bare and quoted key
+  // Header of the table, or of one of its sub-tables. Bare and quoted key
   // forms both occur: `codex mcp add` writes the bare one, hand edits vary.
-  const isCompHeader = (line: string): boolean =>
-    /^\s*\[\s*mcp_servers\s*\.\s*("comp"|'comp'|comp)\s*(\.[^\]]*)?\]/.test(line);
+  const header = new RegExp(
+    String.raw`^\s*\[\s*mcp_servers\s*\.\s*("${name}"|'${name}'|${name})\s*(\.[^\]]*)?\]`
+  );
+  const isCompHeader = (line: string): boolean => header.test(line);
   const isAnyHeader = (line: string): boolean => /^\s*\[/.test(line);
 
   let start = -1;

@@ -1,5 +1,5 @@
 {
-  "commit": "415a89625a85e2113b9b7b584087758a60c6c1f0",
+  "commit": "b6c12bc6e92cf563de8f0dbd60d66e4d1f76d985",
   "files": {
     "daemon/src/graph/magatama_contract_tests.rs": "45aa90a91264daa48594b45219e3112041d5ba244b36e6fb923afb6e912c1d44",
     "daemon/src/graph/schema_version_tests.rs": "f38c60ce71f9124c13b6dc6611f182f29d1671f77622448ff7e14169e0397fbd",
@@ -25,14 +25,17 @@
     "daemon/src/search/rebuild_tests.rs": "4859bfa1ca3179770a6dd93f4c6b27aec823be45a87138812f0f7feb593ca9f0",
     "src/mcp/tests/AgentSetup.test.ts": "ba4b64debbd3f01cdc43da85be0300ce5c8d863121541e88c9782ca7f0fe4fb4",
     "src/mcp/tests/AgentSetupHistoryHook.test.ts": "0b08695a4c9ad46ec4ace75a697aa093f903d3f6b68e76450f1596f84bdae66d",
+    "src/mcp/tests/AgentSetupMagatama.test.ts": "5ebb71c4d2fb77ac9a066d0d3a73e5841982e7c86a468e575ffe845a0f1bbb9e",
+    "src/mcp/tests/AgentSetupMagatamaReview.test.ts": "489a32b355ae48c900c0f0361f5fe92029d6e0f32d8b45b0bd80cbb2304c1a08",
     "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05",
     "src/test/daemonEnv.test.ts": "58b84b3346f129d66f36c217adb6495e2d29a4b1aa876a42269e483f8042b4fd",
+    "src/test/magatama.test.ts": "1fda9b03dea21996edb2678b6bf71c9cde7574dc295751504a9720c90cba12b6",
     "src/test/ruleSharing.test.ts": "9fcebac114562d39d954ee6ba396e151a772ce29e9c05e7536c18ea700ef8a66",
     "src/test/workspaceFolders.test.ts": "1aa41a21bed6598527cb2809dc3b54ca1ef9b2d0f318d9a4e8941dcfee6f6a23",
     "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e",
     "src/watch/tests/folderWatch.test.ts": "683566a52d7b768abc6e870a0da3b64235b051b98235e5cd21d2d7d4c9940fc6"
   },
-  "frozen_at": "2026-11-20T22:07:15Z",
+  "frozen_at": "2026-11-20T22:36:33Z",
   "history": [
     {
       "approved_by": null,
@@ -405,6 +408,30 @@
       },
       "note": "index.db の形式の版（metadata.schema_version）を固定するテストを追加",
       "request": "TCR-23"
+    },
+    {
+      "approved_by": "user(2026-11-21 comP/MAGATAMA 連携 1〜3 を指示)",
+      "at": "2026-11-20T22:19:42Z",
+      "commit": "b6c12bc6e92cf563de8f0dbd60d66e4d1f76d985",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "MAGATAMA の起動登録の管理（T4）: 純粋な判断の表とプロパティ（種付き乱数500件）、AgentSetup の結合テスト。実装前に 91 件失敗を確認",
+      "request": "TCR-24"
+    },
+    {
+      "approved_by": "user(2026-11-21 comP/MAGATAMA 連携 1〜3 を指示)",
+      "at": "2026-11-20T22:36:33Z",
+      "commit": "b6c12bc6e92cf563de8f0dbd60d66e4d1f76d985",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "reviewer 指摘の再現テスト: 置き換えでユーザー設定を失う、目印のない新しい版を下げる、TOML の読めない形で節を重複させる、自己完結でない節の置き換え、確認の結果が当てはまる登録の判定。12件失敗を確認",
+      "request": "TCR-25"
     }
   ],
   "metrics": {
@@ -442,7 +469,10 @@
     "src/mcp/tests/AgentSetup.test.ts",
     "daemon/src/graph/magatama_contract_tests.rs",
     "daemon/src/indexer/hash_format_tests.rs",
-    "daemon/src/graph/schema_version_tests.rs"
+    "daemon/src/graph/schema_version_tests.rs",
+    "src/test/magatama.test.ts",
+    "src/mcp/tests/AgentSetupMagatama.test.ts",
+    "src/mcp/tests/AgentSetupMagatamaReview.test.ts"
   ],
   "version": 1
 }

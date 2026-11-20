@@ -20,6 +20,13 @@ import {
 } from "../mcp/AgentSetup";
 import { ConversationRecordingSettings } from "../config/conversationRecording";
 import { USE_WORKSPACE_DAEMON_BUILD_SETTING } from "../config/daemonBinary";
+import {
+  detectUv,
+  hasUvMissing,
+  informUvMissing,
+  magatamaOptions,
+  prewarmIfChanged,
+} from "./magatamaSupport";
 
 /**
  * Current `comp.conversationRecording.*` values for the first workspace folder.
@@ -57,6 +64,7 @@ export function registerCommands(
       locale: isJapaneseLocale() ? "ja" : "en",
       conversationRecording: currentRecordingSettings(),
       useWorkspaceDaemonBuild: useWorkspaceDaemonBuild(),
+      magatama: magatamaOptions(),
     });
 
   // WHY a channel rather than a notification: setup writes outside the
@@ -117,6 +125,7 @@ export function registerCommands(
   // Write comP into every config file the chosen agents actually read
   context.subscriptions.push(
     vscode.commands.registerCommand("comp.setupAgents", async () => {
+      await detectUv();
       const agentSetup = makeAgentSetup();
       const detected = agentSetup.detectInstalledAgents();
       // Detection only preselects: a false negative must never hide an agent
@@ -159,6 +168,10 @@ export function registerCommands(
             userScope = await agentSetup.registerClaudeCodeUserScope();
           }
         }
+
+        const magatamaOutcomes = results.flatMap((entry) => entry.result.magatama ?? []);
+        prewarmIfChanged(magatamaOutcomes);
+        if (hasUvMissing(magatamaOutcomes)) informUvMissing();
 
         const channel = reportChannel();
         channel.clear();

@@ -95,7 +95,7 @@ comP's `get_impact_graph` starts from one symbol and lists what depends on it. M
 
 Give `analyze_change_scope` the files you plan to change, and it returns three things: the symbols in those files, the candidates the change may ripple out to (callers and so on), and the dependencies that put each candidate on the list. When a file name is ambiguous, or the dependencies are missing from the index, the answer is "unknown". I like that honesty. Treat the result as a starting point for review, not as proof of every runtime effect.
 
-`analyze_change_scope` is not in the published PyPI release yet, so for now it is used from a MAGATAMA checkout that includes the feature. Setup steps are in MAGATAMA's README.
+comP can register MAGATAMA for you and keep it current. Install [uv](https://docs.astral.sh/uv/), turn on the `comp.magatama.manage` setting (or run **comP: Let comP manage MAGATAMA**), then run **comP: Setup Agents**. comP starts MAGATAMA as `uvx magatama@<version> serve`, pinned to the release comP was tested with, so when comP updates from the Marketplace, MAGATAMA follows. comP only rewrites entries it wrote itself, and never to an older version. If you registered MAGATAMA by hand, comP checks its version at startup and tells you when it is older than the one comP was tested with. Manual setup steps are in MAGATAMA's README.
 
 ---
 

@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+### Added
+
+- **MAGATAMA の登録と更新を comP に任せられるようにした**（設定 `comp.magatama.manage`、既定 OFF、マシン単位。コマンド **comP: Let comP manage MAGATAMA**）: Setup Agents が、JSON と Codex の設定に `uvx magatama@<版> serve` の登録を足す。版は comP が動作を確かめたもの（今は 0.7.2）に固定し、comP の更新に合わせて上げる。書き換えるのは comP が書いた登録（`env.COMP_MANAGED_BY = "comP"`）だけで、版は下げない（古い comP の窓が戻さない）。登録を書いたあと、その版を裏でダウンロードしておき、エージェントの初回起動を待たせない。uv が必要。Continue と Aider は対象外
+- **手で登録した MAGATAMA の版を起動時に確かめるようにした**: comP が動作を確かめた版より古ければ、「comP に管理を任せる」「更新コマンドをコピー」「今後表示しない」を選べる通知を出す。ワークスペースの設定にある登録のコマンドは実行せず、PATH の `magatama --version` だけを使う
+- **索引に形式の版を書くようにした**（`metadata.schema_version = "1"`）: MAGATAMA（次の版から）が読み込み時に確かめ、comP と MAGATAMA のどちらを更新すべきかを知らせる。MAGATAMA が読む列を固定する契約テストもある
+
 ## [0.12.2] - 2026-11-21
 
 ### Security

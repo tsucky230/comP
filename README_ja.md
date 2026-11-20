@@ -95,7 +95,7 @@ comP の `get_impact_graph` が、1つのシンボルから依存元をたどっ
 
 `analyze_change_scope` に変更するファイルを渡すと、次の3つが返ります。そのファイルに含まれるシンボル、呼び出し元などの波及候補、そして各候補が挙がった根拠となる依存関係です。ファイル名があいまいなときや、依存関係が索引にないときは「unknown」になります。私はこの正直さを気に入っています。結果は確認の出発点で、実行時の影響をすべて証明するものではありません。
 
-`analyze_change_scope` はまだ PyPI の公開版に入っていないので、いまは、この機能を含む MAGATAMA のチェックアウトから使います。導入の手順は MAGATAMA の README にあります。
+MAGATAMA の登録と更新は、comP に任せられます。[uv](https://docs.astral.sh/uv/) を入れ、設定 `comp.magatama.manage` を ON にして（またはコマンド **comP: MAGATAMA の更新を comP に任せる** を実行して）から、**comP: Setup Agents** を実行してください。comP は MAGATAMA を `uvx magatama@<版> serve` で起動するように登録し、版は comP が動作を確かめたものに固定します。comP が Marketplace から更新されると、MAGATAMA もそれに合わせて上がります。comP が書き換えるのは自分で書いた登録だけで、版を下げることはありません。MAGATAMA を手で登録している場合は、comP が起動時に版を確かめ、comP が動作を確かめた版より古ければお知らせします。手動の導入手順は MAGATAMA の README にあります。
 
 ---
 

@@ -236,6 +236,29 @@ add this to `.comp/config.json`:
 (`.mcp.json`, `.cursor/mcp.json`, and the rest) from being written — only the LLM
 instruction files are affected.
 
+### Letting comP manage MAGATAMA
+
+[MAGATAMA](https://github.com/tsucky230/MAGATAMA) reads comP's index and is
+installed from PyPI, so it does not update with the extension. comP can register
+it for you and keep it on the release comP was tested with.
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `comp.magatama.manage` | boolean | `false` | Machine scope. When on, Setup Agents adds a `magatama` entry next to `comp` in each JSON and Codex config: `uvx magatama@<version> serve` with `env.COMP_MANAGED_BY = "comP"`. Needs [uv](https://docs.astral.sh/uv/). |
+
+- **comP: Let comP manage MAGATAMA** turns the setting on and, after asking,
+  replaces MAGATAMA entries you wrote by hand with comP's entry.
+- comP rewrites only entries that carry `COMP_MANAGED_BY = "comP"`, and only to a
+  newer version, so an older comP in another window never moves it back. Entries
+  you wrote yourself are never changed.
+- After writing or upgrading an entry, comP downloads that MAGATAMA release in the
+  background, so the agent's first start does not wait for it.
+- Continue and Aider are not covered; register MAGATAMA there by hand.
+- If you keep your own entry, comP checks its version at startup (for entries in
+  your home directory it runs the entry's own command with `--version`; for
+  workspace configs it only runs `magatama --version` from PATH, never a command
+  a cloned repository wrote) and warns when it is older than the tested release.
+
 ---
 
 ## Excluding files from indexing
