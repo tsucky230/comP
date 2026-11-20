@@ -8,7 +8,7 @@
  */
 
 /** comP がこの版で検証した MAGATAMA。comP のリリースごとに見直す。 */
-export const MAGATAMA_PIN = "0.7.2";
+export const MAGATAMA_PIN = "0.7.3";
 /** これより古いユーザー管理の MAGATAMA には通知する。 */
 export const MAGATAMA_MIN = "0.7.2";
 /** comP が書いた登録の目印（env のキーと値）。 */

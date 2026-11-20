@@ -27,7 +27,7 @@ const managed = (version: string, extra: Record<string, unknown> = {}): Record<s
 
 describe("magatama: constants", () => {
   it("pins the MAGATAMA release comP was verified with", () => {
-    expect(MAGATAMA_PIN).to.equal("0.7.2");
+    expect(MAGATAMA_PIN).to.equal("0.7.3");
     expect(MAGATAMA_MIN).to.equal("0.7.2");
   });
 });

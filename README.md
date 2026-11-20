@@ -286,6 +286,7 @@ Most clients that follow MCP 2024-11-05 should work. If yours does not, please t
 | v0.12.0 | Multi-root workspaces; protection for hidden folders in the home directory; deleted, moved and renamed folders reach the index; dependency edges and search results stay correct after re-indexing |
 | v0.12.1 | Upgrading the extension reliably upgrades the daemon too: the bundled daemon is used unless you opt in, stale agent registrations are repaired, and a mismatched or outdated daemon raises a warning |
 | v0.12.2 | Internal restructuring with no change in behavior; dependency updates that clear two RustSec warnings |
+| v0.12.3 | comP can register MAGATAMA and keep it on the release comP was tested with; the index records its format version for MAGATAMA to check |
 | v1.0 | A stable API |
 
 The full history is in the [CHANGELOG](CHANGELOG.md).

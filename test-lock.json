@@ -1,5 +1,5 @@
 {
-  "commit": "b6c12bc6e92cf563de8f0dbd60d66e4d1f76d985",
+  "commit": "390916da3a0b8830fc810b526287574770648087",
   "files": {
     "daemon/src/graph/magatama_contract_tests.rs": "45aa90a91264daa48594b45219e3112041d5ba244b36e6fb923afb6e912c1d44",
     "daemon/src/graph/schema_version_tests.rs": "f38c60ce71f9124c13b6dc6611f182f29d1671f77622448ff7e14169e0397fbd",
@@ -29,13 +29,13 @@
     "src/mcp/tests/AgentSetupMagatamaReview.test.ts": "489a32b355ae48c900c0f0361f5fe92029d6e0f32d8b45b0bd80cbb2304c1a08",
     "src/test/conversationRecording.test.ts": "e5ad2d5d1d206c3afa768eaff96ab8ea000fa8d13abdfb7bdd38bd3064c38f05",
     "src/test/daemonEnv.test.ts": "58b84b3346f129d66f36c217adb6495e2d29a4b1aa876a42269e483f8042b4fd",
-    "src/test/magatama.test.ts": "1fda9b03dea21996edb2678b6bf71c9cde7574dc295751504a9720c90cba12b6",
+    "src/test/magatama.test.ts": "b29a0af05d546bbe2230b90b4353ae748c1cc53459d37f4fce6fa3f2bccf80b8",
     "src/test/ruleSharing.test.ts": "9fcebac114562d39d954ee6ba396e151a772ce29e9c05e7536c18ea700ef8a66",
     "src/test/workspaceFolders.test.ts": "1aa41a21bed6598527cb2809dc3b54ca1ef9b2d0f318d9a4e8941dcfee6f6a23",
     "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e",
     "src/watch/tests/folderWatch.test.ts": "683566a52d7b768abc6e870a0da3b64235b051b98235e5cd21d2d7d4c9940fc6"
   },
-  "frozen_at": "2026-11-20T22:36:33Z",
+  "frozen_at": "2026-11-20T22:54:12Z",
   "history": [
     {
       "approved_by": null,
@@ -432,6 +432,18 @@
       },
       "note": "reviewer 指摘の再現テスト: 置き換えでユーザー設定を失う、目印のない新しい版を下げる、TOML の読めない形で節を重複させる、自己完結でない節の置き換え、確認の結果が当てはまる登録の判定。12件失敗を確認",
       "request": "TCR-25"
+    },
+    {
+      "approved_by": "user(2026-11-21 リリース、版は末尾をインクリメント)",
+      "at": "2026-11-20T22:54:12Z",
+      "commit": "390916da3a0b8830fc810b526287574770648087",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "MAGATAMA 0.7.3 の公開に合わせ、comP が固定する MAGATAMA の版（MAGATAMA_PIN）の期待値を 0.7.2 から 0.7.3 に変更",
+      "request": "TCR-26"
     }
   ],
   "metrics": {

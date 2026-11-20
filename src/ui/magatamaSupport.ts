@@ -77,13 +77,16 @@ export function magatamaOptions(): { manage: boolean; uvAvailable: boolean } {
 
 /** uvx で magatama@<pin> を先にダウンロードしておく（エージェントの初回起動のタイムアウトを防ぐ）。裏で実行する。 */
 export function prewarmMagatama(pin: string = MAGATAMA_PIN): Promise<void> {
-  return run("uvx", [`magatama@${pin}`, "--version"], PREWARM_TIMEOUT_MS).then((r) => {
+  // WHY --refresh-package: uv は PyPI の索引をキャッシュするので、公開直後の版を「存在しない」と判定して
+  // 起動に失敗する（0.7.3 の公開直後に実測）。ここで取り直しておけば、エージェントの起動はキャッシュで動く。
+  const args = ["--refresh-package", "magatama", "--refresh-package", "magatama-core", `magatama@${pin}`, "--version"];
+  return run("uvx", args, PREWARM_TIMEOUT_MS).then((r) => {
     if (r.ok) return;
     console.warn(`[comP] MAGATAMA prewarm failed: ${r.error}`);
     void vscode.window.showWarningMessage(
       t(
-        `comP: could not download MAGATAMA ${pin} ahead of time (${r.error}). The agent's first start may be slow or time out; run \`uvx magatama@${pin} --version\` once to fix it.`,
-        `comP: MAGATAMA ${pin} を先にダウンロードできませんでした（${r.error}）。エージェントの初回起動が遅い・タイムアウトすることがあります。\`uvx magatama@${pin} --version\` を一度実行してください。`
+        `comP: could not download MAGATAMA ${pin} ahead of time (${r.error}). The agent's first start may be slow or time out; run \`uvx --refresh-package magatama magatama@${pin} --version\` once to fix it.`,
+        `comP: MAGATAMA ${pin} を先にダウンロードできませんでした（${r.error}）。エージェントの初回起動が遅い・タイムアウトすることがあります。\`uvx --refresh-package magatama magatama@${pin} --version\` を一度実行してください。`
       )
     );
   });
