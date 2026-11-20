@@ -1,7 +1,8 @@
 {
-  "commit": "479594838bd639258373a24005eb7a0c4163736f",
+  "commit": "415a89625a85e2113b9b7b584087758a60c6c1f0",
   "files": {
     "daemon/src/graph/magatama_contract_tests.rs": "45aa90a91264daa48594b45219e3112041d5ba244b36e6fb923afb6e912c1d44",
+    "daemon/src/graph/schema_version_tests.rs": "f38c60ce71f9124c13b6dc6611f182f29d1671f77622448ff7e14169e0397fbd",
     "daemon/src/indexer/caller_edges_tests.rs": "7b297352922c6911aa2dfc6120d926cc463399b60dec8bf480834b5e8f97f829",
     "daemon/src/indexer/folder_reindex_tests.rs": "7602896f1cd136665468b2c24df72b7bc86789419a614eebd9cb5925ec899e67",
     "daemon/src/indexer/hash_format_tests.rs": "9c8ebdc839101112a996f7c1da87689afbab6dab3e71d2fbcfb83918a81220d8",
@@ -31,7 +32,7 @@
     "src/watch/tests/fileWatch.test.ts": "d0aef43aac493e506b9d9e8b615dd7430b4aaf1788217b94e6913d348a17f79e",
     "src/watch/tests/folderWatch.test.ts": "683566a52d7b768abc6e870a0da3b64235b051b98235e5cd21d2d7d4c9940fc6"
   },
-  "frozen_at": "2026-11-20T12:46:56Z",
+  "frozen_at": "2026-11-20T22:07:15Z",
   "history": [
     {
       "approved_by": null,
@@ -392,6 +393,18 @@
       },
       "note": "sha2 0.11 で format!(\"{:x}\", digest) が使えなくなったため、rules/tests.rs のハッシュ計算を同じ値を返す sha256_hex に置き換え（期待値・assert は不変）。ハッシュの表記（小文字16進64桁）を既知の値で固定する hash_format_tests.rs を追加（大文字にすると失敗することを確認）",
       "request": "TCR-22"
+    },
+    {
+      "approved_by": "user(2026-11-21 comP/MAGATAMA 連携 1〜3 を指示)",
+      "at": "2026-11-20T22:07:15Z",
+      "commit": "415a89625a85e2113b9b7b584087758a60c6c1f0",
+      "metrics": {
+        "asserts": 0,
+        "skip_markers": 0,
+        "test_functions": 0
+      },
+      "note": "index.db の形式の版（metadata.schema_version）を固定するテストを追加",
+      "request": "TCR-23"
     }
   ],
   "metrics": {
@@ -428,7 +441,8 @@
     "daemon/src/mcp/git_diff_paths_tests.rs",
     "src/mcp/tests/AgentSetup.test.ts",
     "daemon/src/graph/magatama_contract_tests.rs",
-    "daemon/src/indexer/hash_format_tests.rs"
+    "daemon/src/indexer/hash_format_tests.rs",
+    "daemon/src/graph/schema_version_tests.rs"
   ],
   "version": 1
 }

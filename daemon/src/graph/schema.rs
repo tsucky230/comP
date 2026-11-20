@@ -1,5 +1,8 @@
 // SQLite schema definition and migrations
 
+/// index.db の形式の版。MAGATAMA が読む列（magatama_contract_tests.rs）を変えるときに上げる。
+pub const COMP_INDEX_SCHEMA_VERSION: &str = "1";
+
 pub struct Schema;
 
 impl Schema {
@@ -95,6 +98,12 @@ impl Schema {
             )?;
         }
 
+        // REPLACE（IGNORE ではない）: 古い comP が作った DB を開き直したときも、今の形式の版にする
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?)",
+            [COMP_INDEX_SCHEMA_VERSION],
+        )?;
+
         Ok(())
     }
 }
@@ -102,6 +111,10 @@ impl Schema {
 #[cfg(test)]
 #[path = "magatama_contract_tests.rs"]
 mod magatama_contract_tests;
+
+#[cfg(test)]
+#[path = "schema_version_tests.rs"]
+mod schema_version_tests;
 
 #[cfg(test)]
 mod tests {
