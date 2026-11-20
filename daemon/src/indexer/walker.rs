@@ -319,9 +319,7 @@ impl FileWalker {
     /// Calculate SHA256 hash of file content
     fn calculate_file_hash(&self, path: &Path) -> Result<String> {
         let content = fs::read(path)?;
-        let mut hasher = Sha256::new();
-        hasher.update(&content);
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(sha256_hex(&content))
     }
 
     /// Get file modification time (Unix timestamp)
@@ -369,6 +367,21 @@ impl FileWalker {
         .to_string()
     }
 }
+
+/// 小文字16進64桁の SHA-256。index.db に保存して次回の照合に使うので、表記を変えてはいけない。
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest.iter() {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
+#[cfg(test)]
+#[path = "hash_format_tests.rs"]
+mod hash_format_tests;
 
 #[cfg(test)]
 mod tests {

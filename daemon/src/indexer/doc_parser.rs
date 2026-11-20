@@ -514,10 +514,9 @@ impl DocumentParser {
         let mut text = String::new();
 
         for (_page_num, page_id) in pages {
-            if let Ok(content_data) = doc.get_page_content(page_id) {
-                if let Ok(content) = Content::decode(&content_data) {
-                    Self::extract_text_from_operations(&content.operations, &mut text);
-                }
+            let content_data = doc.get_page_content(page_id);
+            if let Ok(content) = Content::decode(&content_data) {
+                Self::extract_text_from_operations(&content.operations, &mut text);
             }
         }
 

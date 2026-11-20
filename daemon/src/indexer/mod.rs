@@ -730,8 +730,6 @@ impl Indexer {
         stored: String,
         db: &crate::graph::GraphDB,
     ) -> Result<bool> {
-        use sha2::{Sha256, Digest};
-
         if self.walker.should_skip_relative_path(relative) {
             return Ok(false);
         }
@@ -741,9 +739,7 @@ impl Indexer {
         // Calculate file hash (required for FileEntry)
         // Read as bytes to handle binary files (e.g., Parquet) gracefully
         let content_bytes = std::fs::read(path)?;
-        let mut hasher = Sha256::new();
-        hasher.update(&content_bytes);
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = walker::sha256_hex(&content_bytes);
 
         let file_entry = FileEntry {
             path: stored,
@@ -841,11 +837,8 @@ mod tests {
         writeln!(file, "fn hello() {{}}\nstruct Point {{}}\nfn main() {{}}")?;
 
         // Calculate hash for the file
-        use sha2::{Sha256, Digest};
         let content = std::fs::read_to_string(&rust_file)?;
-        let mut hasher = Sha256::new();
-        hasher.update(&content);
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = walker::sha256_hex(content.as_bytes());
 
         // Create GraphDB in temp directory
         let db = crate::graph::GraphDB::new(&workspace_root).await?;
@@ -1008,11 +1001,8 @@ mod tests {
         writeln!(file, "fn main() {{}}\nfn helper() {{}}\n")?;
 
         // Calculate hash
-        use sha2::{Sha256, Digest};
         let content = std::fs::read_to_string(&rust_file)?;
-        let mut hasher = Sha256::new();
-        hasher.update(&content);
-        let hash = format!("{:x}", hasher.finalize());
+        let hash = walker::sha256_hex(content.as_bytes());
 
         // Create GraphDB and indexer
         let db = crate::graph::GraphDB::new(&workspace_root).await?;

@@ -1,11 +1,10 @@
 //! Tests for rules. Owned by the designer role; implementers must not edit.
 
 use super::*;
-use sha2::{Digest, Sha256};
 use std::path::Path;
 
 fn sec(file: &str, owner: &str, heading: &str, text: &str) -> RuleSection {
-    let hash = format!("{:x}", Sha256::digest(format!("{}\n{}", heading, text).as_bytes()));
+    let hash = crate::indexer::walker::sha256_hex(format!("{}\n{}", heading, text).as_bytes());
     RuleSection { file: file.into(), owner: owner.into(), heading: heading.into(), text: text.into(), hash }
 }
 

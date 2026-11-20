@@ -19,7 +19,6 @@
 
 use std::path::{Path, PathBuf};
 use std::collections::{BTreeMap, BTreeSet};
-use sha2::{Digest, Sha256};
 
 /// Files larger than this are skipped (not truncated).
 pub const MAX_FILE_BYTES: u64 = 64 * 1024;
@@ -401,7 +400,7 @@ fn push_section(sections: &mut Vec<RuleSection>, file: &str, owner: &str, headin
     if text.is_empty() {
         return;
     }
-    let hash = format!("{:x}", Sha256::digest(format!("{heading}\n{text}").as_bytes()));
+    let hash = crate::indexer::walker::sha256_hex(format!("{heading}\n{text}").as_bytes());
     sections.push(RuleSection {
         file: file.replace('\\', "/"), owner: owner.to_owned(), heading, text, hash,
     });
