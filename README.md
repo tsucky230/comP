@@ -285,6 +285,7 @@ Most clients that follow MCP 2024-11-05 should work. If yours does not, please t
 | v0.11.11 | Antigravity 2.0 support; zstd vulnerabilities removed from the daemon |
 | v0.12.0 | Multi-root workspaces; protection for hidden folders in the home directory; deleted, moved and renamed folders reach the index; dependency edges and search results stay correct after re-indexing |
 | v0.12.1 | Upgrading the extension reliably upgrades the daemon too: the bundled daemon is used unless you opt in, stale agent registrations are repaired, and a mismatched or outdated daemon raises a warning |
+| v0.12.2 | Internal restructuring with no change in behavior; dependency updates that clear two RustSec warnings |
 | v1.0 | A stable API |
 
 The full history is in the [CHANGELOG](CHANGELOG.md).

@@ -8,8 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/) and this 
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-20
+
+### Security
+
+- **デーモンの依存にあった RustSec の警告2件を解消**: tokio 1.52.3 → 1.54.1（RUSTSEC-2026-0386、`AsyncFd` の I/O 安全性）、rustix 1.1.4 → 1.1.6（RUSTSEC-2026-0486、xattr の未初期化バイト）。残る chrono・ttf-parser の「メンテ終了」の警告は、後継版がないため据え置き
+
 ### Changed
 
+- **依存を更新した**: デーモンは互換範囲の更新に加えて rusqlite 0.43・thiserror 2・sha2 0.11・lopdf 0.47。sha2 の更新に合わせてハッシュの書式を1つの関数にまとめたが、`index.db` に保存するハッシュの表記は変わらないので、更新後に全ファイルを索引し直すことはない（既知の値で固定するテストを追加）。拡張機能の開発用ツールは esbuild 0.28・mocha 12・sinon 22・nyc 18・@vscode/test-electron 3・sharp 0.35・markdownlint-cli2 0.24 に上げ、非推奨の `vsce` を `@vscode/vsce` に置き換えた。quick-xml 0.42 と tree-sitter 0.27 系は、文書の解析や索引の中身が変わりうるため見送った
 - **内部構造の整理（動作は変わらない）**: 6,300 行あったデーモンの `daemon/src/mcp/mod.rs` を、セッション記録（`session_store.rs`・`history_file.rs`）、CLI（`cli.rs`）、ツール定義（`tool_schema.rs`）、系統ごとのハンドラ（`tools/`）に分けた（`mod.rs` は 565 行）。拡張機能の `src/mcp/AgentSetup.ts`（2,747 行）も、処理を `src/mcp/agentSetup/` に分けて 1,641 行にした。あわせて、`tools/list` のツール定義を固定するスナップショットテストと、MAGATAMA が読む `index.db` の列を固定する契約テストを追加した
 
 ## [0.12.1] - 2026-11-18
